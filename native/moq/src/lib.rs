@@ -1,4 +1,4 @@
-use rustler::{Atom, Binary, LocalPid, OwnedEnv, Reference, ResourceArc};
+use rustler::{Atom, Binary, LocalPid, OwnedEnv, ResourceArc};
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
 use url::Url;
@@ -14,7 +14,7 @@ mod atoms {
 }
 
 // ---------------------------------------------------------------------------
-// Shared tokio runtime (created once, reused across all NIF calls)
+// Shared tokio runtime
 // ---------------------------------------------------------------------------
 
 fn runtime() -> &'static tokio::runtime::Runtime {
@@ -28,12 +28,21 @@ fn runtime() -> &'static tokio::runtime::Runtime {
 }
 
 // ---------------------------------------------------------------------------
-// Resource types (hold a channel sender to control the background task)
+// Resource types
 // ---------------------------------------------------------------------------
 
 enum PublisherCmd {
-    Frame { track_id: u32, data: Vec<u8> },
-    AddTrack { track_id: u32 },
+    Configure {
+        codec: String,
+        width: u32,
+        height: u32,
+        framerate: f64,
+    },
+    Frame {
+        timestamp_us: u64,
+        keyframe: bool,
+        data: Vec<u8>,
+    },
     Stop,
 }
 
@@ -49,13 +58,13 @@ pub struct SubscriberResource {
 // Publisher NIFs (Sink)
 // ---------------------------------------------------------------------------
 
-/// Start a MoQ publisher session in a background tokio task.
+/// Connect to a MoQ relay server and prepare a broadcast.
 ///
-/// Once the QUIC handshake with the relay completes, sends `:moq_connected`
-/// to `pid`. Frames queued via `publish_frame/2` are forwarded to the relay
-/// as individual MoQ groups (one frame per group).
+/// Establishes the QUIC session and sends `:moq_connected` to `pid` once ready.
+/// Call `configure_publisher/5` afterwards (once codec parameters are known) to
+/// publish the catalog and open the video track.
 #[rustler::nif]
-fn start_publisher(
+fn setup_publisher(
     url: String,
     broadcast: String,
     pid: LocalPid,
@@ -72,42 +81,118 @@ fn start_publisher(
     let (tx, mut rx) = mpsc::unbounded_channel::<PublisherCmd>();
 
     runtime().spawn(async move {
+        // --- Create origin + broadcast producer ---
         let origin = moq_lite::Origin::produce();
-        let mut bp = origin.create_broadcast(broadcast).unwrap();
+        let mut bp = origin.create_broadcast(&broadcast).unwrap();
 
+        // --- Connect ---
+        // with_publish: relay pulls our content (publisher role)
+        // with_consume: relay pushes announced broadcasts to us (subscriber role)
         let client = config
             .init()
             .expect("failed creating client")
-            .with_consume(origin);
+            .with_publish(origin.consume());
 
-        let session = client.connect(url).await.expect("failed connecting client");
+        let session = client.connect(url).await.expect("failed connecting");
 
         let mut owned = OwnedEnv::new();
-        // send `:moq_connected` to `Membrane.MoQ.Sink` to complete setup
         owned.send_and_clear(&pid, |env| atoms::moq_connected().to_term(env));
 
-        let mut tracks: std::collections::HashMap<u32, moq_lite::TrackProducer> =
-            std::collections::HashMap::new();
+        // --- Wait for codec configuration ---
+        let (codec, width, height, framerate) = loop {
+            match rx.recv().await {
+                Some(PublisherCmd::Configure {
+                    codec,
+                    width,
+                    height,
+                    framerate,
+                }) => {
+                    break (codec, width, height, framerate);
+                }
+                Some(PublisherCmd::Stop) | None => return,
+                Some(PublisherCmd::Frame { .. }) => {
+                    // frames before configure are dropped
+                    println!("!!! frames received before Configure cmd");
+                }
+            }
+        };
 
-        let catalog_producer = bp
-            .create_track(moq_lite::Track::new("catalog"))
+        // --- Catalog track ---
+        let mut catalog_track = bp
+            .create_track(hang::Catalog::default_track())
             .expect("failed creating catalog track");
 
+        let video_codec: hang::catalog::VideoCodec =
+            codec.parse().expect("failed parsing codec string");
+
+        let mut renditions = std::collections::BTreeMap::new();
+        renditions.insert(
+            "video".to_string(),
+            hang::catalog::VideoConfig {
+                codec: video_codec,
+                description: None,
+                coded_width: Some(width),
+                coded_height: Some(height),
+                display_ratio_width: None,
+                display_ratio_height: None,
+                bitrate: None,
+                framerate: Some(framerate),
+                optimize_for_latency: Some(true),
+                container: hang::catalog::Container::Legacy,
+                jitter: None,
+            },
+        );
+
+        let catalog = hang::Catalog {
+            video: hang::catalog::Video {
+                renditions,
+                display: None,
+                rotation: None,
+                flip: None,
+            },
+            ..Default::default()
+        };
+
+        let catalog_json = catalog.to_string().expect("failed serializing catalog");
+        println!("catalog_json {}", catalog_json);
+
+        let mut catalog_group = catalog_track
+            .append_group()
+            .expect("failed creating catalog group");
+        catalog_group
+            .write_frame(bytes::Bytes::from(catalog_json))
+            .expect("failed writing catalog frame");
+
+        // --- Video track ---
+        let video_track = bp
+            .create_track(moq_lite::Track {
+                name: "video".to_string(),
+                priority: 0,
+            })
+            .expect("failed creating video track");
+        let mut producer = hang::container::OrderedProducer::new(video_track);
+
+        // --- Frame loop ---
         loop {
             tokio::select! {
                 cmd = rx.recv() => match cmd {
-                    Some(PublisherCmd::AddTrack { track_id }) => {
-                        let tp = bp.create_track(moq_lite::Track::new(&track_id.to_string()))
-                            .expect("failed creating track");
-                        tracks.insert(track_id, tp);
-                    }
-                    Some(PublisherCmd::Frame { track_id, data }) => {
-                        if let Some(tp) = tracks.get_mut(&track_id) {
-                            let mut gp = tp.append_group().expect("failed appending group");
-                            gp.write_frame(bytes::Bytes::from(data)).expect("failed writing frame");
+                    Some(PublisherCmd::Frame { timestamp_us, keyframe, data }) => {
+                        if keyframe {
+                            producer.keyframe().expect("failed closing group on keyframe");
                         }
+                        let frame = hang::container::Frame {
+                            timestamp: hang::container::Timestamp::from_micros(timestamp_us)
+                                .expect("timestamp overflow"),
+                            payload: hang::container::BufList::from_iter([
+                                bytes::Bytes::from(data)
+                            ]),
+                        };
+                        producer.write(frame).expect("failed writing frame");
                     }
                     Some(PublisherCmd::Stop) | None => break,
+                    Some(PublisherCmd::Configure { .. }) => {
+                        // already configured, ignore
+                    }
                 },
                 result = session.closed() => {
                     result.expect("session error");
@@ -115,32 +200,55 @@ fn start_publisher(
                 }
             }
         }
+
+        producer.finish().expect("failed finishing track");
     });
 
     (atoms::ok(), ResourceArc::new(PublisherResource { tx }))
 }
 
-/// Enqueue a binary payload to be sent as a MoQ frame on the named track.
+/// Publish the hang catalog and open the video track.
+///
+/// Must be called after `setup_publisher/3` has delivered `:moq_connected`.
+/// `codec` is a WebCodecs codec string, e.g. `"avc1.64001f"`.
 #[rustler::nif]
-fn send_segment(resource: ResourceArc<PublisherResource>, track: Reference, data: Binary) -> Atom {
+fn configure_publisher(
+    resource: ResourceArc<PublisherResource>,
+    codec: String,
+    width: u32,
+    height: u32,
+    framerate: f64,
+) -> Atom {
+    let _ = resource.tx.send(PublisherCmd::Configure {
+        codec,
+        width,
+        height,
+        framerate,
+    });
+    atoms::ok()
+}
+
+/// Send an H.264 frame to the relay.
+///
+/// `timestamp_us` is the presentation timestamp in microseconds.
+/// `keyframe` must be `true` for IDR frames — this closes the current MoQ
+/// group and starts a new one, ensuring independent decodability per group.
+#[rustler::nif]
+fn send_segment(
+    resource: ResourceArc<PublisherResource>,
+    timestamp_us: u64,
+    keyframe: bool,
+    data: Binary,
+) -> Atom {
     let _ = resource.tx.send(PublisherCmd::Frame {
-        track_id: track.hash_phash2(),
+        timestamp_us,
+        keyframe,
         data: data.as_slice().to_vec(),
     });
     atoms::ok()
 }
 
-/// Register a new track on the broadcast.
-#[rustler::nif]
-fn add_track(resource: ResourceArc<PublisherResource>, name: Reference, header: Binary) -> Atom {
-    println!("add_track called dupa");
-    let _ = resource.tx.send(PublisherCmd::AddTrack {
-        track_id: name.hash_phash2(),
-    });
-    atoms::ok()
-}
-
-/// Signal the publisher task to finish and close the relay session.
+/// Signal the publisher task to stop and close the relay session.
 #[rustler::nif]
 fn stop_publisher(resource: ResourceArc<PublisherResource>) -> Atom {
     let _ = resource.tx.send(PublisherCmd::Stop);
@@ -148,63 +256,20 @@ fn stop_publisher(resource: ResourceArc<PublisherResource>) -> Atom {
 }
 
 // ---------------------------------------------------------------------------
-// Subscriber NIFs (Source)
+// Subscriber NIFs (Source) — TODO
 // ---------------------------------------------------------------------------
 
-/// Start a MoQ subscriber session in a background tokio task.
-///
-/// Connects to the relay, subscribes to `track` within `broadcast`, and
-/// forwards each received frame to `pid` as `{:moq_frame, binary}`.
-/// Sends `:moq_disconnected` when the subscription ends or the relay
-/// closes the connection.
 #[rustler::nif]
 fn start_subscriber(
     url: String,
     broadcast: String,
-    track: String,
+    _track: String,
     pid: LocalPid,
 ) -> (Atom, ResourceArc<SubscriberResource>) {
     let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<()>();
 
     runtime().spawn(async move {
-        // TODO: Establish a native QUIC/WebTransport connection to `url`.
-        //
-        //   let quic_session = moq_native::Session::connect(&url).await?;
-        //
-        //   let (origin_producer, origin_consumer) = moq_lite::Origin::produce();
-        //
-        //   moq_lite::Client::new()
-        //       .with_consume(origin_producer)
-        //       .connect(quic_session)
-        //       .await
-        //       .expect("MoQ handshake failed");
-        //
-        //   let broadcast_consumer = origin_consumer
-        //       .subscribe(&broadcast)
-        //       .expect("failed to subscribe to broadcast");
-        //   let track_info = moq_lite::Track::new(&track);
-        //   let mut track_consumer = broadcast_consumer
-        //       .subscribe_track(&track_info)
-        //       .expect("failed to subscribe to track");
-        //
-        //   loop {
-        //       tokio::select! {
-        //           result = track_consumer.next_group() => {
-        //               let Some(mut group) = result else { break };
-        //               while let Some(frame) = group.read_frame().await {
-        //                   let payload = frame.payload.to_vec();
-        //                   let owned = OwnedEnv::new();
-        //                   owned.send_and_clear(&pid, |env| {
-        //                       (atoms::moq_frame(), payload.as_slice()).encode(env)
-        //                   });
-        //               }
-        //           }
-        //           _ = stop_rx.recv() => break,
-        //       }
-        //   }
-
         let _ = stop_rx.recv().await;
-
         let mut owned = OwnedEnv::new();
         owned.send_and_clear(&pid, |env| atoms::moq_disconnected().to_term(env));
     });
@@ -215,7 +280,6 @@ fn start_subscriber(
     )
 }
 
-/// Signal the subscriber task to stop receiving frames and close the session.
 #[rustler::nif]
 fn stop_subscriber(resource: ResourceArc<SubscriberResource>) -> Atom {
     let _ = resource.tx.send(());
@@ -232,4 +296,15 @@ fn load(env: rustler::Env, _info: rustler::Term) -> bool {
     true
 }
 
-rustler::init!("Elixir.Membrane.MoQ.Native", load = load);
+rustler::init!(
+    "Elixir.Membrane.MoQ.Native",
+    [
+        setup_publisher,
+        configure_publisher,
+        send_segment,
+        stop_publisher,
+        start_subscriber,
+        stop_subscriber
+    ],
+    load = load
+);

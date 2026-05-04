@@ -22,9 +22,6 @@ Logger.configure(level: :warn)
 defmodule Example do
   use Membrane.Pipeline
 
-  @samples_url "https://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/big-buck-bunny/"
-  @video_url @samples_url <> "bun33s_720x480.h264"
-
   def start_link() do
     Membrane.Pipeline.start_link(__MODULE__)
   end
@@ -45,9 +42,9 @@ defmodule Example do
       # --- MoQ branch ---
       get_child(:video_tee)
       |> via_out(Pad.ref(:output, :moq))
-      |> via_in(Pad.ref(:video, :main))
+      |> via_in(Pad.ref(:input, :main))
       |> child(:sink, %Membrane.MoQ.Sink{
-        url: "https://localhost:4443/kidq330",
+        url: "https://localhost:4443/anon",
         broadcast: "example"
       }),
 

@@ -8,6 +8,7 @@
 #   elixir examples/publish_cmaf.exs
 
 Mix.install([
+:membrane_realtimer_plugin,
   :membrane_aac_plugin,
   :membrane_h26x_plugin,
   :membrane_hackney_plugin,
@@ -35,62 +36,61 @@ defmodule Example do
 
   @impl true
   def handle_init(_ctx, _opts) do
-    structure = [
+    spec = [
       # Sources and parsers — shared by both branches
       child(:video_source, %Membrane.Hackney.Source{
         location: @video_url,
         hackney_opts: [follow_redirect: true]
       })
       |> child(:video_parser, %Membrane.H264.Parser{
-        generate_best_effort_timestamps: %{framerate: {25, 1}}
+        generate_best_effort_timestamps: %{framerate: {25, 1}},
+        output_alignment: :au
       })
+      |> child(:video_realtimer, Membrane.Realtimer)
       |> child(:video_tee, Membrane.Tee),
       child(:audio_source, %Membrane.Hackney.Source{
         location: @audio_url,
         hackney_opts: [follow_redirect: true]
       })
       |> child(:audio_parser, Membrane.AAC.Parser)
+      |> child(:audio_realtimer, Membrane.Realtimer)
       |> child(:audio_tee, Membrane.Tee),
 
       # --- MoQ branch (comment out to use playback branch only) ---
-      get_child(:video_tee)
-      |> via_out(Pad.ref(:output, :moq))
-      |> child(:video_parser_moq, %Membrane.H264.Parser{output_stream_structure: :avc1})
-      |> via_in(Pad.ref(:input, :video))
-      |> get_child(:muxer),
+      child(:sink, %Membrane.MoQ.Sink{
+        url: "https://localhost:4443/kidq330",
+        container: :cmaf
+      }),
       get_child(:audio_tee)
       |> via_out(Pad.ref(:output, :moq))
       |> child(:audio_parser_moq, %Membrane.AAC.Parser{
         out_encapsulation: :none,
         output_config: :esds
       })
-      |> via_in(Pad.ref(:input, :audio))
-      |> get_child(:muxer),
-      child(:muxer, %Membrane.MP4.Muxer.CMAF{
-        segment_min_duration: Time.seconds(2)
-      })
-      |> child(:sink, %Membrane.MoQ.Sink{
-        url: "https://localhost:4443",
-        broadcast: "example"
-      }),
+      |> via_in(Pad.ref(:input, :audio1), options: [broadcast: "bbb", track_name: "audio"])
+      |> get_child(:sink),
+      get_child(:video_tee)
+      |> via_out(Pad.ref(:output, :moq))
+      |> via_in(Pad.ref(:input, :video1), options: [broadcast: "bbb", track_name: "video"])
+      |> get_child(:sink),
 
       # --- Playback branch (comment out to use MoQ branch only) ---
-      get_child(:video_tee)
-      |> via_out(Pad.ref(:output, :play))
-      |> child(:video_decoder, Membrane.H264.FFmpeg.Decoder)
-      |> child(:video_player, Membrane.SDL.Player),
-      get_child(:audio_tee)
-      |> via_out(Pad.ref(:output, :play))
-      |> child(:audio_decoder, Membrane.AAC.FDK.Decoder)
-      |> child(:audio_player, Membrane.PortAudio.Sink)
+      # get_child(:audio_tee)
+      # |> via_out(Pad.ref(:output, :play))
+      # |> child(:audio_decoder, Membrane.AAC.FDK.Decoder)
+      # |> child(:audio_player, Membrane.PortAudio.Sink),
+      # get_child(:video_tee)
+      # |> via_out(Pad.ref(:output, :play))
+      # |> child(:video_decoder, Membrane.H264.FFmpeg.Decoder)
+      # |> child(:video_player, Membrane.SDL.Player)
     ]
 
-    {[spec: structure], %{}}
+    {[spec: spec], %{}}
   end
 
   @impl true
   def handle_element_end_of_stream(sink, _pad, _ctx, state)
-      when sink in [ :video_player, :audio_player ] do
+      when sink in [:video_player, :audio_player] do
     {[terminate: :shutdown], state}
   end
 

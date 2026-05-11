@@ -45,7 +45,7 @@ defmodule Example do
 
       get_child(:demuxer)
       |> via_out(:output, options: [kind: :video])
-      |> child(:video_parser, %Membrane.H264.Parser{output_stream_structure: :annexb})
+      |> child(:video_parser, Membrane.H264.Parser)
       |> child(:video_rt, Membrane.Realtimer)
       |> via_in(Pad.ref(:input, :video1), options: [broadcast: "bbb", track: "video"])
       |> get_child(:sink)

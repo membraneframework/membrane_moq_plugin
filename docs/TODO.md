@@ -1,3 +1,5 @@
+- standalone: `moq lite error: remote error: code=4` when publisher exits gracefully
+- `publish_mp4.exs` choppy video before new keyframe?
 - How many Rustler async runtimes should be running? Need a threading model design!!! Is one async runtime per pad too fine-grained? Remember that we're sharing the session, origin and CatalogProducer!
   - TODO: review generated code. The runtimes created should represend thread pools, which is flexible enough.
 - Test the MSF cataloguing - it's supposed to be superseding hang's catalog.js track.

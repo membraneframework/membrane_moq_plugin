@@ -8,11 +8,9 @@ defmodule Membrane.MoQ.Sink do
 
   ## Pad options
 
-    * `:broadcast` — broadcast path this pad publishes to. Defaults to the
-      Sink-level `:broadcast` option. Required if neither is set.
-    * `:track_name` — rendition key inside the broadcast catalog. Defaults to
-      `"video"` for video formats and `"audio"` for audio formats. Must be
-      unique within the broadcast.
+    * `:broadcast` — broadcast path this pad publishes to.
+    * `:track` — rendition key inside the broadcast catalog.
+                 Must be unique within the broadcast.
 
   Pads can be added or removed at any time during the pipeline lifecycle. The
   catalog is republished on every track add/remove.
@@ -28,13 +26,7 @@ defmodule Membrane.MoQ.Sink do
 
   def_input_pad :input,
     availability: :on_request,
-    accepted_format:
-      any_of(
-        AAC,
-        Opus,
-        H264,
-        H265
-      ),
+    accepted_format: any_of(AAC, Opus, H264, H265),
     options: [
       broadcast: [
         spec: String.t(),
@@ -78,7 +70,8 @@ defmodule Membrane.MoQ.Sink do
                 broadcast: String.t(),
                 # TODO: we should think about getting rid of the ref here for `broadcasts` to be the only source of truth for resources
                 broadcast_resource: resource(),
-                track: String.t() | nil
+                track: String.t(),
+                track_resource: resource() | nil
               }
             }
           }

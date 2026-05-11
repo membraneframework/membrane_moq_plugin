@@ -7,6 +7,13 @@ use anyhow::Context;
 use std::time::Duration;
 use url::Url;
 
+/// Set to `true` to skip TLS certificate verification.
+///
+/// Useful when developing against a local moq-rs relay with a self-signed
+/// cert (e.g. `https://localhost:4443`). Must stay `false` for any public
+/// relay — otherwise the connection is vulnerable to MITM.
+const DISABLE_TLS_VERIFY: bool = false;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
@@ -19,7 +26,9 @@ async fn main() -> anyhow::Result<()> {
 
     let config = {
         let mut tls = moq_native::ClientTls::default();
-        tls.disable_verify = Some(true);
+        if DISABLE_TLS_VERIFY {
+            tls.disable_verify = Some(true);
+        }
         let mut config = moq_native::ClientConfig::default();
         config.tls = tls;
         config

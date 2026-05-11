@@ -23,34 +23,34 @@ defmodule Membrane.MoQ.Sink do
   require Membrane.H264
   require Membrane.H265
 
-  alias Membrane.{H264, H265, AAC, Opus}
+  alias Membrane.{AAC, Opus, H264, H265}
   alias Membrane.MoQ.Native
 
   def_input_pad :input,
     availability: :on_request,
-    accepted_format: any_of(
-      %AAC{config: {:esds, _esds}},
-        %Opus{self_delimiting?: false},
-        H264, H265
-        # %H264{stream_structure: structure, alignment: :au} when H264.is_avc(structure),
-        # %H265{stream_structure: structure, alignment: :au} when H265.is_hvc(structure)
-    ),
+    accepted_format:
+      any_of(
+        AAC,
+        Opus,
+        H264,
+        H265
+      ),
     options: [
       broadcast: [
-        spec: String.t() | nil,
-        default: nil,
-        description: "Broadcast path. Overrides the Sink's :broadcast option."
+        spec: String.t(),
+        description:
+          "Broadcast path, see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
       ],
-      track_name: [
-        spec: String.t() | nil,
-        default: nil,
-        description: "Catalog rendition key. Defaults to \"video\" or \"audio\" based on format."
+      track: [
+        spec: String.t(),
+        description:
+          "Catalog rendition key, see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
       ]
     ]
 
   def_options url: [
                 spec: String.t(),
-                description: "URL of the MoQ relay server (e.g. \"https://localhost:4443\")."
+                description: "URL to the MoQ relay server."
               ],
               broadcast: [
                 spec: String.t() | nil,
@@ -61,197 +61,132 @@ defmodule Membrane.MoQ.Sink do
                 spec: :legacy,
                 default: :legacy,
                 description:
-                  "Container format for media frames. Only :legacy is supported right now; the option exists so future container formats (e.g. CMAF) can be selected without an API break."
+                  "Container format for media frames. Only :legacy is supported for now."
               ]
 
-#  defmodule State do
-#    @type t :: %__MODULE__{
-#      default_url: String.t() | nil,
-#      default_broadcast: String.t() | nil,
-#      container: :legacy | :cmaf,
-#      session: any(), # TODO: replace any with session type
-#      broadcasts: %{String.t() => any()}, # TODO: replace any with resource type
-#      pads: %{Membrane.Pad.t() => %{
-#        broadcast: String.t(),
-#        # TODO: we should think about getting rid of the ref here for broadcasts to be the only source of truth for resources
-#        broadcast_resource: any(), # TODO: replace any with resource type
-#        track: String.t() | nil
-#      }}
-#    }
-#  end
+  defmodule State do
+    @type resource :: reference()
 
-  @impl true
-  def handle_init(_ctx, opts) do
-    # opts.container is accepted for forward compat but the only value supported
-    # by the native layer right now is :legacy.
-    {[],
-     %{
-       url: opts.url,
-       default_broadcast: opts.broadcast,
-       session: nil,
-       broadcasts: %{},
-       pads: %{}
-     }}
+    @type t :: %__MODULE__{
+            url: String.t(),
+            container: :legacy | :cmaf,
+            # TODO: replace any with session type
+            session: any(),
+            broadcasts: %{String.t() => resource()},
+            pads: %{
+              Membrane.Pad.ref() => %{
+                broadcast: String.t(),
+                # TODO: we should think about getting rid of the ref here for `broadcasts` to be the only source of truth for resources
+                broadcast_resource: resource(),
+                track: String.t() | nil
+              }
+            }
+          }
+
+    @enforce_keys [:url]
+    defstruct @enforce_keys ++
+                [
+                  container: :legacy,
+                  session: nil,
+                  broadcasts: %{},
+                  pads: %{}
+                ]
   end
 
   @impl true
-  def handle_setup(_ctx, state) do
-    {:ok, session} = Native.setup_session(state.url, self())
+  def handle_init(_ctx, %__MODULE__{url: url} = _opts),
+    do: {[], %State{url: url, session: nil, broadcasts: %{}, pads: %{}}}
+
+  @impl true
+  def handle_setup(_ctx, %State{url: url} = state) do
+    {:ok, session} = Native.setup_session(url, self())
     {[setup: :incomplete], %{state | session: session}}
   end
 
   @impl true
-  def handle_info(:moq_connected, _ctx, state) do
-    {[setup: :complete], state}
-  end
+  def handle_info(:moq_connected, _ctx, state), do: {[setup: :complete], state}
 
   @impl true
-  def handle_info(:moq_disconnected, _ctx, state) do
-    Membrane.Logger.warning("MoQ session disconnected")
-    {[], state}
+  def handle_info(:moq_disconnected, _ctx, _state) do
+    # TODO: I guess we should receive this message only when termination is unexpected and just crash
+    # and have the parent restart the node if really necessary.
+    # Graceful termination doesn't need to do any work
+    raise "MoQ session disconnected"
   end
 
   @impl true
   def handle_info(msg, _ctx, state) do
-    Membrane.Logger.warning("Unknown message: #{inspect(msg)}")
+    Membrane.Logger.info("Unknown message: #{inspect(msg)}")
     {[], state}
   end
 
   @impl true
-  def handle_pad_added(pad, %{pad_options: pad_opts} = _ctx, state) do
-    broadcast_path = pad_opts[:broadcast] || state.default_broadcast
-
-    if broadcast_path == nil do
-      raise "#{inspect(__MODULE__)} pad #{inspect(pad)} has no :broadcast option and Sink has no :broadcast default"
-    end
-
-    {broadcast_resource, state} = ensure_broadcast(state, broadcast_path)
+  def handle_pad_added(
+        pad,
+        %{pad_options: %{broadcast: broadcast, track: track}} = _ctx,
+        state
+      ) do
+    {broadcast_resource, state} = ensure_broadcast(state, broadcast)
 
     pad_state = %{
-      broadcast: broadcast_path,
+      broadcast: broadcast,
       broadcast_resource: broadcast_resource,
-      track_name_override: pad_opts[:track_name],
-      track: nil
+      track: track,
+      track_resource: nil
     }
 
     {[], put_in(state.pads[pad], pad_state)}
   end
 
   @impl true
-  def handle_pad_removed(pad, _ctx, state) do
-    {pad_state, pads} = Map.pop(state.pads, pad)
-
-    if pad_state && pad_state.track do
-      :ok = Native.remove_track(pad_state.track)
-    end
-
-    state = %{state | pads: pads}
-    state = maybe_close_broadcast(state, pad_state && pad_state.broadcast)
-    {[], state}
-  end
+  def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
 
   @impl true
-  def handle_stream_format(pad, %H264{} = fmt, _ctx, state) do
+  def handle_stream_format(pad, fmt, _ctx, state) do
     pad_state = Map.fetch!(state.pads, pad)
-    %H264{width: width, height: height, framerate: framerate} = fmt
-    fps = framerate_to_float(framerate)
-    codec = h264_codec_string(fmt)
-    track_name = pad_state.track_name_override || "video"
-
-    {:ok, track} =
-      Native.add_h264_track(
-        pad_state.broadcast_resource,
-        track_name,
-        codec,
-        width,
-        height,
-        fps
-      )
-
-    {[], put_in(state.pads[pad], %{pad_state | track: track})}
-  end
-
-  @impl true
-  def handle_stream_format(pad, %H265{} = fmt, _ctx, state) do
-    pad_state = Map.fetch!(state.pads, pad)
-    %H265{width: width, height: height, framerate: framerate} = fmt
-    fps = framerate_to_float(framerate)
-    codec = h265_codec_string(fmt)
-    track_name = pad_state.track_name_override || "video"
-
-    {:ok, track} =
-      Native.add_h265_track(
-        pad_state.broadcast_resource,
-        track_name,
-        codec,
-        width,
-        height,
-        fps
-      )
-
-    {[], put_in(state.pads[pad], %{pad_state | track: track})}
-  end
-
-  @impl true
-  def handle_stream_format(pad, %AAC{} = fmt, _ctx, state) do
-    pad_state = Map.fetch!(state.pads, pad)
-    %AAC{profile: profile, sample_rate: sample_rate, channels: channels} = fmt
-    track_name = pad_state.track_name_override || "audio"
-
-    {:ok, track} =
-      Native.add_aac_track(
-        pad_state.broadcast_resource,
-        track_name,
-        aac_profile_byte(profile),
-        sample_rate,
-        channels
-      )
-
-    {[], put_in(state.pads[pad], %{pad_state | track: track})}
-  end
-
-  @impl true
-  def handle_stream_format(pad, %Opus{channels: channels}, _ctx, state) do
-    pad_state = Map.fetch!(state.pads, pad)
-    track_name = pad_state.track_name_override || "audio"
-
-    {:ok, track} =
-      Native.add_opus_track(
-        pad_state.broadcast_resource,
-        track_name,
-        48_000,
-        channels
-      )
-
-    {[], put_in(state.pads[pad], %{pad_state | track: track})}
+    track_resource = add_track(pad_state, fmt)
+    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource})}
   end
 
   @impl true
   def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, state) do
     pad_state = Map.fetch!(state.pads, pad)
     timestamp_us = Membrane.Time.as_microseconds(buffer.pts, :round)
-    :ok = Native.send_frame(pad_state.track, timestamp_us, keyframe?(buffer), buffer.payload)
+
+    :ok =
+      Native.send_frame(pad_state.track_resource, timestamp_us, keyframe?(buffer), buffer.payload)
+
     {[], state}
   end
 
   @impl true
-  def handle_end_of_stream(_pad, ctx, state) do
-    all_done =
-      ctx.pads
-      |> Map.keys()
-      |> Enum.all?(fn pad -> ctx.pads[pad].end_of_stream? end)
+  def handle_end_of_stream(pad, _ctx, state) do
+    state = close_pad(pad, state)
 
-    if all_done do
+    if state.pads == %{} do
       :ok = Native.close_session(state.session)
     end
 
     {[], state}
   end
 
-  # ---------------------------------------------------------------------------
-  # Helpers
-  # ---------------------------------------------------------------------------
+  @spec close_pad(Membrane.Pad.ref(), State.t()) :: State.t()
+  defp close_pad(pad, state) do
+    {pad_state, pads} = Map.pop(state.pads, pad)
+    state = %{state | pads: pads}
 
+    case pad_state do
+      %{track_resource: track_resource, broadcast: broadcast} ->
+        :ok = Native.remove_track(track_resource)
+        maybe_close_broadcast(state, broadcast)
+
+      nil ->
+        state
+    end
+  end
+
+  @spec ensure_broadcast(State.t(), path :: String.t()) ::
+          {resource :: State.resource(), State.t()}
   defp ensure_broadcast(state, path) do
     case Map.fetch(state.broadcasts, path) do
       {:ok, resource} ->
@@ -263,6 +198,7 @@ defmodule Membrane.MoQ.Sink do
     end
   end
 
+  @spec maybe_close_broadcast(State.t(), path :: String.t() | nil) :: State.t()
   defp maybe_close_broadcast(state, nil), do: state
 
   defp maybe_close_broadcast(state, path) do
@@ -282,6 +218,40 @@ defmodule Membrane.MoQ.Sink do
     end
   end
 
+  defp add_track(pad_state, fmt) do
+    {:ok, track_resource} = do_add_track(fmt).(pad_state.broadcast_resource, pad_state.track)
+    track_resource
+  end
+
+  defp do_add_track(%H264{height: height, width: width, framerate: framerate} = fmt),
+    do:
+      &Native.add_h264_track(
+        &1,
+        &2,
+        h264_codec_string(fmt),
+        width,
+        height,
+        framerate_to_float(framerate)
+      )
+
+  defp do_add_track(%H265{height: height, width: width, framerate: framerate} = fmt),
+    do:
+      &Native.add_h265_track(
+        &1,
+        &2,
+        h265_codec_string(fmt),
+        width,
+        height,
+        framerate_to_float(framerate)
+      )
+
+  defp do_add_track(%AAC{profile: profile, sample_rate: sample_rate, channels: channels}),
+    do: &Native.add_aac_track(&1, &2, aac_profile_byte(profile), sample_rate, channels)
+
+  defp do_add_track(%Opus{channels: channels}),
+    do: &Native.add_opus_track(&1, &2, 48_000, channels)
+
+  @spec framerate_to_float({integer(), integer()} | nil) :: float()
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,
     do: num / den
 
@@ -293,6 +263,7 @@ defmodule Membrane.MoQ.Sink do
   # Reads profile, compatibility, and level directly from the avcC DCR bytes
   # embedded in the stream_structure. Falls back to a profile-only guess for
   # raw Annex B streams that carry no DCR.
+  @spec h264_codec_string(H264.t()) :: String.t()
   defp h264_codec_string(%H264{
          stream_structure: {base, <<_version, profile, compat, level, _::binary>>}
        })
@@ -305,6 +276,7 @@ defmodule Membrane.MoQ.Sink do
     "avc1.#{Base.encode16(<<profile_byte, 0x00, 0x1F>>, case: :lower)}"
   end
 
+  @spec h264_profile_byte(H264.profile()) :: integer()
   defp h264_profile_byte(:baseline), do: 0x42
   defp h264_profile_byte(:main), do: 0x4D
   defp h264_profile_byte(:high), do: 0x64
@@ -317,16 +289,20 @@ defmodule Membrane.MoQ.Sink do
   # full HEVC config record requires a HEVC bitstream parser we don't pull in,
   # so fall back to a sensible Main-profile default. Override via pad opts if
   # you need exact codec advertisement.
+  @spec h265_codec_string(H265.t()) :: String.t()
   defp h265_codec_string(%H265{}), do: "hev1.1.6.L93.B0"
 
+  @spec aac_profile_byte(AAC.profile()) :: integer()
+  # TODO: these need correction!!!
   defp aac_profile_byte(:mpeg_4_lc), do: 2
   defp aac_profile_byte(:mpeg_4_he_v1), do: 5
   defp aac_profile_byte(:mpeg_4_he_v2), do: 29
   defp aac_profile_byte(profile) when is_integer(profile), do: profile
   defp aac_profile_byte(_), do: 2
 
+  @spec keyframe?(Membrane.Buffer.t()) :: boolean()
+  # TODO: check if h26x buffers' metadata actually contain these keys
   defp keyframe?(%Membrane.Buffer{metadata: %{h264: %{key_frame?: kf}}}), do: kf
   defp keyframe?(%Membrane.Buffer{metadata: %{h265: %{key_frame?: kf}}}), do: kf
-  # Audio: every frame is independently decodable, so it's effectively a keyframe.
   defp keyframe?(%Membrane.Buffer{}), do: true
 end

@@ -1,23 +1,11 @@
-# Publishes a sample H.264 video stream to a local MoQ relay.
-#
-# Prerequisites:
-#   - A MoQ relay running at https://localhost:4443 (e.g. moq-relay)
-#   - A hang-compatible subscriber (e.g. moq-obs, or the hang watch player)
-#     subscribed to broadcast "example"
-#
-# Run with:
-#   elixir examples/publish_h264.exs
-
 Mix.install([
   :membrane_realtimer_plugin,
+  :membrane_hackney_plugin,
   :membrane_h26x_plugin,
-  :membrane_file_plugin,
-  {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"},
-  {:membrane_sdl_plugin, "~> 0.18.6"},
-  {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true}
+  {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true},
 ])
 
-Logger.configure(level: :warn)
+Logger.configure(level: :warning)
 
 defmodule Example do
   use Membrane.Pipeline
@@ -26,40 +14,31 @@ defmodule Example do
     Membrane.Pipeline.start_link(__MODULE__)
   end
 
+  @video_url "http://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/ffmpeg-testsrc.h265"
+
   @impl true
   def handle_init(_ctx, _opts) do
-    structure = [
-      child(:video_source, %Membrane.File.Source{
-        location: "test/fixtures/bbb.h264"
+    spec = [
+      child(:video_source, %Membrane.Hackney.Source{
+        location: @video_url,
+        hackney_opts: [follow_redirect: true]
       })
-      |> child(:video_parser, %Membrane.H264.Parser{
+      |> child(:video_parser, %Membrane.H265.Parser{
         generate_best_effort_timestamps: %{framerate: {25, 1}},
         output_alignment: :au
       })
       |> child(:realtimer, Membrane.Realtimer)
-      |> child(:video_tee, Membrane.Tee),
-
-      # --- MoQ branch ---
-      get_child(:video_tee)
-      |> via_out(Pad.ref(:output, :moq))
-      |> via_in(Pad.ref(:input, :main))
+      |> via_in(Pad.ref(:input, :main), options: [broadcast: "bbb", track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
-        url: "https://localhost:4443/anon",
-        broadcast: "example"
-      }),
-
-      # --- Playback branch ---
-      get_child(:video_tee)
-      |> via_out(Pad.ref(:output, :play))
-      |> child(:video_decoder, Membrane.H264.FFmpeg.Decoder)
-      |> child(:video_player, Membrane.SDL.Player)
+        url: "https://localhost:4443"
+      })
     ]
 
-    {[spec: structure], %{}}
+    {[spec: spec], %{}}
   end
 
   @impl true
-  def handle_element_end_of_stream(:video_player, _pad, _ctx, state) do
+  def handle_element_end_of_stream(:sink, _pad, _ctx, state) do
     {[terminate: :shutdown], state}
   end
 

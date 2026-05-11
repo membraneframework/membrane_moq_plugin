@@ -687,9 +687,9 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "hang"
-version = "0.15.7"
+version = "0.15.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d43f9bea7633ee8d551d7946312b547e6c27303311c990891c201956545eaa2a"
+checksum = "dc07f0e24419d458e469ad549065c25d3daf00f9c0132cb208f72ac270f7f109"
 dependencies = [
  "buf-list",
  "bytes",
@@ -1168,9 +1168,9 @@ dependencies = [
 
 [[package]]
 name = "moq-lite"
-version = "0.15.8"
+version = "0.15.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f78048415f34e53d6095375a346d108176cddb8a1c170b2e7486f8517aae4ff0"
+checksum = "4d347495ba1fb0c102ab9cdfc149519bdcd9ad9d3bf2eda5e60e82f9dadf7e98"
 dependencies = [
  "bytes",
  "conducer",

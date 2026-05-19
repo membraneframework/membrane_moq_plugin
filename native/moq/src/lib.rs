@@ -35,15 +35,14 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("failed to build tokio runtime")
+            .expect("tokio runtime build should succeed")
     })
 }
 
-pub(crate) fn send_atom(pid: &LocalPid, atom: Atom) {
-    let mut owned = OwnedEnv::new();
-    owned
-        .send_and_clear(pid, |env| atom.to_term(env))
-        .expect("failed to send atom");
+pub(crate) fn send_atom(pid: LocalPid, atom: Atom) {
+    OwnedEnv::new()
+        .send_and_clear(&pid, |env| atom.to_term(env))
+        .expect("sending atom to local process should succeed");
 }
 
 fn load(env: rustler::Env, _info: rustler::Term) -> bool {
@@ -54,7 +53,7 @@ fn load(env: rustler::Env, _info: rustler::Term) -> bool {
         env.register::<SubscriberResource>(),
     ]
     .iter()
-    .all(|r| r.is_ok())
+    .all(std::result::Result::is_ok)
 }
 
 rustler::init!("Elixir.Membrane.MoQ.Native", load = load);

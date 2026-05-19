@@ -1,5 +1,4 @@
-use rustler::{Atom, Binary, NifResult, ResourceArc};
-use std::sync::Mutex;
+use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -15,13 +14,13 @@ pub(crate) enum TrackCmd {
 }
 
 pub struct TrackResource {
-    pub(crate) sender: Mutex<Option<mpsc::UnboundedSender<TrackCmd>>>, // TODO: do we need the mutex here? `TrackResource` is always wrapped in ResourceArc anyway
-    pub(crate) broadcast_res: ResourceArc<BroadcastResource>,
-    pub(crate) name: String,
-    pub(crate) kind: TrackRole,
+    sender: mpsc::UnboundedSender<TrackCmd>,
+    broadcast_res: ResourceArc<BroadcastResource>,
+    name: String,
+    kind: TrackRole,
 }
 
-impl rustler::Resource for TrackResource {}
+impl Resource for TrackResource {}
 
 #[derive(Clone, Copy)]
 pub(crate) enum TrackRole {
@@ -32,7 +31,7 @@ pub(crate) enum TrackRole {
 #[rustler::nif]
 pub fn add_h264_track(
     broadcast_res: ResourceArc<BroadcastResource>,
-    track_name: String,
+    track: String,
     video_params: VideoTrackParams,
     dcr: Binary,
     codec: H264Codec,
@@ -51,7 +50,7 @@ pub fn add_h264_track(
     };
     add_video_track(
         broadcast_res,
-        track_name,
+        track,
         video_codec,
         video_params.width,
         video_params.height,
@@ -64,7 +63,7 @@ pub fn add_h264_track(
 #[rustler::nif]
 pub fn add_h265_track(
     broadcast_res: ResourceArc<BroadcastResource>,
-    track_name: String,
+    track: String,
     video_params: VideoTrackParams,
     dcr: Binary,
     codec: H265Codec,
@@ -97,7 +96,7 @@ pub fn add_h265_track(
 
     add_video_track(
         broadcast_res,
-        track_name,
+        track,
         video_codec,
         video_params.width,
         video_params.height,
@@ -109,62 +108,50 @@ pub fn add_h265_track(
 #[rustler::nif]
 pub fn add_aac_track(
     broadcast_res: ResourceArc<BroadcastResource>,
-    track_name: String,
+    track: String,
     profile: u8,
     sample_rate: u32,
     channels: u32,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
-    add_audio_track(broadcast_res, track_name, codec, sample_rate, channels)
+    add_audio_track(broadcast_res, track, codec, sample_rate, channels)
 }
 
 #[rustler::nif]
 pub fn add_opus_track(
     broadcast_res: ResourceArc<BroadcastResource>,
-    track_name: String,
+    track: String,
     sample_rate: u32,
     channels: u32,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let codec = hang::catalog::AudioCodec::Opus;
-    add_audio_track(broadcast_res, track_name, codec, sample_rate, channels)
+    add_audio_track(broadcast_res, track, codec, sample_rate, channels)
 }
 
 #[rustler::nif]
 pub fn send_frame(
-    track: ResourceArc<TrackResource>,
+    track_res: ResourceArc<TrackResource>,
     timestamp_us: u64,
     keyframe: bool,
     data: Binary,
-) -> Atom {
-    let timestamp = match moq_mux::container::Timestamp::from_micros(timestamp_us) {
-        Ok(t) => t,
-        Err(_) => {
-            // TODO: logs skip Membrane.Logger
-            eprintln!("send_frame: timestamp overflow ({timestamp_us}us)");
-            return atoms::error();
-        }
-    };
-
+) -> NifResult<Atom> {
+    let timestamp = moq_mux::container::Timestamp::from_micros(timestamp_us)
+        .map_err(|e| crate::nif_error!("timestamp conversion failed: {e}"))?;
     let frame = moq_mux::container::Frame {
         timestamp,
         payload: bytes::Bytes::copy_from_slice(data.as_slice()),
         keyframe,
     };
 
-    let sender_guard = track.sender.lock().unwrap();
-    if let Some(tx) = sender_guard.as_ref() {
-        let _ = tx.send(TrackCmd::Frame(frame));
-    }
-    atoms::ok()
+    let _ = track_res.sender.send(TrackCmd::Frame(frame));
+    Ok(atoms::ok())
 }
 
 /// Close a track: stop its data task, finish the moq-lite track, and remove
 /// the rendition from the broadcast catalog. Idempotent.
 #[rustler::nif]
 pub fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
-    if let Some(tx) = track_res.sender.lock().unwrap().take() {
-        let _ = tx.send(TrackCmd::Stop);
-    }
+    let _ = track_res.sender.send(TrackCmd::Stop);
 
     let mut cp = track_res.broadcast_res.catalog.lock().unwrap();
     let mut guard = cp.lock();
@@ -182,7 +169,7 @@ pub fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
 
 fn add_video_track(
     broadcast_res: ResourceArc<BroadcastResource>,
-    track_name: String,
+    track: String,
     codec: hang::catalog::VideoCodec,
     width: u32,
     height: u32,
@@ -191,10 +178,10 @@ fn add_video_track(
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
-    let track = {
+    let track_res = {
         let mut bp = broadcast_res.broadcast.lock().unwrap();
         bp.create_track(moq_lite::Track {
-            name: track_name.clone(),
+            name: track.clone(),
             priority: 0,
         })
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
@@ -204,7 +191,7 @@ fn add_video_track(
         let mut cp = broadcast_res.catalog.lock().unwrap();
         let mut guard = cp.lock();
         guard.video.renditions.insert(
-            track_name.clone(),
+            track.clone(),
             hang::catalog::VideoConfig {
                 codec,
                 description,
@@ -221,14 +208,14 @@ fn add_video_track(
         );
     }
 
-    let sender = spawn_track_task(track);
+    let sender = spawn_track_task(track_res);
 
     Ok((
         atoms::ok(),
         ResourceArc::new(TrackResource {
-            sender: Mutex::new(Some(sender)),
+            sender,
             broadcast_res,
-            name: track_name,
+            name: track,
             kind: TrackRole::Video,
         }),
     ))
@@ -236,17 +223,17 @@ fn add_video_track(
 
 fn add_audio_track(
     broadcast_res: ResourceArc<BroadcastResource>,
-    track_name: String,
+    track: String,
     codec: hang::catalog::AudioCodec,
     sample_rate: u32,
     channels: u32,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
-    let track = {
+    let track_res = {
         let mut bp = broadcast_res.broadcast.lock().unwrap();
         bp.create_track(moq_lite::Track {
-            name: track_name.clone(),
+            name: track.clone(),
             priority: 0,
         })
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
@@ -256,7 +243,7 @@ fn add_audio_track(
         let mut cp = broadcast_res.catalog.lock().unwrap();
         let mut guard = cp.lock();
         guard.audio.renditions.insert(
-            track_name.clone(),
+            track.clone(),
             hang::catalog::AudioConfig {
                 codec,
                 sample_rate,
@@ -269,14 +256,14 @@ fn add_audio_track(
         );
     }
 
-    let sender = spawn_track_task(track);
+    let sender = spawn_track_task(track_res);
 
     Ok((
         atoms::ok(),
         ResourceArc::new(TrackResource {
-            sender: Mutex::new(Some(sender)),
+            sender,
             broadcast_res,
-            name: track_name,
+            name: track,
             kind: TrackRole::Audio,
         }),
     ))
@@ -291,6 +278,9 @@ fn spawn_track_task(track: moq_lite::TrackProducer) -> mpsc::UnboundedSender<Tra
                 TrackCmd::Frame(frame) => {
                     if let Err(e) = producer.write(frame) {
                         eprintln!("track write failed: {e}"); // TODO: bypasses Membrane.Logger
+                                                              // TODO: what happens then this receiver dies? we break, call producer.finish(), the task finishes,
+                                                              // TODO: do all subsequent calls to `tx` fail?
+                                                              // TODO: should a call to `producer.write` fail this entire task?
                         break;
                     }
                 }

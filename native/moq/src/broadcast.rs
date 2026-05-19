@@ -1,4 +1,4 @@
-use rustler::{Atom, NifResult, ResourceArc};
+use rustler::{Atom, NifResult, Resource, ResourceArc};
 use std::sync::Mutex;
 
 use crate::{atoms, runtime, session::SessionResource};
@@ -8,7 +8,7 @@ pub struct BroadcastResource {
     pub(crate) catalog: Mutex<moq_mux::CatalogProducer>,
 }
 
-impl rustler::Resource for BroadcastResource {}
+impl Resource for BroadcastResource {}
 
 /// Open a new broadcast on this session and create its (hang + MSF) catalog.
 ///
@@ -23,9 +23,10 @@ pub fn open_broadcast(
     // broadcast lifetime, so we need a runtime context.
     let _guard = runtime().handle().enter();
 
-    let mut bp = session.origin.create_broadcast(&path).ok_or_else(|| {
-        crate::nif_error!("create_broadcast({path}) refused")
-    })?;
+    let mut bp = session
+        .origin
+        .create_broadcast(&path)
+        .ok_or_else(|| crate::nif_error!("create_broadcast({path}) refused"))?;
 
     let catalog = moq_mux::CatalogProducer::new(&mut bp)
         .map_err(|e| crate::nif_error!("CatalogProducer::new failed: {e}"))?;

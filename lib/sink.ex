@@ -26,7 +26,13 @@ defmodule Membrane.MoQ.Sink do
 
   def_input_pad :input,
     availability: :on_request,
-    accepted_format: any_of(AAC, Opus, H264, H265),
+    accepted_format:
+      any_of(
+        AAC,
+        Opus,
+        %H264{stream_structure: ss} when H264.is_avc(ss),
+        %H265{stream_structure: ss} when H265.is_hvc(ss)
+      ),
     options: [
       broadcast: [
         spec: String.t(),
@@ -44,42 +50,40 @@ defmodule Membrane.MoQ.Sink do
                 spec: String.t(),
                 description: "URL to the MoQ relay server."
               ],
-              broadcast: [
-                spec: String.t() | nil,
-                default: nil,
-                description: "Default broadcast path for pads that don't override it."
-              ],
               container: [
                 spec: :legacy,
                 default: :legacy,
                 description:
                   "Container format for media frames. Only :legacy is supported for now."
+              ],
+              disable_tls_verify?: [
+                spec: boolean(),
+                default: false
               ]
 
   defmodule State do
     @type resource :: reference()
+    @type session :: reference()
+    @type pad_state :: %{
+            broadcast: String.t(),
+            # TODO: we should think about getting rid of the ref here for `broadcasts` to be the only source of truth for resources
+            broadcast_resource: resource(),
+            track: String.t(),
+            track_resource: resource() | nil
+          }
 
     @type t :: %__MODULE__{
             url: String.t(),
             container: :legacy | :cmaf,
-            # TODO: replace any with session type
-            session: any(),
+            disable_tls_verify?: boolean(),
+            session: session(),
             broadcasts: %{String.t() => resource()},
-            pads: %{
-              Membrane.Pad.ref() => %{
-                broadcast: String.t(),
-                # TODO: we should think about getting rid of the ref here for `broadcasts` to be the only source of truth for resources
-                broadcast_resource: resource(),
-                track: String.t(),
-                track_resource: resource() | nil
-              }
-            }
+            pads: %{Membrane.Pad.ref() => pad_state()}
           }
 
-    @enforce_keys [:url]
+    @enforce_keys [:url, :container, :disable_tls_verify?]
     defstruct @enforce_keys ++
                 [
-                  container: :legacy,
                   session: nil,
                   broadcasts: %{},
                   pads: %{}
@@ -87,12 +91,17 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_init(_ctx, %__MODULE__{url: url} = _opts),
-    do: {[], %State{url: url, session: nil, broadcasts: %{}, pads: %{}}}
+  def handle_init(
+        _ctx,
+        %__MODULE__{url: url, container: container, disable_tls_verify?: disable_tls_verify?} =
+          _opts
+      ) do
+    {[], %State{url: url, container: container, disable_tls_verify?: disable_tls_verify?}}
+  end
 
   @impl true
-  def handle_setup(_ctx, %State{url: url} = state) do
-    {:ok, session} = Native.setup_session(url, self())
+  def handle_setup(_ctx, %State{url: url, disable_tls_verify?: disable_tls_verify?} = state) do
+    {:ok, session} = Native.setup_session(url, self(), disable_tls_verify?)
     {[setup: :incomplete], %{state | session: session}}
   end
 
@@ -211,38 +220,97 @@ defmodule Membrane.MoQ.Sink do
     end
   end
 
+  @spec add_track(State.pad_state(), Membrane.StreamFormat.t()) :: reference()
   defp add_track(pad_state, fmt) do
-    {:ok, track_resource} = do_add_track(fmt).(pad_state.broadcast_resource, pad_state.track)
+    {:ok, track_resource} = do_add_track(pad_state.broadcast_resource, pad_state.track, fmt)
     track_resource
   end
 
-  defp do_add_track(%H264{height: height, width: width, framerate: framerate} = fmt),
-    do:
-      &Native.add_h264_track(
-        &1,
-        &2,
-        h264_codec_string(fmt),
-        width,
-        height,
-        framerate_to_float(framerate)
-      )
+  @spec do_add_track(
+          broadcast_resource :: reference(),
+          track :: String.t(),
+          Membrane.StreamFormat.t()
+        ) :: {:ok, track_resource :: reference()} | {:error, reason :: String.t()}
+  defp do_add_track(broadcast_resource, track, %H264{
+         height: height,
+         width: width,
+         framerate: framerate,
+         stream_structure: {tag, dcr}
+       }) do
+    dcr_parsed = Membrane.H264.DecoderConfigurationRecord.parse(dcr)
 
-  defp do_add_track(%H265{height: height, width: width, framerate: framerate} = fmt),
-    do:
-      &Native.add_h265_track(
-        &1,
-        &2,
-        h265_codec_string(fmt),
-        width,
-        height,
-        framerate_to_float(framerate)
-      )
+    Native.add_h264_track(
+      broadcast_resource,
+      track,
+      %Membrane.MoQ.Native.VideoTrackParams{
+        width: width,
+        height: height,
+        framerate: framerate_to_float(framerate)
+      },
+      dcr,
+      %Membrane.MoQ.Native.H264Codec{
+        inline:
+          case tag do
+            :avc1 -> false
+            :avc3 -> true
+          end,
+        profile: dcr_parsed.avc_profile_indication,
+        constraints: dcr_parsed.profile_compatibility,
+        level: dcr_parsed.avc_level
+      }
+    )
+  end
 
-  defp do_add_track(%AAC{profile: profile, sample_rate: sample_rate, channels: channels}),
-    do: &Native.add_aac_track(&1, &2, aac_profile_byte(profile), sample_rate, channels)
+  defp do_add_track(broadcast_resource, track, %H265{
+         height: height,
+         width: width,
+         framerate: framerate,
+         stream_structure: {tag, dcr}
+       }) do
+    dcr_parsed = Membrane.H265.DecoderConfigurationRecord.parse(dcr)
 
-  defp do_add_track(%Opus{channels: channels}),
-    do: &Native.add_opus_track(&1, &2, 48_000, channels)
+    Native.add_h265_track(
+      broadcast_resource,
+      track,
+      %Membrane.MoQ.Native.VideoTrackParams{
+        width: width,
+        height: height,
+        framerate: framerate_to_float(framerate)
+      },
+      dcr,
+      %Membrane.MoQ.Native.H265Codec{
+        in_band:
+          case tag do
+            :hev1 -> true
+            :hvc1 -> false
+          end,
+        profile_space: dcr_parsed.profile_space,
+        profile_idc: dcr_parsed.profile_idc,
+        profile_compatibility_flags:
+          <<dcr_parsed.profile_compatibility_flags::32>> |> :binary.bin_to_list(),
+        tier_flag: dcr_parsed.tier_flag > 0,
+        level_idc: dcr_parsed.level_idc,
+        constraint_flags: <<dcr_parsed.constraint_indicator_flags::48>> |> :binary.bin_to_list()
+      }
+    )
+  end
+
+  defp do_add_track(broadcast_resource, track, %AAC{
+         profile: profile,
+         sample_rate: sample_rate,
+         channels: channels
+       }),
+       do:
+         Native.add_aac_track(
+           broadcast_resource,
+           track,
+           AAC.profile_to_aot_id(profile),
+           sample_rate,
+           channels
+         )
+
+  defp do_add_track(broadcast_resource, track, %Opus{channels: channels}),
+    do: Native.add_opus_track(broadcast_resource, track, 48_000, channels)
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float()
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,
@@ -250,51 +318,7 @@ defmodule Membrane.MoQ.Sink do
 
   defp framerate_to_float(nil), do: 0.0
 
-  # ---------- Codec string helpers ----------
-
-  # H.264: produces a WebCodecs / hang codec string, e.g. "avc1.64001f".
-  # Reads profile, compatibility, and level directly from the avcC DCR bytes
-  # embedded in the stream_structure. Falls back to a profile-only guess for
-  # raw Annex B streams that carry no DCR.
-  @spec h264_codec_string(H264.t()) :: String.t()
-  defp h264_codec_string(%H264{
-         stream_structure: {base, <<_version, profile, compat, level, _::binary>>}
-       })
-       when base in [:avc1, :avc3] do
-    "#{base}.#{Base.encode16(<<profile, compat, level>>, case: :lower)}"
-  end
-
-  defp h264_codec_string(%H264{profile: profile}) do
-    profile_byte = h264_profile_byte(profile)
-    "avc1.#{Base.encode16(<<profile_byte, 0x00, 0x1F>>, case: :lower)}"
-  end
-
-  @spec h264_profile_byte(H264.profile()) :: integer()
-  defp h264_profile_byte(:baseline), do: 0x42
-  defp h264_profile_byte(:main), do: 0x4D
-  defp h264_profile_byte(:high), do: 0x64
-  defp h264_profile_byte(:high_10), do: 0x6E
-  defp h264_profile_byte(:high_422), do: 0x7A
-  defp h264_profile_byte(:high_444), do: 0xF4
-  defp h264_profile_byte(_), do: 0x42
-
-  # H.265: WebCodecs string is structured like "hev1.1.6.L93.B0". Parsing the
-  # full HEVC config record requires a HEVC bitstream parser we don't pull in,
-  # so fall back to a sensible Main-profile default. Override via pad opts if
-  # you need exact codec advertisement.
-  @spec h265_codec_string(H265.t()) :: String.t()
-  defp h265_codec_string(%H265{}), do: "hev1.1.6.L93.B0"
-
-  @spec aac_profile_byte(AAC.profile()) :: integer()
-  # TODO: these need correction!!!
-  defp aac_profile_byte(:mpeg_4_lc), do: 2
-  defp aac_profile_byte(:mpeg_4_he_v1), do: 5
-  defp aac_profile_byte(:mpeg_4_he_v2), do: 29
-  defp aac_profile_byte(profile) when is_integer(profile), do: profile
-  defp aac_profile_byte(_), do: 2
-
   @spec keyframe?(Membrane.Buffer.t()) :: boolean()
-  # TODO: check if h26x buffers' metadata actually contain these keys
   defp keyframe?(%Membrane.Buffer{metadata: %{h264: %{key_frame?: kf}}}), do: kf
   defp keyframe?(%Membrane.Buffer{metadata: %{h265: %{key_frame?: kf}}}), do: kf
   defp keyframe?(%Membrane.Buffer{}), do: true

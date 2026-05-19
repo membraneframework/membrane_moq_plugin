@@ -1,6 +1,8 @@
-# TODO: inspect, the video is a little choppy
+# TODO: non-fragmented mp4 is expectedly choppy, fragmented with ffmpeg and frag_every_frame crashes the demuxer
 
 Mix.install([
+  :boombox,
+  :membrane_file_plugin,
   :membrane_realtimer_plugin,
   :membrane_aac_plugin,
   :membrane_h26x_plugin,
@@ -28,10 +30,18 @@ defmodule Example do
         url: "http://localhost:4443"
       }),
 
-      child(:source, %Membrane.Hackney.Source{
-        location: @input_url,
-        hackney_opts: [follow_redirect: true]
+      # child(:boombox_source, %Boombox.Bin{
+      #   input: @input_url
+      # }),
+
+
+      child(:source, %Membrane.File.Source{
+        location: "./bun33s.fmp4"
       })
+      # child(:source, %Membrane.Hackney.Source{
+      #   location: @input_url,
+      #   hackney_opts: [follow_redirect: true]
+      # })
       |> child(:demuxer, Membrane.MP4.Demuxer.ISOM),
 
       get_child(:demuxer)
@@ -39,13 +49,16 @@ defmodule Example do
       |> child(:audio_parser, %Membrane.AAC.Parser{
         out_encapsulation: :ADTS
       })
+      # get_child(:boombox_source) |> via_out(:output, options: [kind: :audio, transcoding_policy: :never])
       |> child(:audio_rt, Membrane.Realtimer)
       |> via_in(Pad.ref(:input, :audio1), options: [broadcast: "bbb", track: "audio"])
       |> get_child(:sink),
+      # |> child(:fake, Membrane.Fake.Sink),
 
       get_child(:demuxer)
       |> via_out(:output, options: [kind: :video])
-      |> child(:video_parser, Membrane.H264.Parser)
+      |> child(:video_parser, %Membrane.H264.Parser{ output_stream_structure: :avc1     })
+      # get_child(:boombox_source) |> via_out(:output, options: [kind: :video, transcoding_policy: :never])
       |> child(:video_rt, Membrane.Realtimer)
       |> via_in(Pad.ref(:input, :video1), options: [broadcast: "bbb", track: "video"])
       |> get_child(:sink)

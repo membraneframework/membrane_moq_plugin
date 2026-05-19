@@ -12,7 +12,7 @@ use url::Url;
 /// Useful when developing against a local moq-rs relay with a self-signed
 /// cert (e.g. `https://localhost:4443`). Must stay `false` for any public
 /// relay — otherwise the connection is vulnerable to MITM.
-const DISABLE_TLS_VERIFY: bool = false;
+const DISABLE_TLS_VERIFY: bool = true;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

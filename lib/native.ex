@@ -2,21 +2,21 @@ defmodule Membrane.MoQ.Native do
   @moduledoc false
   use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
 
-  # Session NIFs
-
   @doc """
   Connects to a MoQ relay and prepares a session.
 
-  Sends `:moq_connected` to `pid` once the QUIC handshake completes, or
-  `:moq_disconnected` if the session fails / is closed. Tracks opened on this
-  session use the hang Legacy container.
+  Sends `:moq_connected` to `pid` once the QUIC handshake completes,
+  or `:moq_disconnected` if the session fails / is closed.
   """
-  def setup_session(_url, _pid),
+  @spec setup_session(String.t(), pid(), boolean()) ::
+          {:ok, session :: reference()} | {:error, reason :: String.t()}
+  def setup_session(_url, _pid, _disable_tls_verify?),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Tears down the session. Idempotent.
   """
+  @spec close_session(reference()) :: :ok
   def close_session(_session),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -24,49 +24,39 @@ defmodule Membrane.MoQ.Native do
 
   @doc """
   Opens a broadcast on the session and creates its hang + MSF catalog tracks.
-
-  Returns `{:ok, broadcast_resource}` or `{:error, reason}` (e.g. duplicate path).
   """
+  @spec open_broadcast(reference(), String.t()) ::
+          {:ok, broadcast_resource :: reference()} | {:error, reason :: String.t()}
   def open_broadcast(_session, _path),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Closes the broadcast, finishing the catalog and aborting in-flight tracks.
   """
-  def close_broadcast(_broadcast),
+  @spec close_broadcast(reference()) :: :ok
+  def close_broadcast(_broadcast_resource),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  # Track NIFs
-
-  @doc """
-  Adds an H.264 video track to the broadcast.
-
-  `codec_str` is a WebCodecs codec string (e.g. `"avc1.64001f"` or
-  `"avc3.64001f"`). Returns `{:ok, track_resource}` or `{:error, reason}`.
-  """
-  def add_h264_track(_broadcast, _track_name, _codec_str, _width, _height, _framerate),
+  @spec add_h264_track(reference(), String.t(), VideoTrackParams.t(), String.t(), H264Codec.t()) ::
+          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+  def add_h264_track(_broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @doc """
-  Adds an H.265 video track to the broadcast.
-
-  `codec_str` is a WebCodecs codec string (e.g. `"hev1.1.6.L93.B0"`).
-  """
-  def add_h265_track(_broadcast, _track_name, _codec_str, _width, _height, _framerate),
+  @spec add_h265_track(reference(), String.t(), VideoTrackParams.t(), String.t(), H265Codec.t()) ::
+          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+  def(add_h265_track(_broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
+  )
 
-  @doc """
-  Adds an AAC audio track to the broadcast.
-
-  `profile` is the AAC profile byte (e.g. 2 for AAC-LC, 5 for HE-AAC).
-  """
-  def add_aac_track(_broadcast, _track_name, _profile, _sample_rate, _channels),
+  @spec add_aac_track(reference(), String.t(), byte(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+  def(add_aac_track(_broadcast_res, _track, _profile, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
+  )
 
-  @doc """
-  Adds an Opus audio track to the broadcast.
-  """
-  def add_opus_track(_broadcast, _track_name, _sample_rate, _channels),
+  @spec add_opus_track(reference(), String.t(), non_neg_integer(), Membrane.Opus.channels_t()) ::
+          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+  def add_opus_track(_broadcast_res, _track, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -76,26 +66,63 @@ defmodule Membrane.MoQ.Native do
   must be `true` for IDR frames on video tracks (triggers a new MoQ group);
   for audio tracks pass `true` for every frame.
   """
-  def send_frame(_track, _timestamp_us, _keyframe?, _data),
+  @spec send_frame(reference(), integer(), boolean(), binary()) :: :ok # | no_return() __jm__
+  def send_frame(_track_res, _timestamp_us, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Closes the track, removing its rendition from the catalog and finishing the
   underlying moq-lite track. Idempotent.
   """
-  def remove_track(_track),
+  @spec remove_track(reference()) :: :ok
+  def remove_track(_track_res),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  # Subscriber (Source) NIFs
-
   @doc """
-  Starts a MoQ subscriber session. TODO: not yet implemented.
+  TODO
   """
   def start_subscriber(_url, _broadcast, _track, _pid),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Signals the subscriber task to stop.
+  TODO
   """
   def stop_subscriber(_resource), do: :erlang.nif_error(:nif_not_loaded)
+end
+
+defmodule Membrane.MoQ.Native.VideoTrackParams do
+  @moduledoc false
+  @type t :: %__MODULE__{width: non_neg_integer(), height: non_neg_integer(), framerate: float()}
+  @enforce_keys [:width, :height, :framerate]
+  defstruct @enforce_keys
+end
+
+defmodule Membrane.MoQ.Native.H264Codec do
+  @moduledoc false
+  @type t :: %__MODULE__{inline: boolean(), profile: byte(), constraints: byte(), level: byte()}
+  @enforce_keys [:inline, :profile, :constraints, :level]
+  defstruct @enforce_keys
+end
+
+defmodule Membrane.MoQ.Native.H265Codec do
+  @moduledoc false
+  @type t :: %__MODULE__{
+          in_band: boolean(),
+          profile_space: byte(),
+          profile_idc: byte(),
+          profile_compatibility_flags: [byte()],
+          tier_flag: boolean(),
+          level_idc: byte(),
+          constraint_flags: [byte()]
+        }
+  @enforce_keys [
+    :in_band,
+    :profile_space,
+    :profile_idc,
+    :profile_compatibility_flags,
+    :tier_flag,
+    :level_idc,
+    :constraint_flags
+  ]
+  defstruct @enforce_keys
 end

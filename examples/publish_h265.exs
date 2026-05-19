@@ -5,7 +5,7 @@ Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true},
 ])
 
-Logger.configure(level: :warning)
+Logger.configure(level: :debug)
 
 defmodule Example do
   use Membrane.Pipeline
@@ -25,12 +25,13 @@ defmodule Example do
       })
       |> child(:video_parser, %Membrane.H265.Parser{
         generate_best_effort_timestamps: %{framerate: {25, 1}},
-        output_alignment: :au
+        output_stream_structure: :hvc1
       })
       |> child(:realtimer, Membrane.Realtimer)
       |> via_in(Pad.ref(:input, :main), options: [broadcast: "bbb", track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
-        url: "https://localhost:4443"
+        url: "https://localhost:4443",
+        disable_tls_verify?: true
       })
     ]
 

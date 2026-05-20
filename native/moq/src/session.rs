@@ -48,7 +48,7 @@ pub fn setup_session(
             Ok(c) => c.with_publish(consume),
             Err(e) => {
                 eprintln!("MoQ client init failed: {e}");
-                send_atom(&pid, atoms::moq_disconnected());
+                send_atom(pid, atoms::moq_disconnected());
                 return;
             }
         };
@@ -57,12 +57,12 @@ pub fn setup_session(
             Ok(s) => s,
             Err(e) => {
                 eprintln!("MoQ connect failed: {e}");
-                send_atom(&pid, atoms::moq_disconnected());
+                send_atom(pid, atoms::moq_disconnected());
                 return;
             }
         };
 
-        send_atom(&pid, atoms::moq_connected());
+        send_atom(pid, atoms::moq_connected());
 
         tokio::select! {
             _ = shutdown_rx.recv() => {}
@@ -70,7 +70,7 @@ pub fn setup_session(
                 if let Err(e) = result {
                     eprintln!("MoQ session closed with error: {e}");
                 }
-                send_atom(&pid, atoms::moq_disconnected());
+                send_atom(pid, atoms::moq_disconnected());
             }
         }
     });

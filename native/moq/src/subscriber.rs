@@ -20,7 +20,7 @@ pub fn start_subscriber(
 
     runtime().spawn(async move {
         let _ = stop_rx.recv().await;
-        send_atom(&pid, atoms::moq_disconnected());
+        send_atom(pid, atoms::moq_disconnected());
     });
 
     (

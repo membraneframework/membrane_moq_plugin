@@ -1,17 +1,13 @@
+- Inspect the rust code that's run by `just relay` - we should probably have some way to set one up automatically for tests
+- Some fields in resources are `Mutex` types, probably unnecessary
+- Fix all TODO's and __jm__'s'
+- Native logs like `eprintln!` skip `Membrane.Logger`. Maybe send messages to the filter instead?
 - standalone: `moq lite error: remote error: code=4` when publisher exits gracefully
-- `publish_mp4.exs` choppy video before new keyframe?
 - How many Rustler async runtimes should be running? Need a threading model design!!! Is one async runtime per pad too fine-grained? Remember that we're sharing the session, origin and CatalogProducer!
   - TODO: review generated code. The runtimes created should represend thread pools, which is flexible enough.
+  - moq-gst uses a similar multi thread runtime, ask LLM to compare the approaches
 - Test the MSF cataloguing - it's supposed to be superseding hang's catalog.js track.
 - Monitoring/inspection scripts for looking up current state of the catalog meta-tracks, currently `./membrane_moq_plugin/standalone` does a good job.
 - Manual example tests: not very flexible now, should test more formats like Opus and H265 manually, maybe add a control button to enable playback so the tracks can be inspected in the catalogs, and also inspect termination conditions more thoroughly.
 - Automated tests: configurable relay, mocking the rust layer was a good idea by the LLM
 
-- `NifResult` is used for monadic error propagation via `?;`, but are result values matched on in the Elixir layer when they fail?
-  - A: let ts crash
-- Should the Sink correspond to a single moq-lite Session, spawning a single Origin, but accepting multiple tracks scoped to independent broadcasts?
-  - A: Decided on configuring the broadcast per-pad, this is the most configurable. Removed the default fallback broadcast and track names, require configuring broadcast for each added pad explicitly.
-- OBS only supports `container: "legacy"`. I'd add it as a Sink-scoped option whether to use `"legacy"` or `"cmaf"`. Create a `moq_mux::container::Container` conditionally based on the value.
-  - A: Scraped for now, see `./EXTENDING_TO_CMAF.md` for rationale.
-- Does the relay have persistence logic or does it flush unconditionally? Pipelines without a realtimer are not testable manually. Should subscribers like `web` or `OBS` respect the legacy container's timestamp encapsulation? Is it payloaded properly by `Membrane.MoQ.Sink`?
-  - A: There is some room for synchronization, but publishers are generally assumed to real-time their input.

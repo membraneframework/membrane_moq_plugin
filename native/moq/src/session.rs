@@ -6,7 +6,7 @@ use url::Url;
 use crate::{atoms, runtime, send_atom};
 
 pub struct SessionResource {
-    pub(crate) origin: moq_lite::OriginProducer,
+    pub(crate) origin: hang::moq_lite::OriginProducer,
     pub(crate) shutdown: Mutex<Option<mpsc::UnboundedSender<()>>>,
 }
 
@@ -26,8 +26,7 @@ pub fn setup_session(
 ) -> NifResult<(Atom, ResourceArc<SessionResource>)> {
     let url = Url::parse(&url).map_err(|e| crate::nif_error!("invalid url: {e}"))?;
 
-    // TODO: moq-gst uses moq_lite::Origin::random().produce() instead. Figure out why
-    let origin = moq_lite::Origin::produce();
+    let origin = hang::moq_lite::Origin::random().produce();
     // TODO: origin creates the following OriginConsumer, which is then _moved_ inside the runtime and bound with the client starting the session
     // Add some description how this works, and why it's enough for the session to just ~exist~ in this thread.
     let consume = origin.consume();

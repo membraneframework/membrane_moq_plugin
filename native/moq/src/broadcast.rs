@@ -4,8 +4,8 @@ use std::sync::Mutex;
 use crate::{atoms, runtime, session::SessionResource};
 
 pub struct BroadcastResource {
-    pub(crate) broadcast: Mutex<moq_lite::BroadcastProducer>,
-    pub(crate) catalog: Mutex<moq_mux::CatalogProducer>,
+    pub(crate) broadcast: Mutex<hang::moq_lite::BroadcastProducer>,
+    pub(crate) catalog: Mutex<moq_mux::catalog::Producer>,
 }
 
 impl Resource for BroadcastResource {}
@@ -23,12 +23,12 @@ pub fn open_broadcast(
     // broadcast lifetime, so we need a runtime context.
     let _guard = runtime().handle().enter();
 
-    let mut bp = session
+    let mut bp: hang::moq_lite::BroadcastProducer = session
         .origin
         .create_broadcast(&path)
         .ok_or_else(|| crate::nif_error!("create_broadcast({path}) refused"))?;
 
-    let catalog = moq_mux::CatalogProducer::new(&mut bp)
+    let catalog = moq_mux::catalog::Producer::new(&mut bp)
         .map_err(|e| crate::nif_error!("CatalogProducer::new failed: {e}"))?;
 
     Ok((
@@ -49,6 +49,6 @@ pub fn close_broadcast(broadcast_res: ResourceArc<BroadcastResource>) -> Atom {
         .broadcast
         .lock()
         .unwrap()
-        .abort(moq_lite::Error::Cancel);
+        .abort(hang::moq_lite::Error::Cancel);
     atoms::ok()
 }

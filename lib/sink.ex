@@ -66,7 +66,6 @@ defmodule Membrane.MoQ.Sink do
     @type session :: reference()
     @type pad_state :: %{
             broadcast: String.t(),
-            # TODO: we should think about getting rid of the ref here for `broadcasts` to be the only source of truth for resources
             broadcast_resource: resource(),
             track: String.t(),
             track_resource: resource() | nil

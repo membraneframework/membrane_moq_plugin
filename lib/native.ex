@@ -66,7 +66,7 @@ defmodule Membrane.MoQ.Native do
   must be `true` for IDR frames on video tracks (triggers a new MoQ group);
   for audio tracks pass `true` for every frame.
   """
-  @spec send_frame(reference(), integer(), boolean(), binary()) :: :ok # | no_return() __jm__
+  @spec send_frame(reference(), integer(), boolean(), binary()) :: :ok
   def send_frame(_track_res, _timestamp_us, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 

@@ -6,7 +6,7 @@ use crate::{atoms, runtime, send_atom};
 
 pub struct SessionResource {
     pub(crate) origin: hang::moq_lite::OriginProducer,
-    pub(crate) shutdown: mpsc::UnboundedSender<()>,
+    shutdown: mpsc::UnboundedSender<()>,
 }
 
 impl rustler::Resource for SessionResource {}
@@ -31,7 +31,6 @@ pub fn setup_session(
     let consume = origin.consume();
 
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
-    eprintln!("{disable_tls_verify}");
 
     runtime().spawn(async move {
         let config = {

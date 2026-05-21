@@ -8,7 +8,7 @@ use crate::{
     runtime,
 };
 
-pub(crate) enum TrackCmd {
+enum TrackCmd {
     Frame(moq_mux::container::Frame),
     Stop,
 }
@@ -23,7 +23,7 @@ pub struct TrackResource {
 impl Resource for TrackResource {}
 
 #[derive(Clone, Copy)]
-pub(crate) enum TrackRole {
+enum TrackRole {
     Video,
     Audio,
 }
@@ -48,6 +48,7 @@ pub fn add_h264_track(
     } else {
         Some(bytes::Bytes::copy_from_slice(dcr.as_slice()))
     };
+
     add_video_track(
         broadcast_res,
         track,

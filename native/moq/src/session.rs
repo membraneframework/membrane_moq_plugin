@@ -1,5 +1,4 @@
 use rustler::{Atom, LocalPid, NifResult, ResourceArc};
-use std::sync::Mutex;
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -7,7 +6,7 @@ use crate::{atoms, runtime, send_atom};
 
 pub struct SessionResource {
     pub(crate) origin: hang::moq_lite::OriginProducer,
-    pub(crate) shutdown: Mutex<Option<mpsc::UnboundedSender<()>>>,
+    pub(crate) shutdown: mpsc::UnboundedSender<()>,
 }
 
 impl rustler::Resource for SessionResource {}
@@ -78,7 +77,7 @@ pub fn setup_session(
         atoms::ok(),
         ResourceArc::new(SessionResource {
             origin,
-            shutdown: Mutex::new(Some(shutdown_tx)),
+            shutdown: shutdown_tx,
         }),
     ))
 }
@@ -88,9 +87,6 @@ pub fn setup_session(
 /// Idempotent: subsequent calls are no-ops.
 #[rustler::nif]
 pub fn close_session(session: ResourceArc<SessionResource>) -> Atom {
-    // TODO: lock().unwrap().take() looks like a sequence that can fail in multiple ways, document it better?
-    if let Some(tx) = session.shutdown.lock().unwrap().take() {
-        let _ = tx.send(());
-    }
+    let _ = session.shutdown.send(());
     atoms::ok()
 }

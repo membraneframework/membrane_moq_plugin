@@ -13,7 +13,7 @@ enum TrackCmd {
     Stop,
 }
 
-pub struct TrackResource {
+pub(crate) struct TrackResource {
     sender: mpsc::UnboundedSender<TrackCmd>,
     broadcast_res: ResourceArc<BroadcastResource>,
     name: String,
@@ -29,7 +29,7 @@ enum TrackRole {
 }
 
 #[rustler::nif]
-pub fn add_h264_track(
+pub(crate) fn add_h264_track(
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     video_params: VideoTrackParams,
@@ -62,7 +62,7 @@ pub fn add_h264_track(
 
 /// Add an H.265 video track to the broadcast.
 #[rustler::nif]
-pub fn add_h265_track(
+pub(crate) fn add_h265_track(
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     video_params: VideoTrackParams,
@@ -107,7 +107,7 @@ pub fn add_h265_track(
 }
 
 #[rustler::nif]
-pub fn add_aac_track(
+pub(crate) fn add_aac_track(
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     profile: u8,
@@ -119,7 +119,7 @@ pub fn add_aac_track(
 }
 
 #[rustler::nif]
-pub fn add_opus_track(
+pub(crate) fn add_opus_track(
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     sample_rate: u32,
@@ -130,7 +130,7 @@ pub fn add_opus_track(
 }
 
 #[rustler::nif]
-pub fn send_frame(
+pub(crate) fn send_frame(
     track_res: ResourceArc<TrackResource>,
     timestamp_us: u64,
     keyframe: bool,
@@ -151,7 +151,7 @@ pub fn send_frame(
 /// Close a track: stop its data task, finish the moq-lite track, and remove
 /// the rendition from the broadcast catalog. Idempotent.
 #[rustler::nif]
-pub fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
+pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     let _ = track_res.sender.send(TrackCmd::Stop);
 
     let mut cp = track_res.broadcast_res.catalog.lock().unwrap();

@@ -3,14 +3,14 @@ use tokio::sync::mpsc;
 
 use crate::{atoms, runtime, send_atom};
 
-pub struct SubscriberResource {
+pub(crate) struct SubscriberResource {
     pub(crate) tx: mpsc::UnboundedSender<()>,
 }
 
 impl rustler::Resource for SubscriberResource {}
 
 #[rustler::nif]
-pub fn start_subscriber(
+pub(crate) fn start_subscriber(
     _url: String,
     _broadcast: String,
     _track: String,
@@ -30,7 +30,7 @@ pub fn start_subscriber(
 }
 
 #[rustler::nif]
-pub fn stop_subscriber(resource: ResourceArc<SubscriberResource>) -> Atom {
+pub(crate) fn stop_subscriber(resource: ResourceArc<SubscriberResource>) -> Atom {
     let _ = resource.tx.send(());
     atoms::ok()
 }

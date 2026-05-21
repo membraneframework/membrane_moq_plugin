@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use crate::{atoms, runtime, session::SessionResource};
 
-pub struct BroadcastResource {
+pub(crate) struct BroadcastResource {
     pub(crate) broadcast: Mutex<hang::moq_lite::BroadcastProducer>,
     pub(crate) catalog: Mutex<moq_mux::catalog::Producer>,
 }
@@ -15,7 +15,7 @@ impl Resource for BroadcastResource {}
 /// Path uniqueness is enforced by moq-lite — calling twice with the same path
 /// returns an error.
 #[rustler::nif]
-pub fn open_broadcast(
+pub(crate) fn open_broadcast(
     session: ResourceArc<SessionResource>,
     path: String,
 ) -> NifResult<(Atom, ResourceArc<BroadcastResource>)> {
@@ -42,7 +42,7 @@ pub fn open_broadcast(
 
 /// Close the broadcast, aborting any in-flight tracks and unannouncing it.
 #[rustler::nif]
-pub fn close_broadcast(broadcast_res: ResourceArc<BroadcastResource>) -> Atom {
+pub(crate) fn close_broadcast(broadcast_res: ResourceArc<BroadcastResource>) -> Atom {
     let _guard = runtime().handle().enter();
     let _ = broadcast_res.catalog.lock().unwrap().finish();
     let _ = broadcast_res

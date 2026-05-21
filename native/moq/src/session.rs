@@ -4,7 +4,7 @@ use url::Url;
 
 use crate::{atoms, runtime, send_atom};
 
-pub struct SessionResource {
+pub(crate) struct SessionResource {
     pub(crate) origin: hang::moq_lite::OriginProducer,
     shutdown: mpsc::UnboundedSender<()>,
 }
@@ -18,7 +18,7 @@ impl rustler::Resource for SessionResource {}
 /// is sent to `pid` once the session is up. `:moq_disconnected` is sent if the
 /// session closes (clean or with an error).
 #[rustler::nif]
-pub fn setup_session(
+pub(crate) fn setup_session(
     url: String,
     pid: LocalPid,
     disable_tls_verify: bool,
@@ -85,7 +85,7 @@ pub fn setup_session(
 ///
 /// Idempotent: subsequent calls are no-ops.
 #[rustler::nif]
-pub fn close_session(session: ResourceArc<SessionResource>) -> Atom {
+pub(crate) fn close_session(session: ResourceArc<SessionResource>) -> Atom {
     let _ = session.shutdown.send(());
     atoms::ok()
 }

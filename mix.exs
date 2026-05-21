@@ -71,7 +71,7 @@ defmodule Membrane.Template.Mixfile do
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "LICENSE"],
+      extras: ["README.md"],
       formatters: ["html"],
       source_ref: "v#{@version}",
       nest_modules_by_prefix: [Membrane.Template]

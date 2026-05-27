@@ -159,5 +159,4 @@ defmodule Membrane.MoQ.Native do
   TODO
   """
   def stop_subscriber(_resource), do: :erlang.nif_error(:nif_not_loaded)
-
 end

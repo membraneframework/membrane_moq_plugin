@@ -15,7 +15,7 @@ defmodule Membrane.MoQ.Sink do
   require Membrane.H264
   require Membrane.H265
 
-  alias Membrane.{AAC, Opus, H264, H265}
+  alias Membrane.{AAC, H264, H265, Opus}
   alias Membrane.MoQ.Native
 
   def_input_pad :input,
@@ -56,6 +56,8 @@ defmodule Membrane.MoQ.Sink do
               ]
 
   defmodule State do
+    @moduledoc false
+
     @type resource :: reference()
     @type session :: reference()
     @type pad_state :: %{
@@ -207,7 +209,7 @@ defmodule Membrane.MoQ.Sink do
       state
     else
       case Map.pop(state.broadcasts, path) do
-        {nil, _} ->
+        {nil, _broadcasts} ->
           state
 
         {resource, broadcasts} ->

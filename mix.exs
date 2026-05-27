@@ -48,7 +48,7 @@ defmodule Membrane.MoQ.Mixfile do
       {:membrane_realtimer_plugin, "~> 0.9", only: :test},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:dialyxir, ">= 0.0.0", only: :dev, runtime: false},
-      {:credo, ">= 0.0.0", only: :dev, runtime: false},
+      {:credo, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
 

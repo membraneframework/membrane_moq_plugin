@@ -268,7 +268,7 @@ defmodule Membrane.MoQ.Sink do
     dcr_parsed = Membrane.H265.DecoderConfigurationRecord.parse(dcr)
 
     Native.add_h265_track(
-    self(),
+      self(),
       broadcast_resource,
       track,
       %Membrane.MoQ.Native.VideoTrackParams{
@@ -301,7 +301,7 @@ defmodule Membrane.MoQ.Sink do
        }),
        do:
          Native.add_aac_track(
-         self(),
+           self(),
            broadcast_resource,
            track,
            AAC.profile_to_aot_id(profile),

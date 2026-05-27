@@ -152,17 +152,4 @@ defmodule Membrane.MoQ.Native do
   @spec remove_track(track()) :: :ok
   def remove_track(_track_res),
     do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc """
-  TODO
-  """
-  @spec start_subscriber(any(), any(), any(), any()) :: any()
-  def start_subscriber(_url, _broadcast, _track, _pid),
-    do: :erlang.nif_error(:nif_not_loaded)
-
-  @doc """
-  TODO
-  """
-  @spec stop_subscriber(any()) :: any()
-  def stop_subscriber(_resource), do: :erlang.nif_error(:nif_not_loaded)
 end

@@ -3,12 +3,10 @@ use std::sync::OnceLock;
 mod broadcast;
 mod nif_types;
 mod session;
-mod subscriber;
 mod track;
 
 use broadcast::BroadcastResource;
 use session::SessionResource;
-use subscriber::SubscriberResource;
 use track::TrackResource;
 
 macro_rules! nif_error {
@@ -45,7 +43,6 @@ fn load(env: rustler::Env, _info: rustler::Term) -> bool {
         env.register::<SessionResource>(),
         env.register::<BroadcastResource>(),
         env.register::<TrackResource>(),
-        env.register::<SubscriberResource>(),
     ]
     .iter()
     .all(std::result::Result::is_ok)

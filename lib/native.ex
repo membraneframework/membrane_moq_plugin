@@ -2,6 +2,47 @@ defmodule Membrane.MoQ.Native do
   @moduledoc false
   use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
 
+  defmodule VideoTrackParams do
+    @moduledoc false
+    @type t :: %__MODULE__{
+            width: non_neg_integer(),
+            height: non_neg_integer(),
+            framerate: float()
+          }
+    @enforce_keys [:width, :height, :framerate]
+    defstruct @enforce_keys
+  end
+
+  defmodule H264Codec do
+    @moduledoc false
+    @type t :: %__MODULE__{inline: boolean(), profile: byte(), constraints: byte(), level: byte()}
+    @enforce_keys [:inline, :profile, :constraints, :level]
+    defstruct @enforce_keys
+  end
+
+  defmodule H265Codec do
+    @moduledoc false
+    @type t :: %__MODULE__{
+            in_band: boolean(),
+            profile_space: byte(),
+            profile_idc: byte(),
+            profile_compatibility_flags: [byte()],
+            tier_flag: boolean(),
+            level_idc: byte(),
+            constraint_flags: [byte()]
+          }
+    @enforce_keys [
+      :in_band,
+      :profile_space,
+      :profile_idc,
+      :profile_compatibility_flags,
+      :tier_flag,
+      :level_idc,
+      :constraint_flags
+    ]
+    defstruct @enforce_keys
+  end
+
   @doc """
   Connect to a MoQ relay server and prepare the session.
 
@@ -118,41 +159,5 @@ defmodule Membrane.MoQ.Native do
   TODO
   """
   def stop_subscriber(_resource), do: :erlang.nif_error(:nif_not_loaded)
-end
 
-defmodule Membrane.MoQ.Native.VideoTrackParams do
-  @moduledoc false
-  @type t :: %__MODULE__{width: non_neg_integer(), height: non_neg_integer(), framerate: float()}
-  @enforce_keys [:width, :height, :framerate]
-  defstruct @enforce_keys
-end
-
-defmodule Membrane.MoQ.Native.H264Codec do
-  @moduledoc false
-  @type t :: %__MODULE__{inline: boolean(), profile: byte(), constraints: byte(), level: byte()}
-  @enforce_keys [:inline, :profile, :constraints, :level]
-  defstruct @enforce_keys
-end
-
-defmodule Membrane.MoQ.Native.H265Codec do
-  @moduledoc false
-  @type t :: %__MODULE__{
-          in_band: boolean(),
-          profile_space: byte(),
-          profile_idc: byte(),
-          profile_compatibility_flags: [byte()],
-          tier_flag: boolean(),
-          level_idc: byte(),
-          constraint_flags: [byte()]
-        }
-  @enforce_keys [
-    :in_band,
-    :profile_space,
-    :profile_idc,
-    :profile_compatibility_flags,
-    :tier_flag,
-    :level_idc,
-    :constraint_flags
-  ]
-  defstruct @enforce_keys
 end

@@ -90,12 +90,8 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_init(
-        _ctx,
-        %__MODULE__{url: url, container: container, disable_tls_verify?: disable_tls_verify?} =
-          _opts
-      ) do
-    {[], %State{url: url, container: container, disable_tls_verify?: disable_tls_verify?}}
+  def handle_init(_ctx, opts) do
+    {[], struct(State, Map.from_struct(opts))}
   end
 
   @impl true
@@ -108,11 +104,8 @@ defmodule Membrane.MoQ.Sink do
   def handle_info(:moq_connected, _ctx, state), do: {[setup: :complete], state}
 
   @impl true
-  def handle_info(:moq_disconnected, _ctx, _state) do
-    # TODO: I guess we should receive this message only when termination is unexpected and just crash
-    # and have the parent restart the node if really necessary.
-    # Graceful termination doesn't need to do any work
-    raise "MoQ session disconnected"
+  def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
+    raise "MoQ session setup failed with reason: #{inspect(reason)}"
   end
 
   @impl true

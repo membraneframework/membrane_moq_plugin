@@ -16,3 +16,4 @@ url = "2.5.8"
 rustler = "0.37.3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 bytes = "1"
+anyhow = "1.0.102"

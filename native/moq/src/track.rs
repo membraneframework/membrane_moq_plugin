@@ -23,7 +23,7 @@ pub(crate) struct TrackResource {
 impl Resource for TrackResource {}
 
 #[derive(Clone, Copy)]
-enum TrackRole {
+pub(crate) enum TrackRole {
     Video,
     Audio,
 }
@@ -144,7 +144,10 @@ pub(crate) fn send_frame(
         keyframe,
     };
 
-    let _ = track_res.sender.send(TrackCmd::Frame(frame));
+    track_res
+        .sender
+        .send(TrackCmd::Frame(frame))
+        .map_err(|e| crate::nif_error!("sending frame to track task failed: {e}"))?;
     Ok(atoms::ok())
 }
 

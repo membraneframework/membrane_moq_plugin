@@ -3,7 +3,7 @@ Mix.install([
   :membrane_aac_plugin,
   :membrane_h26x_plugin,
   :membrane_hackney_plugin,
-  {:membrane_mp4_plugin, "~> 0.36.3"},
+  {:membrane_mp4_plugin, "~> 0.36.4"},
   {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"},
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true}
 ])
@@ -27,9 +27,6 @@ defmodule Example do
         disable_tls_verify?: true
       }),
 
-      # child(:source, %Membrane.File.Source{
-      #   location: "./bun33s.mp4"
-      # })
       child(:source, %Membrane.Hackney.Source{
         location: @input_url,
         hackney_opts: [follow_redirect: true]
@@ -38,7 +35,6 @@ defmodule Example do
 
       get_child(:demuxer)
       |> via_out(:output, options: [kind: :audio])
-      |> child(:fake, Membrane.Fake.Sink),
       |> child(:audio_parser, %Membrane.AAC.Parser{
         out_encapsulation: :ADTS
       })

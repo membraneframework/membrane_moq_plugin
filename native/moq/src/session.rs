@@ -1,4 +1,6 @@
-use rustler::{Atom, LocalPid, NifResult, ResourceArc};
+use hang::moq_lite::OriginConsumer;
+use moq_native::ClientConfig;
+use rustler::{Atom, Encoder, LocalPid, NifResult, OwnedEnv, ResourceArc};
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -35,40 +37,30 @@ pub(crate) fn setup_session(
     runtime().spawn(async move {
         let config = {
             let mut config = moq_native::ClientConfig::default();
-            if disable_tls_verify {
-                config.tls.disable_verify = Some(true);
-            }
+            config.tls.disable_verify = Some(disable_tls_verify);
             config
         };
 
-        let client = match config.init() {
-            Ok(c) => c.with_publish(consume),
-            Err(e) => {
-                eprintln!("MoQ client init failed: {e}");
-                send_atom(pid, atoms::moq_disconnected());
-                return;
-            }
-        };
+        let session = create_session(url, consume, config).await;
+        match session {
+            Ok(session) => {
+                send_atom(pid, atoms::moq_connected());
 
-        let session = match client.connect(url).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("MoQ connect failed: {e}");
-                send_atom(pid, atoms::moq_disconnected());
-                return;
-            }
-        };
-
-        send_atom(pid, atoms::moq_connected());
-
-        tokio::select! {
-            _ = shutdown_rx.recv() => {}
-            result = session.closed() => {
-                if let Err(e) = result {
-                    eprintln!("MoQ session closed with error: {e}");
+                tokio::select! {
+                    _ = shutdown_rx.recv() => {}
+                    result = session.closed() => {
+                        if let Err(e) = result {
+                            eprintln!("MoQ session closed with error: {e}");
+                        }
+                        send_atom(pid, atoms::moq_disconnected());
+                    }
                 }
-                send_atom(pid, atoms::moq_disconnected());
             }
+            Err(e) => OwnedEnv::new()
+                .send_and_clear(&pid, |env| {
+                    (atoms::moq_setup_failed(), e.to_string()).encode(env)
+                })
+                .expect("sending message to parent should succeed"),
         }
     });
 
@@ -88,4 +80,13 @@ pub(crate) fn setup_session(
 pub(crate) fn close_session(session: ResourceArc<SessionResource>) -> Atom {
     let _ = session.shutdown.send(());
     atoms::ok()
+}
+
+async fn create_session(
+    url: Url,
+    consumer: OriginConsumer,
+    config: ClientConfig,
+) -> anyhow::Result<moq_native::moq_lite::Session> {
+    let client = config.init()?;
+    client.with_publish(consumer).connect(url).await
 }

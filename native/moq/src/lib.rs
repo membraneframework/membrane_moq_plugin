@@ -24,6 +24,7 @@ pub(crate) mod atoms {
         ok,
         error,
         moq_connected,
+        moq_setup_failed,
         moq_disconnected,
         moq_frame,
     }

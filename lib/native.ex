@@ -3,10 +3,13 @@ defmodule Membrane.MoQ.Native do
   use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
 
   @doc """
-  Connects to a MoQ relay and prepares a session.
+  Connect to a MoQ relay server and prepare the session.
 
-  Sends `:moq_connected` to `pid` once the QUIC handshake completes,
-  or `:moq_disconnected` if the session fails / is closed.
+  Builds the origin synchronously so subsequent NIFs can publish broadcasts
+  immediately. The QUIC handshake completes asynchronously
+  - `:moq_connected` is sent to `pid` once the session is up.
+  - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the connection fails.
+  - `{:moq_disconnected, reason :: String.t()}` is sent if the session closes.
   """
   @spec setup_session(String.t(), pid(), boolean()) ::
           {:ok, session :: reference()} | {:error, reason :: String.t()}
@@ -37,24 +40,51 @@ defmodule Membrane.MoQ.Native do
   def close_broadcast(_broadcast_resource),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @spec add_h264_track(pid(), reference(), String.t(), VideoTrackParams.t(), String.t(), H264Codec.t()) ::
+  @spec add_h264_track(
+          pid(),
+          reference(),
+          String.t(),
+          VideoTrackParams.t(),
+          String.t(),
+          H264Codec.t()
+        ) ::
           {:ok, track_res :: reference()} | {:error, reason :: String.t()}
   def add_h264_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @spec add_h265_track(pid(), reference(), String.t(), VideoTrackParams.t(), String.t(), H265Codec.t()) ::
+  @spec add_h265_track(
+          pid(),
+          reference(),
+          String.t(),
+          VideoTrackParams.t(),
+          String.t(),
+          H265Codec.t()
+        ) ::
           {:ok, track_res :: reference()} | {:error, reason :: String.t()}
   def(add_h265_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
-  @spec add_aac_track(pid(), reference(), String.t(), byte(), non_neg_integer(), non_neg_integer()) ::
+  @spec add_aac_track(
+          pid(),
+          reference(),
+          String.t(),
+          byte(),
+          non_neg_integer(),
+          non_neg_integer()
+        ) ::
           {:ok, track_res :: reference()} | {:error, reason :: String.t()}
   def(add_aac_track(_pid, _broadcast_res, _track, _profile, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
-  @spec add_opus_track(pid(), reference(), String.t(), non_neg_integer(), Membrane.Opus.channels_t()) ::
+  @spec add_opus_track(
+          pid(),
+          reference(),
+          String.t(),
+          non_neg_integer(),
+          Membrane.Opus.channels_t()
+        ) ::
           {:ok, track_res :: reference()} | {:error, reason :: String.t()}
   def add_opus_track(_pid, _broadcast_res, _track, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)

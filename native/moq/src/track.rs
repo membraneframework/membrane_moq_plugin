@@ -181,8 +181,6 @@ pub(crate) fn send_frame(
     Ok(atoms::ok())
 }
 
-/// Close a track: stop its data task, finish the moq-lite track, and remove
-/// the rendition from the broadcast catalog. Idempotent.
 #[rustler::nif]
 pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     let _ = track_res.sender.send(TrackCmd::Stop);

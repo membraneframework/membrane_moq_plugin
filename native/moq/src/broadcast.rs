@@ -10,17 +10,11 @@ pub(crate) struct BroadcastResource {
 
 impl Resource for BroadcastResource {}
 
-/// Open a new broadcast on this session and create its (hang + MSF) catalog.
-///
-/// Path uniqueness is enforced by moq-lite — calling twice with the same path
-/// returns an error.
 #[rustler::nif]
 pub(crate) fn open_broadcast(
     session: ResourceArc<SessionResource>,
     path: String,
 ) -> NifResult<(Atom, ResourceArc<BroadcastResource>)> {
-    // moq-lite's create_broadcast spawns a tokio task to track the
-    // broadcast lifetime, so we need a runtime context.
     let _guard = runtime().handle().enter();
 
     let mut bp: hang::moq_lite::BroadcastProducer = session
@@ -40,7 +34,6 @@ pub(crate) fn open_broadcast(
     ))
 }
 
-/// Close the broadcast, aborting any in-flight tracks and unannouncing it.
 #[rustler::nif]
 pub(crate) fn close_broadcast(broadcast_res: ResourceArc<BroadcastResource>) -> Atom {
     let _guard = runtime().handle().enter();

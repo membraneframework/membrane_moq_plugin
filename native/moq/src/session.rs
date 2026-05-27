@@ -13,13 +13,6 @@ pub(crate) struct SessionResource {
 
 impl rustler::Resource for SessionResource {}
 
-/// Connect to a MoQ relay server and prepare the session.
-///
-/// Builds the origin synchronously so subsequent NIFs can publish broadcasts
-/// immediately. The QUIC handshake completes asynchronously
-/// - `:moq_connected` is sent to `pid` once the session is up.
-/// - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the connection fails.
-/// - `{:moq_disconnected, reason :: String.t()}` is sent if the session closes.
 #[rustler::nif]
 pub(crate) fn setup_session(
     url: String,

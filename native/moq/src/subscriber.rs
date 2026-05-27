@@ -1,7 +1,7 @@
 use rustler::{Atom, LocalPid, ResourceArc};
 use tokio::sync::mpsc;
 
-use crate::{atoms, runtime, send_atom};
+use crate::{atoms, runtime};
 
 pub(crate) struct SubscriberResource {
     pub(crate) tx: mpsc::UnboundedSender<()>,
@@ -14,13 +14,12 @@ pub(crate) fn start_subscriber(
     _url: String,
     _broadcast: String,
     _track: String,
-    pid: LocalPid,
+    _pid: LocalPid,
 ) -> (Atom, ResourceArc<SubscriberResource>) {
     let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<()>();
 
     runtime().spawn(async move {
         let _ = stop_rx.recv().await;
-        send_atom(pid, atoms::moq_disconnected());
     });
 
     (

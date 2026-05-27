@@ -1,4 +1,4 @@
-use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
+use rustler::{Atom, Binary, Encoder, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -30,6 +30,7 @@ pub(crate) enum TrackRole {
 
 #[rustler::nif]
 pub(crate) fn add_h264_track(
+    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     video_params: VideoTrackParams,
@@ -50,6 +51,7 @@ pub(crate) fn add_h264_track(
     };
 
     add_video_track(
+        pid,
         broadcast_res,
         track,
         video_codec,
@@ -60,9 +62,9 @@ pub(crate) fn add_h264_track(
     )
 }
 
-/// Add an H.265 video track to the broadcast.
 #[rustler::nif]
 pub(crate) fn add_h265_track(
+    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     video_params: VideoTrackParams,
@@ -96,6 +98,7 @@ pub(crate) fn add_h265_track(
     };
 
     add_video_track(
+        pid,
         broadcast_res,
         track,
         video_codec,
@@ -108,6 +111,7 @@ pub(crate) fn add_h265_track(
 
 #[rustler::nif]
 pub(crate) fn add_aac_track(
+    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     profile: u8,
@@ -115,18 +119,19 @@ pub(crate) fn add_aac_track(
     channels: u32,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
-    add_audio_track(broadcast_res, track, codec, sample_rate, channels)
+    add_audio_track(pid, broadcast_res, track, codec, sample_rate, channels)
 }
 
 #[rustler::nif]
 pub(crate) fn add_opus_track(
+    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     sample_rate: u32,
     channels: u32,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let codec = hang::catalog::AudioCodec::Opus;
-    add_audio_track(broadcast_res, track, codec, sample_rate, channels)
+    add_audio_track(pid, broadcast_res, track, codec, sample_rate, channels)
 }
 
 #[rustler::nif]
@@ -172,6 +177,7 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
 }
 
 fn add_video_track(
+    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     codec: hang::catalog::VideoCodec,
@@ -182,7 +188,7 @@ fn add_video_track(
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
-    let track_res = {
+    let tp = {
         let mut bp = broadcast_res.broadcast.lock().unwrap();
         bp.create_track(hang::moq_lite::Track {
             name: track.clone(),
@@ -212,7 +218,7 @@ fn add_video_track(
         );
     }
 
-    let sender = spawn_track_task(track_res);
+    let sender = spawn_track_task(pid, tp);
 
     Ok((
         atoms::ok(),
@@ -226,6 +232,7 @@ fn add_video_track(
 }
 
 fn add_audio_track(
+    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     codec: hang::catalog::AudioCodec,
@@ -234,7 +241,7 @@ fn add_audio_track(
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
-    let track_res = {
+    let tp = {
         let mut bp = broadcast_res.broadcast.lock().unwrap();
         bp.create_track(hang::moq_lite::Track {
             name: track.clone(),
@@ -260,7 +267,7 @@ fn add_audio_track(
         );
     }
 
-    let sender = spawn_track_task(track_res);
+    let sender = spawn_track_task(pid, tp);
 
     Ok((
         atoms::ok(),
@@ -273,7 +280,10 @@ fn add_audio_track(
     ))
 }
 
-fn spawn_track_task(track: hang::moq_lite::TrackProducer) -> mpsc::UnboundedSender<TrackCmd> {
+fn spawn_track_task(
+    pid: LocalPid,
+    track: hang::moq_lite::TrackProducer,
+) -> mpsc::UnboundedSender<TrackCmd> {
     let (tx, mut rx) = mpsc::unbounded_channel::<TrackCmd>();
     runtime().spawn(async move {
         let mut producer =
@@ -281,12 +291,12 @@ fn spawn_track_task(track: hang::moq_lite::TrackProducer) -> mpsc::UnboundedSend
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 TrackCmd::Frame(frame) => {
-                    if let Err(e) = producer.write(frame) {
-                        eprintln!("track write failed: {e}"); // TODO: bypasses Membrane.Logger
-                                                              // TODO: what happens then this receiver dies? we break, call producer.finish(), the task finishes,
-                                                              // TODO: do all subsequent calls to `tx` fail?
-                                                              // TODO: should a call to `producer.write` fail this entire task?
-                        break;
+                    if let Err(_) = producer.write(frame) {
+                        OwnedEnv::new()
+                            .send_and_clear(&pid, |env| {
+                                (atoms::moq_write_failed(), producer.track.name.clone()).encode(env)
+                            })
+                            .expect("sending message to parent should succeed")
                     }
                 }
                 TrackCmd::Stop => break,

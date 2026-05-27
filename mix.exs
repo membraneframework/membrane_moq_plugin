@@ -40,7 +40,6 @@ defmodule Membrane.MoQ.Mixfile do
       {:membrane_core, "~> 1.0"},
       {:rustler, "~> 0.37"},
       {:membrane_h26x_plugin, "~> 0.10.7"},
-      {:membrane_cmaf_format, "~> 0.7.1"},
       {:membrane_h264_format, "~> 0.6.0"},
       {:membrane_h265_format, "~> 0.2.0"},
       {:membrane_aac_format, "~> 0.8.0"},
@@ -50,10 +49,6 @@ defmodule Membrane.MoQ.Mixfile do
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:dialyxir, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, ">= 0.0.0", only: :dev, runtime: false},
-      # TODO: remove
-      {:membrane_raw_audio_format, ">= 0.0.0"},
-      # TODO: remove
-      {:membrane_raw_video_format, ">= 0.0.0"}
     ]
   end
 

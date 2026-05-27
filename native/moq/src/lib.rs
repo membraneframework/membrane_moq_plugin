@@ -1,4 +1,3 @@
-use rustler::{Atom, LocalPid, OwnedEnv};
 use std::sync::OnceLock;
 
 mod broadcast;
@@ -26,6 +25,7 @@ pub(crate) mod atoms {
         moq_connected,
         moq_setup_failed,
         moq_disconnected,
+        moq_write_failed,
         moq_frame,
     }
 }
@@ -38,12 +38,6 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
             .build()
             .expect("tokio runtime build should succeed")
     })
-}
-
-pub(crate) fn send_atom(pid: LocalPid, atom: Atom) {
-    OwnedEnv::new()
-        .send_and_clear(&pid, |env| atom.to_term(env))
-        .expect("sending atom to local process should succeed");
 }
 
 fn load(env: rustler::Env, _info: rustler::Term) -> bool {

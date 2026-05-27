@@ -37,26 +37,26 @@ defmodule Membrane.MoQ.Native do
   def close_broadcast(_broadcast_resource),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @spec add_h264_track(reference(), String.t(), VideoTrackParams.t(), String.t(), H264Codec.t()) ::
+  @spec add_h264_track(pid(), reference(), String.t(), VideoTrackParams.t(), String.t(), H264Codec.t()) ::
           {:ok, track_res :: reference()} | {:error, reason :: String.t()}
-  def add_h264_track(_broadcast_res, _track, _video_params, _dcr, _codec),
+  def add_h264_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @spec add_h265_track(reference(), String.t(), VideoTrackParams.t(), String.t(), H265Codec.t()) ::
+  @spec add_h265_track(pid(), reference(), String.t(), VideoTrackParams.t(), String.t(), H265Codec.t()) ::
           {:ok, track_res :: reference()} | {:error, reason :: String.t()}
-  def(add_h265_track(_broadcast_res, _track, _video_params, _dcr, _codec),
-    do: :erlang.nif_error(:nif_not_loaded)
-  )
-
-  @spec add_aac_track(reference(), String.t(), byte(), non_neg_integer(), non_neg_integer()) ::
-          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
-  def(add_aac_track(_broadcast_res, _track, _profile, _sample_rate, _channels),
+  def(add_h265_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
-  @spec add_opus_track(reference(), String.t(), non_neg_integer(), Membrane.Opus.channels_t()) ::
+  @spec add_aac_track(pid(), reference(), String.t(), byte(), non_neg_integer(), non_neg_integer()) ::
           {:ok, track_res :: reference()} | {:error, reason :: String.t()}
-  def add_opus_track(_broadcast_res, _track, _sample_rate, _channels),
+  def(add_aac_track(_pid, _broadcast_res, _track, _profile, _sample_rate, _channels),
+    do: :erlang.nif_error(:nif_not_loaded)
+  )
+
+  @spec add_opus_track(pid(), reference(), String.t(), non_neg_integer(), Membrane.Opus.channels_t()) ::
+          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+  def add_opus_track(_pid, _broadcast_res, _track, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

@@ -6,12 +6,6 @@ defmodule Membrane.MoQ.Sink do
   instance owns one MoQ session and may host multiple broadcasts; each input
   pad maps to one rendition in one broadcast.
 
-  ## Pad options
-
-    * `:broadcast` — broadcast path this pad publishes to.
-    * `:track` — rendition key inside the broadcast catalog.
-                 Must be unique within the broadcast.
-
   Pads can be added or removed at any time during the pipeline lifecycle. The
   catalog is republished on every track add/remove.
   """
@@ -104,8 +98,19 @@ defmodule Membrane.MoQ.Sink do
   def handle_info(:moq_connected, _ctx, state), do: {[setup: :complete], state}
 
   @impl true
+  def handle_info({:moq_write_failed, track}, _ctx, state) do
+    Membrane.Logger.warning("Frame write failed for track: #{inspect(track)}")
+    {[], state}
+  end
+
+  @impl true
   def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
     raise "MoQ session setup failed with reason: #{inspect(reason)}"
+  end
+
+  @impl true
+  def handle_info({:moq_disconnected, reason}, _ctx, _state) do
+    raise "MoQ session closed with reason: #{inspect(reason)}"
   end
 
   @impl true
@@ -232,6 +237,7 @@ defmodule Membrane.MoQ.Sink do
     dcr_parsed = Membrane.H264.DecoderConfigurationRecord.parse(dcr)
 
     Native.add_h264_track(
+      self(),
       broadcast_resource,
       track,
       %Membrane.MoQ.Native.VideoTrackParams{
@@ -262,6 +268,7 @@ defmodule Membrane.MoQ.Sink do
     dcr_parsed = Membrane.H265.DecoderConfigurationRecord.parse(dcr)
 
     Native.add_h265_track(
+    self(),
       broadcast_resource,
       track,
       %Membrane.MoQ.Native.VideoTrackParams{
@@ -294,6 +301,7 @@ defmodule Membrane.MoQ.Sink do
        }),
        do:
          Native.add_aac_track(
+         self(),
            broadcast_resource,
            track,
            AAC.profile_to_aot_id(profile),
@@ -302,7 +310,7 @@ defmodule Membrane.MoQ.Sink do
          )
 
   defp do_add_track(broadcast_resource, track, %Opus{channels: channels}),
-    do: Native.add_opus_track(broadcast_resource, track, 48_000, channels)
+    do: Native.add_opus_track(self(), broadcast_resource, track, 48_000, channels)
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float()
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,

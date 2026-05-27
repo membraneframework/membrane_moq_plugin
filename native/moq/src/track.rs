@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use rustler::{Atom, Binary, Encoder, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
 use tokio::sync::mpsc;
 
@@ -37,29 +38,34 @@ pub(crate) fn add_h264_track(
     dcr: Binary,
     codec: H264Codec,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
-    let video_codec = hang::catalog::VideoCodec::H264(hang::catalog::H264 {
+    let codec = hang::catalog::VideoCodec::H264(hang::catalog::H264 {
         inline: codec.inline,
         profile: codec.profile,
         constraints: codec.constraints,
         level: codec.level,
     });
 
-    let desc = if dcr.is_empty() {
+    let description = if dcr.is_empty() {
         None
     } else {
         Some(bytes::Bytes::copy_from_slice(dcr.as_slice()))
     };
 
-    add_video_track(
-        pid,
-        broadcast_res,
-        track,
-        video_codec,
-        video_params.width,
-        video_params.height,
-        video_params.framerate,
-        desc,
-    )
+    let config = hang::catalog::VideoConfig {
+        codec,
+        description,
+        coded_width: Some(video_params.width),
+        coded_height: Some(video_params.height),
+        display_ratio_width: None,
+        display_ratio_height: None,
+        bitrate: None,
+        framerate: Some(video_params.framerate),
+        optimize_for_latency: Some(true),
+        container: hang::catalog::Container::Legacy,
+        jitter: None,
+    };
+
+    add_video_track(pid, broadcast_res, track, config)
 }
 
 #[rustler::nif]
@@ -81,7 +87,7 @@ pub(crate) fn add_h265_track(
         .try_into()
         .map_err(|_| crate::nif_error!("constraint_flags must be exactly 6 bytes"))?;
 
-    let video_codec = hang::catalog::VideoCodec::H265(hang::catalog::H265 {
+    let codec = hang::catalog::VideoCodec::H265(hang::catalog::H265 {
         in_band: codec.in_band,
         profile_space: codec.profile_space,
         profile_idc: codec.profile_idc,
@@ -91,7 +97,7 @@ pub(crate) fn add_h265_track(
         constraint_flags,
     });
 
-    let desc = if dcr.is_empty() {
+    let description = if dcr.is_empty() {
         None
     } else {
         Some(bytes::Bytes::copy_from_slice(dcr.as_slice()))
@@ -101,11 +107,13 @@ pub(crate) fn add_h265_track(
         pid,
         broadcast_res,
         track,
-        video_codec,
-        video_params.width,
-        video_params.height,
-        video_params.framerate,
-        desc,
+        create_video_config(
+            codec,
+            video_params.width,
+            video_params.height,
+            video_params.framerate,
+            description,
+        ),
     )
 }
 
@@ -119,7 +127,13 @@ pub(crate) fn add_aac_track(
     channels: u32,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
-    add_audio_track(pid, broadcast_res, track, codec, sample_rate, channels)
+
+    add_audio_track(
+        pid,
+        broadcast_res,
+        track,
+        create_audio_config(codec, sample_rate, channels),
+    )
 }
 
 #[rustler::nif]
@@ -131,7 +145,18 @@ pub(crate) fn add_opus_track(
     channels: u32,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let codec = hang::catalog::AudioCodec::Opus;
-    add_audio_track(pid, broadcast_res, track, codec, sample_rate, channels)
+
+    let config = hang::catalog::AudioConfig {
+        codec,
+        sample_rate,
+        channel_count: channels,
+        bitrate: None,
+        description: None,
+        container: hang::catalog::Container::Legacy,
+        jitter: None,
+    };
+
+    add_audio_track(pid, broadcast_res, track, config)
 }
 
 #[rustler::nif]
@@ -176,15 +201,12 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     atoms::ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_video_track(
     pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
-    codec: hang::catalog::VideoCodec,
-    width: u32,
-    height: u32,
-    framerate: f64,
-    description: Option<bytes::Bytes>,
+    config: hang::catalog::VideoConfig,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
@@ -200,22 +222,7 @@ fn add_video_track(
     {
         let mut cp = broadcast_res.catalog.lock().unwrap();
         let mut guard = cp.lock();
-        guard.video.renditions.insert(
-            track.clone(),
-            hang::catalog::VideoConfig {
-                codec,
-                description,
-                coded_width: Some(width),
-                coded_height: Some(height),
-                display_ratio_width: None,
-                display_ratio_height: None,
-                bitrate: None,
-                framerate: Some(framerate),
-                optimize_for_latency: Some(true),
-                container: hang::catalog::Container::Legacy,
-                jitter: None,
-            },
-        );
+        guard.video.renditions.insert(track.clone(), config);
     }
 
     let sender = spawn_track_task(pid, tp);
@@ -235,9 +242,7 @@ fn add_audio_track(
     pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
-    codec: hang::catalog::AudioCodec,
-    sample_rate: u32,
-    channels: u32,
+    config: hang::catalog::AudioConfig,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
@@ -253,18 +258,7 @@ fn add_audio_track(
     {
         let mut cp = broadcast_res.catalog.lock().unwrap();
         let mut guard = cp.lock();
-        guard.audio.renditions.insert(
-            track.clone(),
-            hang::catalog::AudioConfig {
-                codec,
-                sample_rate,
-                channel_count: channels,
-                bitrate: None,
-                description: None,
-                container: hang::catalog::Container::Legacy,
-                jitter: None,
-            },
-        );
+        guard.audio.renditions.insert(track.clone(), config);
     }
 
     let sender = spawn_track_task(pid, tp);
@@ -291,7 +285,7 @@ fn spawn_track_task(
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 TrackCmd::Frame(frame) => {
-                    if let Err(_) = producer.write(frame) {
+                    if producer.write(frame).is_err() {
                         OwnedEnv::new()
                             .send_and_clear(&pid, |env| {
                                 (atoms::moq_write_failed(), producer.track.name.clone()).encode(env)
@@ -305,4 +299,41 @@ fn spawn_track_task(
         let _ = producer.finish();
     });
     tx
+}
+
+fn create_video_config(
+    codec: hang::catalog::VideoCodec,
+    width: u32,
+    height: u32,
+    framerate: f64,
+    description: Option<Bytes>,
+) -> hang::catalog::VideoConfig {
+    hang::catalog::VideoConfig {
+        codec,
+        description,
+        coded_width: Some(width),
+        coded_height: Some(height),
+        display_ratio_width: None,
+        display_ratio_height: None,
+        bitrate: None,
+        framerate: Some(framerate),
+        optimize_for_latency: Some(true),
+        container: hang::catalog::Container::Legacy,
+        jitter: None,
+    }
+}
+fn create_audio_config(
+    codec: hang::catalog::AudioCodec,
+    sample_rate: u32,
+    channel_count: u32,
+) -> hang::catalog::AudioConfig {
+    hang::catalog::AudioConfig {
+        codec,
+        sample_rate,
+        channel_count,
+        bitrate: None,
+        description: None,
+        container: hang::catalog::Container::Legacy,
+        jitter: None,
+    }
 }

@@ -2,6 +2,10 @@ defmodule Membrane.MoQ.Native do
   @moduledoc false
   use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
 
+  @type track :: reference()
+  @type broadcast :: reference()
+  @type session :: reference()
+
   defmodule VideoTrackParams do
     @moduledoc false
     @type t :: %__MODULE__{
@@ -53,14 +57,14 @@ defmodule Membrane.MoQ.Native do
   - `{:moq_disconnected, reason :: String.t()}` is sent if the session closes.
   """
   @spec setup_session(String.t(), pid(), boolean()) ::
-          {:ok, session :: reference()} | {:error, reason :: String.t()}
+          {:ok, session()} | {:error, reason :: String.t()}
   def setup_session(_url, _pid, _disable_tls_verify?),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Tears down the session. Idempotent.
   """
-  @spec close_session(reference()) :: :ok
+  @spec close_session(session()) :: :ok
   def close_session(_session),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -69,64 +73,64 @@ defmodule Membrane.MoQ.Native do
   @doc """
   Opens a broadcast on the session and creates its hang + MSF catalog tracks.
   """
-  @spec open_broadcast(reference(), String.t()) ::
-          {:ok, broadcast_resource :: reference()} | {:error, reason :: String.t()}
+  @spec open_broadcast(session(), String.t()) ::
+          {:ok, broadcast()} | {:error, reason :: String.t()}
   def open_broadcast(_session, _path),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Closes the broadcast, finishing the catalog and aborting in-flight tracks.
   """
-  @spec close_broadcast(reference()) :: :ok
+  @spec close_broadcast(broadcast()) :: :ok
   def close_broadcast(_broadcast_resource),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @spec add_h264_track(
           pid(),
-          reference(),
+          broadcast(),
           String.t(),
           VideoTrackParams.t(),
           String.t(),
           H264Codec.t()
         ) ::
-          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+          {:ok, track()} | {:error, reason :: String.t()}
   def add_h264_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @spec add_h265_track(
           pid(),
-          reference(),
+          broadcast(),
           String.t(),
           VideoTrackParams.t(),
           String.t(),
           H265Codec.t()
         ) ::
-          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+          {:ok, track()} | {:error, reason :: String.t()}
   def(add_h265_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
   @spec add_aac_track(
           pid(),
-          reference(),
+          broadcast(),
           String.t(),
           byte(),
           non_neg_integer(),
           non_neg_integer()
         ) ::
-          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+          {:ok, track()} | {:error, reason :: String.t()}
   def(add_aac_track(_pid, _broadcast_res, _track, _profile, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
   @spec add_opus_track(
           pid(),
-          reference(),
+          broadcast(),
           String.t(),
           non_neg_integer(),
           Membrane.Opus.channels_t()
         ) ::
-          {:ok, track_res :: reference()} | {:error, reason :: String.t()}
+          {:ok, track()} | {:error, reason :: String.t()}
   def add_opus_track(_pid, _broadcast_res, _track, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -137,7 +141,7 @@ defmodule Membrane.MoQ.Native do
   must be `true` for IDR frames on video tracks (triggers a new MoQ group);
   for audio tracks pass `true` for every frame.
   """
-  @spec send_frame(reference(), integer(), boolean(), binary()) :: :ok
+  @spec send_frame(track(), integer(), boolean(), binary()) :: :ok
   def send_frame(_track_res, _timestamp_us, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -145,7 +149,7 @@ defmodule Membrane.MoQ.Native do
   Closes the track, removing its rendition from the catalog and finishing the
   underlying moq-lite track. Idempotent.
   """
-  @spec remove_track(reference()) :: :ok
+  @spec remove_track(track()) :: :ok
   def remove_track(_track_res),
     do: :erlang.nif_error(:nif_not_loaded)
 

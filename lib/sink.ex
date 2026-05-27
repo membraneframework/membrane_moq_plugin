@@ -36,7 +36,7 @@ defmodule Membrane.MoQ.Sink do
       track: [
         spec: String.t(),
         description:
-          "Catalog rendition key, see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
+          "Track name for this pad's stream, see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
       ]
     ]
 
@@ -58,21 +58,19 @@ defmodule Membrane.MoQ.Sink do
   defmodule State do
     @moduledoc false
 
-    @type resource :: reference()
-    @type session :: reference()
     @type pad_state :: %{
             broadcast: String.t(),
-            broadcast_resource: resource(),
+            broadcast_resource: Native.broadcast(),
             track: String.t(),
-            track_resource: resource() | nil
+            track_resource: Native.track() | nil
           }
 
     @type t :: %__MODULE__{
             url: String.t(),
             container: :legacy | :cmaf,
             disable_tls_verify?: boolean(),
-            session: session(),
-            broadcasts: %{String.t() => resource()},
+            session: Native.session(),
+            broadcasts: %{String.t() => Native.broadcast()},
             pads: %{Membrane.Pad.ref() => pad_state()}
           }
 
@@ -187,7 +185,7 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @spec ensure_broadcast(State.t(), path :: String.t()) ::
-          {resource :: State.resource(), State.t()}
+          {Native.broadcast(), State.t()}
   defp ensure_broadcast(state, path) do
     case Map.fetch(state.broadcasts, path) do
       {:ok, resource} ->
@@ -219,17 +217,17 @@ defmodule Membrane.MoQ.Sink do
     end
   end
 
-  @spec add_track(State.pad_state(), Membrane.StreamFormat.t()) :: reference()
+  @spec add_track(State.pad_state(), Membrane.StreamFormat.t()) :: Native.track()
   defp add_track(pad_state, fmt) do
     {:ok, track_resource} = do_add_track(pad_state.broadcast_resource, pad_state.track, fmt)
     track_resource
   end
 
   @spec do_add_track(
-          broadcast_resource :: reference(),
+          Native.broadcast(),
           track :: String.t(),
           Membrane.StreamFormat.t()
-        ) :: {:ok, track_resource :: reference()} | {:error, reason :: String.t()}
+        ) :: {:ok, Native.track()} | {:error, reason :: String.t()}
   defp do_add_track(broadcast_resource, track, %H264{
          height: height,
          width: width,

@@ -1,10 +1,10 @@
 Mix.install([
-  {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true},
+  {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_realtimer_plugin, "~> 0.11.0"},
   {:membrane_aac_plugin, "~> 0.19.2"},
   {:membrane_h26x_plugin, "~> 0.10.7"},
   {:membrane_hackney_plugin, "~> 0.11.1"},
-  {:membrane_mp4_plugin, "~> 0.36.4"},
+  {:membrane_mp4_plugin, "~> 0.36.5"},
   {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"}
 ])
 
@@ -52,7 +52,7 @@ defmodule Example do
 
   @impl true
   def handle_element_end_of_stream(:sink, _pad, _ctx, state) do
-    {[terminate: :shutdown], state}
+    {[terminate: :normal], state}
   end
 
   @impl true

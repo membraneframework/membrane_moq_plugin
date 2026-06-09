@@ -40,7 +40,7 @@ defmodule Example do
 
   @impl true
   def handle_element_end_of_stream(:sink, _pad, _ctx, state) do
-    {[terminate: :shutdown], state}
+    {[terminate: :normal], state}
   end
 
   @impl true

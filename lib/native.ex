@@ -138,4 +138,26 @@ defmodule Membrane.MoQ.Native do
   @spec remove_track(track()) :: :ok
   def remove_track(_track_res),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Connects to a MoQ relay and subscribes to `track` inside `broadcast`.
+
+  Sends the following messages to `pid`:
+    * `:moq_connected` once the broadcast is announced and the subscription is open
+    * `{:moq_frame, payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
+      for every received frame
+    * `{:moq_setup_failed, reason :: String.t()}` if connection or broadcast
+      discovery fails
+    * `{:moq_disconnected, reason :: String.t()}` when the track or session ends
+  """
+  @spec start_subscriber(String.t(), String.t(), String.t(), pid(), boolean()) ::
+          {:ok, subscriber :: reference()} | {:error, reason :: String.t()}
+  def start_subscriber(_url, _broadcast, _track, _pid, _disable_tls_verify?),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Tears down a subscriber. Idempotent.
+  """
+  @spec stop_subscriber(reference()) :: :ok
+  def stop_subscriber(_resource), do: :erlang.nif_error(:nif_not_loaded)
 end

@@ -10,7 +10,7 @@ defmodule Membrane.MoQ.SinkTest do
     spec = child(:sink, %Membrane.MoQ.Sink{url: "not a url"})
     :ok = Pipeline.execute_actions(pipeline, spec: spec)
 
-    assert_receive {:DOWN, ^ref, :process, ^pipeline, reason}
+    assert_receive {:DOWN, ^ref, :process, ^pipeline, reason}, 5_000
     assert {:membrane_child_crash, :sink, _error} = reason
   end
 end

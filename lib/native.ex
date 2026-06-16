@@ -1,5 +1,7 @@
 defmodule Membrane.MoQ.Native do
-  @moduledoc false
+  @moduledoc """
+  Elixir bindings to moq-lite's native Rust API
+  """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
 
   @type track :: reference()
@@ -85,6 +87,15 @@ defmodule Membrane.MoQ.Native do
   def close_broadcast(_broadcast_resource),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc """
+  Adds a H264 track to the given broadcast,
+  spawns a writer task and returns a track resource
+  that can be used to send frames to the task.
+
+  The first argument is a pid that the task sends messages to if writing a frame fails.
+  The second argument is the target broadcast's resource, the result of calling `open_broadcast/2`.
+  The third argument is the name of the track.
+  """
   @spec add_h264_track(
           pid(),
           broadcast(),
@@ -97,6 +108,11 @@ defmodule Membrane.MoQ.Native do
   def add_h264_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  @doc """
+  Adds a H265 track to the given broadcast,
+  spawns a writer task and returns the track's resource.
+  For details, refer to `add_h264_track/6`
+  """
   @spec add_h265_track(
           pid(),
           broadcast(),
@@ -110,6 +126,11 @@ defmodule Membrane.MoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
+  @doc """
+  Adds an AAC track to the given broadcast,
+  spawns a writer task and returns the track's resource.
+  For details, refer to `add_h264_track/6`
+  """
   @spec add_aac_track(
           pid(),
           broadcast(),
@@ -123,6 +144,11 @@ defmodule Membrane.MoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
+  @doc """
+  Adds an OPUS track to the given broadcast,
+  spawns a writer task and returns the track's resource.
+  For details, refer to `add_h264_track/6`
+  """
   @spec add_opus_track(
           pid(),
           broadcast(),

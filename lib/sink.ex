@@ -52,7 +52,9 @@ defmodule Membrane.MoQ.Sink do
               ],
               disable_tls_verify?: [
                 spec: boolean(),
-                default: false
+                default: false,
+                description:
+                  "Whether to disable TLS verification when connecting to the relay. Useful for local development."
               ]
 
   defmodule State do

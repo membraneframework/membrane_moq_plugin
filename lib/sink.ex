@@ -69,7 +69,7 @@ defmodule Membrane.MoQ.Sink do
 
     @type t :: %__MODULE__{
             url: String.t(),
-            container: :legacy | :cmaf,
+            container: :legacy,
             disable_tls_verify?: boolean(),
             session: Native.session(),
             broadcasts: %{String.t() => Native.broadcast()},

@@ -8,10 +8,10 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-moq-lite = "0.17.0"
-moq-native = "0.14.1"
-hang = "0.16.0"
-moq-mux = "0.4.1"
+moq-net = "0.1.11"
+moq-native = "0.17.1"
+hang = "0.19.1"
+moq-mux = "0.5.5"
 url = "2.5.8"
 rustler = "0.38.0"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }

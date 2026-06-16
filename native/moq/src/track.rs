@@ -51,19 +51,13 @@ pub(crate) fn add_h264_track(
         Some(bytes::Bytes::copy_from_slice(dcr.as_slice()))
     };
 
-    let config = hang::catalog::VideoConfig {
+    let config = create_video_config(
         codec,
+        video_params.width,
+        video_params.height,
+        video_params.framerate,
         description,
-        coded_width: Some(video_params.width),
-        coded_height: Some(video_params.height),
-        display_ratio_width: None,
-        display_ratio_height: None,
-        bitrate: None,
-        framerate: Some(video_params.framerate),
-        optimize_for_latency: Some(true),
-        container: hang::catalog::Container::Legacy,
-        jitter: None,
-    };
+    );
 
     add_video_track(pid, broadcast_res, track, config)
 }
@@ -146,15 +140,7 @@ pub(crate) fn add_opus_track(
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let codec = hang::catalog::AudioCodec::Opus;
 
-    let config = hang::catalog::AudioConfig {
-        codec,
-        sample_rate,
-        channel_count: channels,
-        bitrate: None,
-        description: None,
-        container: hang::catalog::Container::Legacy,
-        jitter: None,
-    };
+    let config = create_audio_config(codec, sample_rate, channels);
 
     add_audio_track(pid, broadcast_res, track, config)
 }
@@ -210,7 +196,7 @@ fn add_video_track(
 
     let tp = {
         let mut bp = broadcast_res.broadcast.lock().unwrap();
-        bp.create_track(hang::moq_lite::Track {
+        bp.create_track(hang::moq_net::Track {
             name: track.clone(),
             priority: 0,
         })
@@ -246,7 +232,7 @@ fn add_audio_track(
 
     let tp = {
         let mut bp = broadcast_res.broadcast.lock().unwrap();
-        bp.create_track(hang::moq_lite::Track {
+        bp.create_track(hang::moq_net::Track {
             name: track.clone(),
             priority: 0,
         })
@@ -274,19 +260,20 @@ fn add_audio_track(
 
 fn spawn_track_task(
     pid: LocalPid,
-    track: hang::moq_lite::TrackProducer,
+    track: hang::moq_net::TrackProducer,
 ) -> mpsc::UnboundedSender<TrackCmd> {
     let (tx, mut rx) = mpsc::unbounded_channel::<TrackCmd>();
     runtime().spawn(async move {
         let mut producer =
-            moq_mux::container::Producer::new(track, moq_mux::container::Hang::Legacy);
+            moq_mux::container::Producer::new(track, moq_mux::container::legacy::Wire);
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 TrackCmd::Frame(frame) => {
                     if producer.write(frame).is_err() {
                         OwnedEnv::new()
                             .send_and_clear(&pid, |env| {
-                                (atoms::moq_write_failed(), producer.track.name.clone()).encode(env)
+                                (atoms::moq_write_failed(), producer.track().name.clone())
+                                    .encode(env)
                             })
                             .expect("sending message to parent should succeed")
                     }
@@ -306,32 +293,19 @@ fn create_video_config(
     framerate: f64,
     description: Option<Bytes>,
 ) -> hang::catalog::VideoConfig {
-    hang::catalog::VideoConfig {
-        codec,
-        description,
-        coded_width: Some(width),
-        coded_height: Some(height),
-        display_ratio_width: None,
-        display_ratio_height: None,
-        bitrate: None,
-        framerate: Some(framerate),
-        optimize_for_latency: Some(true),
-        container: hang::catalog::Container::Legacy,
-        jitter: None,
-    }
+    let mut config = hang::catalog::VideoConfig::new(codec);
+    config.description = description;
+    config.coded_width = Some(width);
+    config.coded_height = Some(height);
+    config.framerate = Some(framerate);
+    config.optimize_for_latency = Some(true);
+    config.container = hang::catalog::Container::Legacy;
+    config
 }
 fn create_audio_config(
     codec: hang::catalog::AudioCodec,
     sample_rate: u32,
     channel_count: u32,
 ) -> hang::catalog::AudioConfig {
-    hang::catalog::AudioConfig {
-        codec,
-        sample_rate,
-        channel_count,
-        bitrate: None,
-        description: None,
-        container: hang::catalog::Container::Legacy,
-        jitter: None,
-    }
+    hang::catalog::AudioConfig::new(codec, sample_rate, channel_count)
 }

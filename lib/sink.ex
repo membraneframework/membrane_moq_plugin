@@ -125,7 +125,7 @@ defmodule Membrane.MoQ.Sink do
 
   @impl true
   def handle_info(msg, _ctx, state) do
-    Membrane.Logger.info("Unknown message: #{inspect(msg)}")
+    Membrane.Logger.warning("Unknown message: #{inspect(msg)}")
     {[], state}
   end
 

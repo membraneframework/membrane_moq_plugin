@@ -28,11 +28,6 @@ defmodule Membrane.MoQ.Sink do
         %H265{stream_structure: ss} when H265.is_hvc(ss)
       ),
     options: [
-      broadcast: [
-        spec: String.t(),
-        description:
-          "Broadcast path, see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
-      ],
       track: [
         spec: String.t(),
         description:
@@ -43,6 +38,11 @@ defmodule Membrane.MoQ.Sink do
   def_options url: [
                 spec: String.t(),
                 description: "URL to the MoQ relay server."
+              ],
+              broadcast: [
+                spec: String.t(),
+                description:
+                  "Broadcast path, see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
               ],
               container: [
                 spec: :legacy,
@@ -61,8 +61,6 @@ defmodule Membrane.MoQ.Sink do
     @moduledoc false
 
     @type pad_state :: %{
-            broadcast: String.t(),
-            broadcast_resource: Native.broadcast(),
             track: String.t(),
             track_resource: Native.track() | nil
           }
@@ -72,16 +70,17 @@ defmodule Membrane.MoQ.Sink do
             container: :legacy,
             disable_tls_verify?: boolean(),
             session: Native.session(),
-            broadcasts: %{String.t() => Native.broadcast()},
+            broadcast: String.t(),
+            broadcast_resource: Native.broadcast(),
             pads: %{Membrane.Pad.ref() => pad_state()}
           }
 
-    @enforce_keys [:url, :container, :disable_tls_verify?]
+    @enforce_keys [:url, :broadcast, :container, :disable_tls_verify?]
     defstruct @enforce_keys ++
                 [
                   session: nil,
-                  broadcasts: %{},
-                  pads: %{}
+                  pads: %{},
+                  broadcast_resource: nil
                 ]
   end
 
@@ -90,6 +89,7 @@ defmodule Membrane.MoQ.Sink do
     {[],
      %State{
        url: opts.url,
+       broadcast: opts.broadcast,
        container: opts.container,
        disable_tls_verify?: opts.disable_tls_verify?
      }}
@@ -102,7 +102,10 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_info(:moq_connected, _ctx, state), do: {[setup: :complete], state}
+  def handle_info(:moq_connected, _ctx, %State{session: session, broadcast: broadcast} = state) do
+    {:ok, resource} = Native.open_broadcast(session, broadcast)
+    {[setup: :complete], %{state | broadcast_resource: resource}}
+  end
 
   @impl true
   def handle_info({:moq_write_failed, track}, _ctx, state) do
@@ -127,16 +130,8 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_pad_added(
-        pad,
-        %{pad_options: %{broadcast: broadcast, track: track}} = _ctx,
-        state
-      ) do
-    {broadcast_resource, state} = ensure_broadcast(state, broadcast)
-
+  def handle_pad_added(pad, %{pad_options: %{track: track}} = _ctx, state) do
     pad_state = %{
-      broadcast: broadcast,
-      broadcast_resource: broadcast_resource,
       track: track,
       track_resource: nil
     }
@@ -148,9 +143,9 @@ defmodule Membrane.MoQ.Sink do
   def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
 
   @impl true
-  def handle_stream_format(pad, fmt, _ctx, state) do
+  def handle_stream_format(pad, fmt, _ctx, %State{broadcast_resource: broadcast_res} = state) do
     pad_state = Map.fetch!(state.pads, pad)
-    track_resource = add_track(pad_state, fmt)
+    track_resource = add_track(broadcast_res, pad_state, fmt)
     {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource})}
   end
 
@@ -166,10 +161,11 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_end_of_stream(pad, _ctx, state) do
+  def handle_end_of_stream(pad, _ctx, %State{broadcast_resource: resource} = state) do
     state = close_pad(pad, state)
 
     if state.pads == %{} do
+      Native.close_broadcast(resource)
       :ok = Native.close_session(state.session)
     end
 
@@ -178,55 +174,20 @@ defmodule Membrane.MoQ.Sink do
 
   @spec close_pad(Membrane.Pad.ref(), State.t()) :: State.t()
   defp close_pad(pad, state) do
-    {pad_state, pads} = Map.pop(state.pads, pad)
-    state = %{state | pads: pads}
-
-    case pad_state do
-      %{track_resource: track_resource, broadcast: broadcast} ->
+    case Map.pop(state.pads, pad) do
+      {%{track_resource: track_resource}, pads} ->
         :ok = Native.remove_track(track_resource)
-        maybe_close_broadcast(state, broadcast)
+        %{state | pads: pads}
 
-      nil ->
+      {nil, _pads} ->
         state
     end
   end
 
-  @spec ensure_broadcast(State.t(), path :: String.t()) ::
-          {Native.broadcast(), State.t()}
-  defp ensure_broadcast(state, path) do
-    case Map.fetch(state.broadcasts, path) do
-      {:ok, resource} ->
-        {resource, state}
-
-      :error ->
-        {:ok, resource} = Native.open_broadcast(state.session, path)
-        {resource, put_in(state.broadcasts[path], resource)}
-    end
-  end
-
-  @spec maybe_close_broadcast(State.t(), path :: String.t() | nil) :: State.t()
-  defp maybe_close_broadcast(state, nil), do: state
-
-  defp maybe_close_broadcast(state, path) do
-    still_used? = Enum.any?(state.pads, fn {_pad, ps} -> ps.broadcast == path end)
-
-    if still_used? do
-      state
-    else
-      case Map.pop(state.broadcasts, path) do
-        {nil, _broadcasts} ->
-          state
-
-        {resource, broadcasts} ->
-          :ok = Native.close_broadcast(resource)
-          %{state | broadcasts: broadcasts}
-      end
-    end
-  end
-
-  @spec add_track(State.pad_state(), Membrane.StreamFormat.t()) :: Native.track()
-  defp add_track(pad_state, fmt) do
-    {:ok, track_resource} = do_add_track(pad_state.broadcast_resource, pad_state.track, fmt)
+  @spec add_track(Native.broadcast(), State.pad_state(), Membrane.StreamFormat.t()) ::
+          Native.track()
+  defp add_track(broadcast_resource, pad_state, fmt) do
+    {:ok, track_resource} = do_add_track(broadcast_resource, pad_state.track, fmt)
     track_resource
   end
 

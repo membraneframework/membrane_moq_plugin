@@ -28,9 +28,10 @@ defmodule Example do
         output_stream_structure: :hvc1
       })
       |> child(:realtimer, Membrane.Realtimer)
-      |> via_in(Pad.ref(:input, :main), options: [broadcast: "h265", track: "video"])
+      |> via_in(Pad.ref(:input, :main), options: [track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
         url: "https://localhost:4443/anon",
+        broadcast: "h265",
         disable_tls_verify?: true
       })
     ]

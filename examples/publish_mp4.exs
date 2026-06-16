@@ -22,6 +22,7 @@ defmodule Example do
     spec = [
       child(:sink, %Membrane.MoQ.Sink{
         url: "http://localhost:4443/anon",
+        broadcast: "bbb",
         disable_tls_verify?: true
       }),
       child(:source, %Membrane.Hackney.Source{
@@ -35,13 +36,13 @@ defmodule Example do
         out_encapsulation: :ADTS
       })
       |> child(:audio_rt, Membrane.Realtimer)
-      |> via_in(Pad.ref(:input, :audio1), options: [broadcast: "bbb", track: "audio"])
+      |> via_in(Pad.ref(:input, :audio1), options: [track: "audio"])
       |> get_child(:sink),
       get_child(:demuxer)
       |> via_out(:output, options: [kind: :video])
       |> child(:video_parser, %Membrane.H264.Parser{output_stream_structure: :avc1})
       |> child(:video_rt, Membrane.Realtimer)
-      |> via_in(Pad.ref(:input, :video1), options: [broadcast: "bbb", track: "video"])
+      |> via_in(Pad.ref(:input, :video1), options: [track: "video"])
       |> get_child(:sink)
     ]
 

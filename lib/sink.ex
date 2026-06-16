@@ -87,7 +87,12 @@ defmodule Membrane.MoQ.Sink do
 
   @impl true
   def handle_init(_ctx, opts) do
-    {[], struct(State, Map.from_struct(opts))}
+    {[],
+     %State{
+       url: opts.url,
+       container: opts.container,
+       disable_tls_verify?: opts.disable_tls_verify?
+     }}
   end
 
   @impl true

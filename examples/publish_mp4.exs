@@ -11,8 +11,6 @@ Mix.install([
 defmodule Example do
   use Membrane.Pipeline
 
-  alias Membrane.Time
-
   @input_url "https://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/big-buck-bunny/bun33s.mp4"
 
   def start_link() do
@@ -23,7 +21,7 @@ defmodule Example do
   def handle_init(_ctx, _opts) do
     spec = [
       child(:sink, %Membrane.MoQ.Sink{
-        url: "http://localhost:4443",
+        url: "http://localhost:4443/anon",
         disable_tls_verify?: true
       }),
       child(:source, %Membrane.Hackney.Source{

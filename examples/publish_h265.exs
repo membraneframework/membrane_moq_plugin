@@ -30,7 +30,7 @@ defmodule Example do
       |> child(:realtimer, Membrane.Realtimer)
       |> via_in(Pad.ref(:input, :main), options: [broadcast: "h265", track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
-        url: "https://localhost:4443",
+        url: "https://localhost:4443/anon",
         disable_tls_verify?: true
       })
     ]

@@ -56,7 +56,7 @@ defmodule Membrane.MoQ.Native do
   immediately. The QUIC handshake completes asynchronously
   - `:moq_connected` is sent to `pid` once the session is up.
   - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the connection fails.
-  - `{:moq_disconnected, reason :: String.t()}` is sent when the session closes.
+  - `{:moq_disconnected, reason :: String.t()}` is sent if the session terminates unexpectedly.
   """
   @spec setup_session(String.t(), pid(), boolean()) ::
           {:ok, session()} | {:error, reason :: String.t()}

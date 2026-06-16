@@ -185,7 +185,6 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     atoms::ok()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn add_video_track(
     pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,

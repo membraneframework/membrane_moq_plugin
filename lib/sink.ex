@@ -187,8 +187,10 @@ defmodule Membrane.MoQ.Sink do
   @spec add_track(Native.broadcast(), State.pad_state(), Membrane.StreamFormat.t()) ::
           Native.track()
   defp add_track(broadcast_resource, pad_state, fmt) do
-    {:ok, track_resource} = do_add_track(broadcast_resource, pad_state.track, fmt)
-    track_resource
+    case do_add_track(broadcast_resource, pad_state.track, fmt) do
+      {:ok, track_resource} -> track_resource
+      {:error, reason} -> raise "Failed to spawn track worker, reason: #{inspect(reason)}"
+    end
   end
 
   @spec do_add_track(

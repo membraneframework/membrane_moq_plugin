@@ -41,7 +41,7 @@ pub(crate) fn setup_session(
                     .expect("sending message to parent should succeed");
 
                 tokio::select! {
-                    _ = shutdown_rx.recv() => {}
+                    _ = shutdown_rx.recv() => {} // session closed gracefully by parent
                     result = session.closed() => handle_session_closed(result, pid)
                 }
             }

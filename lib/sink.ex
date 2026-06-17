@@ -138,7 +138,19 @@ defmodule Membrane.MoQ.Sink do
   @impl true
   def handle_stream_format(pad, fmt, _ctx, %State{broadcast_resource: broadcast_res} = state) do
     pad_state = Map.fetch!(state.pads, pad)
-    track_resource = add_track(broadcast_res, pad_state, fmt)
+
+    track_resource =
+      case pad_state.track_resource do
+        nil ->
+          add_track(broadcast_res, pad_state, fmt)
+
+        existing ->
+          case Native.update_track(existing, track_format(fmt)) do
+            :ok -> existing
+            {:error, reason} -> raise "Failed to update track format, reason: #{inspect(reason)}"
+          end
+      end
+
     {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource})}
   end
 
@@ -194,18 +206,14 @@ defmodule Membrane.MoQ.Sink do
   @spec add_track(Native.broadcast(), State.pad_state(), Membrane.StreamFormat.t()) ::
           Native.track()
   defp add_track(broadcast_resource, pad_state, fmt) do
-    case do_add_track(broadcast_resource, pad_state.track, fmt) do
+    case Native.add_track(broadcast_resource, pad_state.track, track_format(fmt)) do
       {:ok, track_resource} -> track_resource
       {:error, reason} -> raise "Failed to add track, reason: #{inspect(reason)}"
     end
   end
 
-  @spec do_add_track(
-          Native.broadcast(),
-          track :: String.t(),
-          Membrane.StreamFormat.t()
-        ) :: {:ok, Native.track()} | {:error, reason :: String.t()}
-  defp do_add_track(broadcast_resource, track, %H264{
+  @spec track_format(Membrane.StreamFormat.t()) :: Native.track_format()
+  defp track_format(%H264{
          height: height,
          width: width,
          framerate: framerate,
@@ -213,29 +221,28 @@ defmodule Membrane.MoQ.Sink do
        }) do
     dcr_parsed = Membrane.H264.DecoderConfigurationRecord.parse(dcr)
 
-    Native.add_h264_track(
-      broadcast_resource,
-      track,
-      %Membrane.MoQ.Native.VideoTrackParams{
-        width: width,
-        height: height,
-        framerate: framerate_to_float(framerate)
-      },
-      dcr,
-      %Membrane.MoQ.Native.H264Codec{
-        inline:
-          case tag do
-            :avc1 -> false
-            :avc3 -> true
-          end,
-        profile: dcr_parsed.avc_profile_indication,
-        constraints: dcr_parsed.profile_compatibility,
-        level: dcr_parsed.avc_level
-      }
-    )
+    {:h264,
+     %{
+       params: %Membrane.MoQ.Native.VideoTrackParams{
+         width: width,
+         height: height,
+         framerate: framerate_to_float(framerate)
+       },
+       dcr: dcr,
+       codec: %Membrane.MoQ.Native.H264Codec{
+         inline:
+           case tag do
+             :avc1 -> false
+             :avc3 -> true
+           end,
+         profile: dcr_parsed.avc_profile_indication,
+         constraints: dcr_parsed.profile_compatibility,
+         level: dcr_parsed.avc_level
+       }
+     }}
   end
 
-  defp do_add_track(broadcast_resource, track, %H265{
+  defp track_format(%H265{
          height: height,
          width: width,
          framerate: framerate,
@@ -243,48 +250,38 @@ defmodule Membrane.MoQ.Sink do
        }) do
     dcr_parsed = Membrane.H265.DecoderConfigurationRecord.parse(dcr)
 
-    Native.add_h265_track(
-      broadcast_resource,
-      track,
-      %Membrane.MoQ.Native.VideoTrackParams{
-        width: width,
-        height: height,
-        framerate: framerate_to_float(framerate)
-      },
-      dcr,
-      %Membrane.MoQ.Native.H265Codec{
-        in_band:
-          case tag do
-            :hev1 -> true
-            :hvc1 -> false
-          end,
-        profile_space: dcr_parsed.profile_space,
-        profile_idc: dcr_parsed.profile_idc,
-        profile_compatibility_flags:
-          <<dcr_parsed.profile_compatibility_flags::32>> |> :binary.bin_to_list(),
-        tier_flag: dcr_parsed.tier_flag > 0,
-        level_idc: dcr_parsed.level_idc,
-        constraint_flags: <<dcr_parsed.constraint_indicator_flags::48>> |> :binary.bin_to_list()
-      }
-    )
+    {:h265,
+     %{
+       params: %Membrane.MoQ.Native.VideoTrackParams{
+         width: width,
+         height: height,
+         framerate: framerate_to_float(framerate)
+       },
+       dcr: dcr,
+       codec: %Membrane.MoQ.Native.H265Codec{
+         in_band:
+           case tag do
+             :hev1 -> true
+             :hvc1 -> false
+           end,
+         profile_space: dcr_parsed.profile_space,
+         profile_idc: dcr_parsed.profile_idc,
+         profile_compatibility_flags:
+           <<dcr_parsed.profile_compatibility_flags::32>> |> :binary.bin_to_list(),
+         tier_flag: dcr_parsed.tier_flag > 0,
+         level_idc: dcr_parsed.level_idc,
+         constraint_flags: <<dcr_parsed.constraint_indicator_flags::48>> |> :binary.bin_to_list()
+       }
+     }}
   end
 
-  defp do_add_track(broadcast_resource, track, %AAC{
-         profile: profile,
-         sample_rate: sample_rate,
-         channels: channels
-       }),
-       do:
-         Native.add_aac_track(
-           broadcast_resource,
-           track,
-           AAC.profile_to_aot_id(profile),
-           sample_rate,
-           channels
-         )
+  defp track_format(%AAC{profile: profile, sample_rate: sample_rate, channels: channels}),
+    do:
+      {:aac,
+       %{profile: AAC.profile_to_aot_id(profile), sample_rate: sample_rate, channels: channels}}
 
-  defp do_add_track(broadcast_resource, track, %Opus{channels: channels}),
-    do: Native.add_opus_track(broadcast_resource, track, 48_000, channels)
+  defp track_format(%Opus{channels: channels}),
+    do: {:opus, %{sample_rate: 48_000, channels: channels}}
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float()
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,

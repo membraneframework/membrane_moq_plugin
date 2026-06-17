@@ -87,68 +87,36 @@ defmodule Membrane.MoQ.Native do
   def close_broadcast(_broadcast_resource),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  @type track_format() ::
+          {:h264, %{params: VideoTrackParams.t(), dcr: binary(), codec: H264Codec.t()}}
+          | {:h265, %{params: VideoTrackParams.t(), dcr: binary(), codec: H265Codec.t()}}
+          | {:aac,
+             %{profile: byte(), sample_rate: non_neg_integer(), channels: non_neg_integer()}}
+          | {:opus, %{sample_rate: non_neg_integer(), channels: Membrane.Opus.channels_t()}}
+
   @doc """
-  Adds a H264 track to the given broadcast and returns a track resource that can
-  be used to send frames.
+  Adds a track of any supported codec to the given broadcast and returns a track
+  resource that can be used to send frames.
 
   The first argument is the target broadcast's resource, the result of calling
-  `open_broadcast/2`. The second argument is the name of the track.
+  `open_broadcast/2`. The second argument is the name of the track. The third is
+  the codec format, see `t:track_format/0`.
   """
-  @spec add_h264_track(
-          broadcast(),
-          String.t(),
-          VideoTrackParams.t(),
-          String.t(),
-          H264Codec.t()
-        ) ::
+  @spec add_track(broadcast(), String.t(), track_format()) ::
           {:ok, track()} | {:error, reason :: String.t()}
-  def add_h264_track(_broadcast_res, _track, _video_params, _dcr, _codec),
+  def add_track(_broadcast_res, _track, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Adds a H265 track to the given broadcast and returns the track's resource.
-  For details, refer to `add_h264_track/5`
-  """
-  @spec add_h265_track(
-          broadcast(),
-          String.t(),
-          VideoTrackParams.t(),
-          String.t(),
-          H265Codec.t()
-        ) ::
-          {:ok, track()} | {:error, reason :: String.t()}
-  def(add_h265_track(_broadcast_res, _track, _video_params, _dcr, _codec),
-    do: :erlang.nif_error(:nif_not_loaded)
-  )
+  Changes a live track's format in place, republishing its catalog rendition
+  under the same name while keeping the existing producer (and its monotonic
+  group sequence). Use when a pad's stream format changes mid-stream.
 
-  @doc """
-  Adds an AAC track to the given broadcast and returns the track's resource.
-  For details, refer to `add_h264_track/5`
+  The new format must keep the same media role (audio stays audio, video stays
+  video); switching role requires a new track.
   """
-  @spec add_aac_track(
-          broadcast(),
-          String.t(),
-          byte(),
-          non_neg_integer(),
-          non_neg_integer()
-        ) ::
-          {:ok, track()} | {:error, reason :: String.t()}
-  def(add_aac_track(_broadcast_res, _track, _profile, _sample_rate, _channels),
-    do: :erlang.nif_error(:nif_not_loaded)
-  )
-
-  @doc """
-  Adds an OPUS track to the given broadcast and returns the track's resource.
-  For details, refer to `add_h264_track/5`
-  """
-  @spec add_opus_track(
-          broadcast(),
-          String.t(),
-          non_neg_integer(),
-          Membrane.Opus.channels_t()
-        ) ::
-          {:ok, track()} | {:error, reason :: String.t()}
-  def add_opus_track(_broadcast_res, _track, _sample_rate, _channels),
+  @spec update_track(track(), track_format()) :: :ok | {:error, reason :: String.t()}
+  def update_track(_track_res, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

@@ -1,6 +1,6 @@
 use bytes::Bytes;
-use rustler::{Atom, Binary, Encoder, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
-use tokio::sync::mpsc;
+use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
+use std::sync::Mutex;
 
 use crate::{
     atoms,
@@ -9,13 +9,10 @@ use crate::{
     runtime,
 };
 
-enum TrackCmd {
-    Frame(moq_mux::container::Frame),
-    Stop,
-}
+type LegacyProducer = moq_mux::container::Producer<moq_mux::container::legacy::Wire>;
 
 pub(crate) struct TrackResource {
-    sender: mpsc::UnboundedSender<TrackCmd>,
+    producer: Mutex<LegacyProducer>,
     broadcast_res: ResourceArc<BroadcastResource>,
     name: String,
     kind: TrackRole,
@@ -31,7 +28,6 @@ pub(crate) enum TrackRole {
 
 #[rustler::nif]
 pub(crate) fn add_h264_track(
-    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     video_params: VideoTrackParams,
@@ -59,12 +55,11 @@ pub(crate) fn add_h264_track(
         description,
     );
 
-    add_video_track(pid, broadcast_res, track, config)
+    add_video_track(broadcast_res, track, config)
 }
 
 #[rustler::nif]
 pub(crate) fn add_h265_track(
-    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     video_params: VideoTrackParams,
@@ -98,7 +93,6 @@ pub(crate) fn add_h265_track(
     };
 
     add_video_track(
-        pid,
         broadcast_res,
         track,
         create_video_config(
@@ -113,7 +107,6 @@ pub(crate) fn add_h265_track(
 
 #[rustler::nif]
 pub(crate) fn add_aac_track(
-    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     profile: u8,
@@ -123,7 +116,6 @@ pub(crate) fn add_aac_track(
     let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
 
     add_audio_track(
-        pid,
         broadcast_res,
         track,
         create_audio_config(codec, sample_rate, channels),
@@ -132,7 +124,6 @@ pub(crate) fn add_aac_track(
 
 #[rustler::nif]
 pub(crate) fn add_opus_track(
-    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     sample_rate: u32,
@@ -142,7 +133,7 @@ pub(crate) fn add_opus_track(
 
     let config = create_audio_config(codec, sample_rate, channels);
 
-    add_audio_track(pid, broadcast_res, track, config)
+    add_audio_track(broadcast_res, track, config)
 }
 
 #[rustler::nif]
@@ -160,16 +151,20 @@ pub(crate) fn send_frame(
         keyframe,
     };
 
+    let _guard = runtime().handle().enter();
     track_res
-        .sender
-        .send(TrackCmd::Frame(frame))
-        .map_err(|e| crate::nif_error!("sending frame to track task failed: {e}"))?;
+        .producer
+        .lock()
+        .unwrap()
+        .write(frame)
+        .map_err(|e| crate::nif_error!("writing frame failed: {e}"))?;
     Ok(atoms::ok())
 }
 
 #[rustler::nif]
 pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
-    let _ = track_res.sender.send(TrackCmd::Stop);
+    let _guard = runtime().handle().enter();
+    let _ = track_res.producer.lock().unwrap().finish();
 
     let mut cp = track_res.broadcast_res.catalog.lock().unwrap();
     let mut guard = cp.lock();
@@ -186,7 +181,6 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
 }
 
 fn add_video_track(
-    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     config: hang::catalog::VideoConfig,
@@ -208,12 +202,12 @@ fn add_video_track(
         guard.video.renditions.insert(track.clone(), config);
     }
 
-    let sender = spawn_track_task(pid, tp);
+    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
 
     Ok((
         atoms::ok(),
         ResourceArc::new(TrackResource {
-            sender,
+            producer: Mutex::new(producer),
             broadcast_res,
             name: track,
             kind: TrackRole::Video,
@@ -222,7 +216,6 @@ fn add_video_track(
 }
 
 fn add_audio_track(
-    pid: LocalPid,
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     config: hang::catalog::AudioConfig,
@@ -244,45 +237,17 @@ fn add_audio_track(
         guard.audio.renditions.insert(track.clone(), config);
     }
 
-    let sender = spawn_track_task(pid, tp);
+    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
 
     Ok((
         atoms::ok(),
         ResourceArc::new(TrackResource {
-            sender,
+            producer: Mutex::new(producer),
             broadcast_res,
             name: track,
             kind: TrackRole::Audio,
         }),
     ))
-}
-
-fn spawn_track_task(
-    pid: LocalPid,
-    track: hang::moq_net::TrackProducer,
-) -> mpsc::UnboundedSender<TrackCmd> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<TrackCmd>();
-    runtime().spawn(async move {
-        let mut producer =
-            moq_mux::container::Producer::new(track, moq_mux::container::legacy::Wire);
-        while let Some(cmd) = rx.recv().await {
-            match cmd {
-                TrackCmd::Frame(frame) => {
-                    if producer.write(frame).is_err() {
-                        OwnedEnv::new()
-                            .send_and_clear(&pid, |env| {
-                                (atoms::moq_write_failed(), producer.track().name.clone())
-                                    .encode(env)
-                            })
-                            .expect("sending message to parent should succeed")
-                    }
-                }
-                TrackCmd::Stop => break,
-            }
-        }
-        let _ = producer.finish();
-    });
-    tx
 }
 
 fn create_video_config(

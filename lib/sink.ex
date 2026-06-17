@@ -2,9 +2,8 @@ defmodule Membrane.MoQ.Sink do
   @moduledoc """
   Membrane Sink acting as a MoQ publisher.
 
-  Connects to a MoQ relay server and publishes audio and video tracks. One Sink
-  instance owns one MoQ session and may host multiple broadcasts; each input
-  pad maps to one rendition in one broadcast.
+  Connects to a MoQ relay server and publishes audio and video tracks
+  to a single, configured broadcast.
 
   Pads can be added or removed at any time during the pipeline lifecycle. The
   catalog is republished on every track add/remove.
@@ -108,12 +107,6 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_info({:moq_write_failed, track}, _ctx, state) do
-    Membrane.Logger.warning("Frame write failed for track: #{inspect(track)}")
-    {[], state}
-  end
-
-  @impl true
   def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
     raise "MoQ session setup failed with reason: #{inspect(reason)}"
   end
@@ -158,8 +151,18 @@ defmodule Membrane.MoQ.Sink do
       raise "Received buffer with negative timestamp"
     end
 
-    :ok =
-      Native.send_frame(pad_state.track_resource, timestamp_us, keyframe?(buffer), buffer.payload)
+    case Native.send_frame(
+           pad_state.track_resource,
+           timestamp_us,
+           keyframe?(buffer),
+           buffer.payload
+         ) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise "Failed to send frame to track #{inspect(pad_state.track)}: #{reason}"
+    end
 
     {[], state}
   end
@@ -193,7 +196,7 @@ defmodule Membrane.MoQ.Sink do
   defp add_track(broadcast_resource, pad_state, fmt) do
     case do_add_track(broadcast_resource, pad_state.track, fmt) do
       {:ok, track_resource} -> track_resource
-      {:error, reason} -> raise "Failed to spawn track worker, reason: #{inspect(reason)}"
+      {:error, reason} -> raise "Failed to add track, reason: #{inspect(reason)}"
     end
   end
 
@@ -211,7 +214,6 @@ defmodule Membrane.MoQ.Sink do
     dcr_parsed = Membrane.H264.DecoderConfigurationRecord.parse(dcr)
 
     Native.add_h264_track(
-      self(),
       broadcast_resource,
       track,
       %Membrane.MoQ.Native.VideoTrackParams{
@@ -242,7 +244,6 @@ defmodule Membrane.MoQ.Sink do
     dcr_parsed = Membrane.H265.DecoderConfigurationRecord.parse(dcr)
 
     Native.add_h265_track(
-      self(),
       broadcast_resource,
       track,
       %Membrane.MoQ.Native.VideoTrackParams{
@@ -275,7 +276,6 @@ defmodule Membrane.MoQ.Sink do
        }),
        do:
          Native.add_aac_track(
-           self(),
            broadcast_resource,
            track,
            AAC.profile_to_aot_id(profile),
@@ -284,7 +284,7 @@ defmodule Membrane.MoQ.Sink do
          )
 
   defp do_add_track(broadcast_resource, track, %Opus{channels: channels}),
-    do: Native.add_opus_track(self(), broadcast_resource, track, 48_000, channels)
+    do: Native.add_opus_track(broadcast_resource, track, 48_000, channels)
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float()
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,

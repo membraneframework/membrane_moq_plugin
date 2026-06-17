@@ -88,16 +88,13 @@ defmodule Membrane.MoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Adds a H264 track to the given broadcast,
-  spawns a writer task and returns a track resource
-  that can be used to send frames to the task.
+  Adds a H264 track to the given broadcast and returns a track resource that can
+  be used to send frames.
 
-  The first argument is a pid that the task sends messages to if writing a frame fails.
-  The second argument is the target broadcast's resource, the result of calling `open_broadcast/2`.
-  The third argument is the name of the track.
+  The first argument is the target broadcast's resource, the result of calling
+  `open_broadcast/2`. The second argument is the name of the track.
   """
   @spec add_h264_track(
-          pid(),
           broadcast(),
           String.t(),
           VideoTrackParams.t(),
@@ -105,16 +102,14 @@ defmodule Membrane.MoQ.Native do
           H264Codec.t()
         ) ::
           {:ok, track()} | {:error, reason :: String.t()}
-  def add_h264_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
+  def add_h264_track(_broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Adds a H265 track to the given broadcast,
-  spawns a writer task and returns the track's resource.
-  For details, refer to `add_h264_track/6`
+  Adds a H265 track to the given broadcast and returns the track's resource.
+  For details, refer to `add_h264_track/5`
   """
   @spec add_h265_track(
-          pid(),
           broadcast(),
           String.t(),
           VideoTrackParams.t(),
@@ -122,17 +117,15 @@ defmodule Membrane.MoQ.Native do
           H265Codec.t()
         ) ::
           {:ok, track()} | {:error, reason :: String.t()}
-  def(add_h265_track(_pid, _broadcast_res, _track, _video_params, _dcr, _codec),
+  def(add_h265_track(_broadcast_res, _track, _video_params, _dcr, _codec),
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
   @doc """
-  Adds an AAC track to the given broadcast,
-  spawns a writer task and returns the track's resource.
-  For details, refer to `add_h264_track/6`
+  Adds an AAC track to the given broadcast and returns the track's resource.
+  For details, refer to `add_h264_track/5`
   """
   @spec add_aac_track(
-          pid(),
           broadcast(),
           String.t(),
           byte(),
@@ -140,24 +133,22 @@ defmodule Membrane.MoQ.Native do
           non_neg_integer()
         ) ::
           {:ok, track()} | {:error, reason :: String.t()}
-  def(add_aac_track(_pid, _broadcast_res, _track, _profile, _sample_rate, _channels),
+  def(add_aac_track(_broadcast_res, _track, _profile, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
   )
 
   @doc """
-  Adds an OPUS track to the given broadcast,
-  spawns a writer task and returns the track's resource.
-  For details, refer to `add_h264_track/6`
+  Adds an OPUS track to the given broadcast and returns the track's resource.
+  For details, refer to `add_h264_track/5`
   """
   @spec add_opus_track(
-          pid(),
           broadcast(),
           String.t(),
           non_neg_integer(),
           Membrane.Opus.channels_t()
         ) ::
           {:ok, track()} | {:error, reason :: String.t()}
-  def add_opus_track(_pid, _broadcast_res, _track, _sample_rate, _channels),
+  def add_opus_track(_broadcast_res, _track, _sample_rate, _channels),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -166,8 +157,11 @@ defmodule Membrane.MoQ.Native do
   `timestamp_us` is the presentation timestamp in microseconds. `keyframe?`
   must be `true` for IDR frames on video tracks (triggers a new MoQ group);
   for audio tracks pass `true` for every frame.
+
+  Returns `:ok`, or `{:error, reason}` if the write fails (e.g. track closed).
   """
-  @spec send_frame(track(), pos_integer(), boolean(), binary()) :: :ok
+  @spec send_frame(track(), pos_integer(), boolean(), binary()) ::
+          :ok | {:error, reason :: String.t()}
   def send_frame(_track_res, _timestamp_us, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 

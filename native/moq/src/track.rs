@@ -74,16 +74,12 @@ impl TrackFormat<'_> {
     /// (creates a new track) and `update_track` (republishes in place).
     fn resolve(self) -> NifResult<ResolvedConfig> {
         let config = match self {
-            TrackFormat::H264 {
-                params,
-                dcr,
-                codec,
-            } => ResolvedConfig::Video(h264_video_config(params, dcr.as_slice(), codec)),
-            TrackFormat::H265 {
-                params,
-                dcr,
-                codec,
-            } => ResolvedConfig::Video(h265_video_config(params, dcr.as_slice(), codec)?),
+            TrackFormat::H264 { params, dcr, codec } => {
+                ResolvedConfig::Video(h264_video_config(params, dcr.as_slice(), codec))
+            }
+            TrackFormat::H265 { params, dcr, codec } => {
+                ResolvedConfig::Video(h265_video_config(params, dcr.as_slice(), codec)?)
+            }
             TrackFormat::Aac {
                 profile,
                 sample_rate,
@@ -127,14 +123,24 @@ pub(crate) fn update_track(
 
     match (track_res.kind, format.resolve()?) {
         (TrackRole::Video, ResolvedConfig::Video(config)) => {
-            guard.video.renditions.insert(track_res.name.clone(), config);
+            guard
+                .video
+                .renditions
+                .insert(track_res.name.clone(), config);
         }
         (TrackRole::Audio, ResolvedConfig::Audio(config)) => {
-            guard.audio.renditions.insert(track_res.name.clone(), config);
+            guard
+                .audio
+                .renditions
+                .insert(track_res.name.clone(), config);
         }
         // Switching media role (e.g. audio track -> video format) isn't a format
         // change of the same track; that needs a new track.
-        _ => return Err(crate::nif_error!("cannot change a track's media role in place")),
+        _ => {
+            return Err(crate::nif_error!(
+                "cannot change a track's media role in place"
+            ))
+        }
     }
 
     Ok(atoms::ok())

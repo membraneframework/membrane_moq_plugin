@@ -1,5 +1,7 @@
-use hang::moq_net::OriginConsumer;
+use hang::moq_net;
+
 use moq_native::ClientConfig;
+use moq_net::OriginConsumer;
 use rustler::{Atom, Encoder, LocalPid, NifResult, OwnedEnv, ResourceArc};
 use tokio::sync::mpsc;
 use url::Url;
@@ -7,7 +9,7 @@ use url::Url;
 use crate::{atoms, runtime};
 
 pub(crate) struct SessionResource {
-    pub(crate) origin: hang::moq_net::OriginProducer,
+    pub(crate) origin: moq_net::OriginProducer,
     shutdown: mpsc::UnboundedSender<()>,
 }
 
@@ -21,7 +23,7 @@ pub(crate) fn setup_session(
 ) -> NifResult<(Atom, ResourceArc<SessionResource>)> {
     let url = Url::parse(&url).map_err(|e| crate::nif_error!("invalid url: {e}"))?;
 
-    let origin = hang::moq_net::Origin::random().produce();
+    let origin = moq_net::Origin::random().produce();
     let consume = origin.consume();
 
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
@@ -77,7 +79,7 @@ async fn create_session(
     client.with_publish(consumer).connect(url).await
 }
 
-fn handle_session_closed(result: Result<(), hang::moq_net::Error>, pid: LocalPid) {
+fn handle_session_closed(result: Result<(), moq_net::Error>, pid: LocalPid) {
     let message = result.map_or_else(
         |e| (atoms::moq_disconnected(), e.to_string()),
         |()| {

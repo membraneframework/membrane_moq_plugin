@@ -8,7 +8,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-moq-net = "0.1.11"
 moq-native = "0.17.1"
 hang = "0.19.1"
 moq-mux = "0.5.5"

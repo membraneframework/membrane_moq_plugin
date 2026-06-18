@@ -1445,7 +1445,6 @@ dependencies = [
  "hang",
  "moq-mux",
  "moq-native",
- "moq-net",
  "rustler",
  "tokio",
  "url",

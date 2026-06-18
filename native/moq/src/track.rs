@@ -1,3 +1,5 @@
+use hang::moq_net;
+
 use bytes::Bytes;
 use rustler::{Atom, Binary, NifResult, NifTaggedEnum, Resource, ResourceArc};
 use std::sync::Mutex;
@@ -344,6 +346,7 @@ fn create_video_config(
     config.container = hang::catalog::Container::Legacy;
     config
 }
+
 fn create_audio_config(
     codec: hang::catalog::AudioCodec,
     sample_rate: u32,

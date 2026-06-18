@@ -1,6 +1,6 @@
 defmodule Membrane.MoQ.Native do
   @moduledoc """
-  Elixir bindings to moq-lite's native Rust API
+  Elixir bindings to moq-net's native Rust API
   """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
 
@@ -9,7 +9,7 @@ defmodule Membrane.MoQ.Native do
   @type session :: reference()
 
   defmodule VideoTrackParams do
-    @moduledoc false
+    @moduledoc "Parameters that describe a `hang` video track."
     @type t :: %__MODULE__{
             width: non_neg_integer(),
             height: non_neg_integer(),
@@ -20,14 +20,14 @@ defmodule Membrane.MoQ.Native do
   end
 
   defmodule H264Codec do
-    @moduledoc false
+    @moduledoc "H264 parameters required by `hang`"
     @type t :: %__MODULE__{inline: boolean(), profile: byte(), constraints: byte(), level: byte()}
     @enforce_keys [:inline, :profile, :constraints, :level]
     defstruct @enforce_keys
   end
 
   defmodule H265Codec do
-    @moduledoc false
+    @moduledoc "H265 parameters required by `hang`"
     @type t :: %__MODULE__{
             in_band: boolean(),
             profile_space: byte(),

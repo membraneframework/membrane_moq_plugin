@@ -109,9 +109,11 @@ defmodule Membrane.MoQ.Native do
 
   @doc """
   Replaces a live track with one carrying `format`, published on a brand-new moq track.
+
+  Returns the new track resource along with the name of the newly generated moq track.
   """
   @spec replace_track(track(), track_format()) ::
-          {:ok, track()} | {:error, reason :: String.t()}
+          {:ok, track(), name :: String.t()} | {:error, reason :: String.t()}
   def replace_track(_old_track_res, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 

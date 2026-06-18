@@ -146,7 +146,7 @@ pub(crate) fn add_track(
 pub(crate) fn replace_track(
     old_track_res: ResourceArc<TrackResource>,
     format: TrackFormat,
-) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
+) -> NifResult<(Atom, ResourceArc<TrackResource>, String)> {
     let _guard = runtime().handle().enter();
 
     let resolved = format.resolve()?;
@@ -194,10 +194,11 @@ pub(crate) fn replace_track(
         ResourceArc::new(TrackResource {
             producer: Mutex::new(producer),
             broadcast_res,
-            name,
+            name: name.clone(),
             suffix,
             kind,
         }),
+        name,
     ))
 }
 

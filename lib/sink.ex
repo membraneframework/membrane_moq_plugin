@@ -155,6 +155,9 @@ defmodule Membrane.MoQ.Sink do
         {:ok, track_res} ->
           track_res
 
+        {:ok, track_res, _new_track_name} ->
+          track_res
+
         {:error, reason} ->
           raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
       end

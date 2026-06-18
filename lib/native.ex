@@ -98,9 +98,9 @@ defmodule Membrane.MoQ.Native do
   Adds a track of any supported codec to the given broadcast and returns a track
   resource that can be used to send frames.
 
-  The first argument is the target broadcast's resource, the result of calling
-  `open_broadcast/2`. The second argument is the name of the track. The third is
-  the codec format, see `t:track_format/0`.
+  The first argument is the target broadcast's resource, the result of calling `open_broadcast/2`.
+  The second argument is the name of the track.
+  The third is the codec format, see `t:track_format/0`.
   """
   @spec add_track(broadcast(), String.t(), track_format()) ::
           {:ok, track()} | {:error, reason :: String.t()}
@@ -108,15 +108,11 @@ defmodule Membrane.MoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Changes a live track's format in place, republishing its catalog rendition
-  under the same name while keeping the existing producer (and its monotonic
-  group sequence). Use when a pad's stream format changes mid-stream.
-
-  The new format must keep the same media role (audio stays audio, video stays
-  video); switching role requires a new track.
+  Replaces a live track with one carrying `format`, published on a brand-new moq track.
   """
-  @spec update_track(track(), track_format()) :: :ok | {:error, reason :: String.t()}
-  def update_track(_track_res, _format),
+  @spec replace_track(track(), track_format()) ::
+          {:ok, track()} | {:error, reason :: String.t()}
+  def replace_track(_old_track_res, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

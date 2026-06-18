@@ -17,31 +17,20 @@ pub(crate) struct TrackResource {
     producer: Mutex<LegacyProducer>,
     broadcast_res: ResourceArc<BroadcastResource>,
     name: String,
-    kind: TrackRole,
+    // Used to generate new, unique track names if format changes mid-stream.
+    // For the first rendition (before any stream format change), suffix == name
+    suffix: String,
+    kind: TrackKind,
 }
 
 impl Resource for TrackResource {}
 
-#[derive(Clone, Copy)]
-pub(crate) enum TrackRole {
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum TrackKind {
     Video,
     Audio,
 }
 
-/// One codec's full track format, decoded straight from an Elixir tagged tuple.
-///
-/// `NifTaggedEnum` maps each variant to `{:variant_name, %{field => value}}`, with
-/// names snake_cased. So the Elixir side sends e.g.
-///
-///   {:h264, %{params: %VideoTrackParams{...}, dcr: <<...>>, codec: %H264Codec{...}}}
-///   {:opus, %{sample_rate: 48_000, channels: 2}}
-///
-/// Nested `VideoTrackParams` / `H264Codec` / `H265Codec` are themselves `NifStruct`s,
-/// so they decode from the map values automatically. `dcr` borrows the caller's
-/// binary for the duration of the call (hence the `'a` lifetime).
-///
-/// This collapses the per-codec `add_*_track` NIFs into a single `add_track`, and
-/// lets `update_track` reuse the exact same shape.
 #[derive(NifTaggedEnum)]
 pub(crate) enum TrackFormat<'a> {
     H264 {
@@ -65,15 +54,21 @@ pub(crate) enum TrackFormat<'a> {
     },
 }
 
-/// A decoded format resolved to its catalog config, tagged by media role.
 enum ResolvedConfig {
     Video(hang::catalog::VideoConfig),
     Audio(hang::catalog::AudioConfig),
 }
 
+impl ResolvedConfig {
+    fn kind(&self) -> TrackKind {
+        match self {
+            ResolvedConfig::Video(_) => TrackKind::Video,
+            ResolvedConfig::Audio(_) => TrackKind::Audio,
+        }
+    }
+}
+
 impl TrackFormat<'_> {
-    /// Build the hang catalog config for this format. Shared by `add_track`
-    /// (creates a new track) and `update_track` (republishes in place).
     fn resolve(self) -> NifResult<ResolvedConfig> {
         let config = match self {
             TrackFormat::H264 { params, dcr, codec } => {
@@ -96,56 +91,114 @@ impl TrackFormat<'_> {
     }
 }
 
-/// Add a track of any supported codec, dispatching on the Elixir-decoded
-/// `TrackFormat` enum. Replaces the four per-codec `add_*_track` NIFs.
 #[rustler::nif]
 pub(crate) fn add_track(
     broadcast_res: ResourceArc<BroadcastResource>,
     track: String,
     format: TrackFormat,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
-    match format.resolve()? {
-        ResolvedConfig::Video(config) => add_video_track(broadcast_res, track, config),
-        ResolvedConfig::Audio(config) => add_audio_track(broadcast_res, track, config),
-    }
-}
-
-/// Change a live track's format in place: keep the existing producer (and its
-/// monotonic group sequence) and just republish the catalog rendition under the
-/// same name. The same `TrackFormat` enum used by `add_track` is reused here.
-#[rustler::nif]
-pub(crate) fn update_track(
-    track_res: ResourceArc<TrackResource>,
-    format: TrackFormat,
-) -> NifResult<Atom> {
     let _guard = runtime().handle().enter();
 
-    let mut cp = track_res.broadcast_res.catalog.lock().unwrap();
-    let mut guard = cp.lock();
+    let resolved = format.resolve()?;
 
-    match (track_res.kind, format.resolve()?) {
-        (TrackRole::Video, ResolvedConfig::Video(config)) => {
-            guard
-                .video
-                .renditions
-                .insert(track_res.name.clone(), config);
-        }
-        (TrackRole::Audio, ResolvedConfig::Audio(config)) => {
-            guard
-                .audio
-                .renditions
-                .insert(track_res.name.clone(), config);
-        }
-        // Switching media role (e.g. audio track -> video format) isn't a format
-        // change of the same track; that needs a new track.
-        _ => {
-            return Err(crate::nif_error!(
-                "cannot change a track's media role in place"
-            ))
+    let tp = broadcast_res
+        .broadcast
+        .lock()
+        .unwrap()
+        .create_track(moq_net::Track {
+            name: track,
+            priority: 0,
+        })
+        .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
+    let name = tp.name.clone();
+    let kind = resolved.kind();
+
+    {
+        let mut cp = broadcast_res.catalog.lock().unwrap();
+        let mut guard = cp.lock();
+        match resolved {
+            ResolvedConfig::Video(config) => {
+                guard.video.renditions.insert(name.clone(), config);
+            }
+            ResolvedConfig::Audio(config) => {
+                guard.audio.renditions.insert(name.clone(), config);
+            }
         }
     }
 
-    Ok(atoms::ok())
+    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
+
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(TrackResource {
+            producer: Mutex::new(producer),
+            suffix: name.clone(),
+            broadcast_res,
+            name,
+            kind,
+        }),
+    ))
+}
+
+/// Replace a live track with one carrying a new format, published on a brand-new moq track.
+/// Returns a new track resource through which all subsequent frames must be sent.
+#[rustler::nif]
+pub(crate) fn replace_track(
+    old_track_res: ResourceArc<TrackResource>,
+    format: TrackFormat,
+) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
+    let _guard = runtime().handle().enter();
+
+    let resolved = format.resolve()?;
+    let kind = resolved.kind();
+
+    if kind != old_track_res.kind {
+        return Err(crate::nif_error!(
+            "cannot change a track's media kind in place"
+        ));
+    }
+
+    let broadcast_res = old_track_res.broadcast_res.clone();
+    let suffix = old_track_res.suffix.clone();
+
+    let tp = broadcast_res
+        .broadcast
+        .lock()
+        .unwrap()
+        .unique_track(&suffix)
+        .map_err(|e| crate::nif_error!("unique_track failed: {e}"))?;
+
+    let name = tp.name.clone();
+
+    {
+        let mut cp = broadcast_res.catalog.lock().unwrap();
+        let mut guard = cp.lock();
+        match resolved {
+            ResolvedConfig::Video(config) => {
+                guard.video.renditions.remove(&old_track_res.name);
+                guard.video.renditions.insert(name.clone(), config);
+            }
+            ResolvedConfig::Audio(config) => {
+                guard.audio.renditions.remove(&old_track_res.name);
+                guard.audio.renditions.insert(name.clone(), config);
+            }
+        }
+    }
+
+    let _ = old_track_res.producer.lock().unwrap().finish();
+
+    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
+
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(TrackResource {
+            producer: Mutex::new(producer),
+            broadcast_res,
+            name,
+            suffix,
+            kind,
+        }),
+    ))
 }
 
 fn h264_video_config(
@@ -249,85 +302,15 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     let mut cp = track_res.broadcast_res.catalog.lock().unwrap();
     let mut guard = cp.lock();
     match track_res.kind {
-        TrackRole::Video => {
+        TrackKind::Video => {
             guard.video.renditions.remove(&track_res.name);
         }
-        TrackRole::Audio => {
+        TrackKind::Audio => {
             guard.audio.renditions.remove(&track_res.name);
         }
     }
 
     atoms::ok()
-}
-
-fn add_video_track(
-    broadcast_res: ResourceArc<BroadcastResource>,
-    track: String,
-    config: hang::catalog::VideoConfig,
-) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
-    let _guard = runtime().handle().enter();
-
-    let tp = {
-        let mut bp = broadcast_res.broadcast.lock().unwrap();
-        bp.create_track(hang::moq_net::Track {
-            name: track.clone(),
-            priority: 0,
-        })
-        .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
-    };
-
-    {
-        let mut cp = broadcast_res.catalog.lock().unwrap();
-        let mut guard = cp.lock();
-        guard.video.renditions.insert(track.clone(), config);
-    }
-
-    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
-
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(TrackResource {
-            producer: Mutex::new(producer),
-            broadcast_res,
-            name: track,
-            kind: TrackRole::Video,
-        }),
-    ))
-}
-
-fn add_audio_track(
-    broadcast_res: ResourceArc<BroadcastResource>,
-    track: String,
-    config: hang::catalog::AudioConfig,
-) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
-    let _guard = runtime().handle().enter();
-
-    let tp = {
-        let mut bp = broadcast_res.broadcast.lock().unwrap();
-        bp.create_track(hang::moq_net::Track {
-            name: track.clone(),
-            priority: 0,
-        })
-        .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
-    };
-
-    {
-        let mut cp = broadcast_res.catalog.lock().unwrap();
-        let mut guard = cp.lock();
-        guard.audio.renditions.insert(track.clone(), config);
-    }
-
-    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
-
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(TrackResource {
-            producer: Mutex::new(producer),
-            broadcast_res,
-            name: track,
-            kind: TrackRole::Audio,
-        }),
-    ))
 }
 
 fn create_video_config(

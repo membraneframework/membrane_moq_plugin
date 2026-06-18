@@ -29,8 +29,12 @@ defmodule Membrane.MoQ.Sink do
     options: [
       track: [
         spec: String.t(),
-        description:
-          "Track name for this pad's stream, see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
+        description: """
+        Track name for this pad's stream, see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology.
+        This will be the track name advertised by the hang/MSF catalog unless the stream format changes mid-stream.
+        On a mid-stream format change, the current track is removed,
+        and a new track is added with a different track name to avoid races with the catalog track.
+        """
       ]
     ]
 
@@ -139,19 +143,23 @@ defmodule Membrane.MoQ.Sink do
   def handle_stream_format(pad, fmt, _ctx, %State{broadcast_resource: broadcast_res} = state) do
     pad_state = Map.fetch!(state.pads, pad)
 
-    track_resource =
-      case pad_state.track_resource do
-        nil ->
-          add_track(broadcast_res, pad_state, fmt)
+    track_fmt = track_format(fmt)
 
-        existing ->
-          case Native.update_track(existing, track_format(fmt)) do
-            :ok -> existing
-            {:error, reason} -> raise "Failed to update track format, reason: #{inspect(reason)}"
-          end
+    track_res =
+      pad_state.track_resource
+      |> case do
+        nil -> Native.add_track(broadcast_res, pad_state.track, track_fmt)
+        existing -> Native.replace_track(existing, track_fmt)
+      end
+      |> case do
+        {:ok, track_res} ->
+          track_res
+
+        {:error, reason} ->
+          raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
       end
 
-    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource})}
+    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_res})}
   end
 
   @impl true
@@ -200,15 +208,6 @@ defmodule Membrane.MoQ.Sink do
 
       {nil, _pads} ->
         state
-    end
-  end
-
-  @spec add_track(Native.broadcast(), State.pad_state(), Membrane.StreamFormat.t()) ::
-          Native.track()
-  defp add_track(broadcast_resource, pad_state, fmt) do
-    case Native.add_track(broadcast_resource, pad_state.track, track_format(fmt)) do
-      {:ok, track_resource} -> track_resource
-      {:error, reason} -> raise "Failed to add track, reason: #{inspect(reason)}"
     end
   end
 

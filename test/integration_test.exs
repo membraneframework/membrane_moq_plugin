@@ -58,6 +58,30 @@ defmodule Membrane.MoQ.IntegrationTest do
     :ok = Membrane.Pipeline.terminate(receiver)
   end
 
+  test "avc3 frames (in-band parameter sets) round-trip unchanged through the Source", %{
+    broadcast: broadcast
+  } do
+    # Mirrors the `publish_and_play.exs` example, which publishes `:avc3` so the
+    # SPS/PPS travel in-band (the Source never surfaces the catalog's avcC). This
+    # asserts those length-prefixed access units survive the Sink -> relay ->
+    # Source round-trip byte-for-byte, which is what makes them decodable
+    # downstream without the out-of-band decoder config.
+    receiver = start_receiver!(broadcast)
+    sender = start_sender!(broadcast, stream_structure: :avc3)
+    await_source_connected!(receiver)
+
+    expected_payloads = collect_recorded_payloads()
+    assert expected_payloads != []
+
+    assert_end_of_stream(receiver, :sink, :input, 30_000)
+    received_payloads = drain_received_payloads(receiver)
+
+    assert received_payloads == expected_payloads
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
   test "Source emits end_of_stream when the publisher disconnects", %{broadcast: broadcast} do
     receiver = start_receiver!(broadcast)
     sender = start_sender!(broadcast)
@@ -78,9 +102,9 @@ defmodule Membrane.MoQ.IntegrationTest do
         child(:source, %Membrane.MoQ.Source{
           url: @relay_url,
           broadcast: broadcast,
-          track: @track,
           disable_tls_verify?: true
         })
+        |> via_out(Pad.ref(:output, :video), options: [track: @track])
         |> child(:sink, Sink)
     )
   end
@@ -88,13 +112,14 @@ defmodule Membrane.MoQ.IntegrationTest do
   defp start_sender!(broadcast, opts \\ []) do
     max_buffers = Keyword.get(opts, :max_buffers, 30)
     pts_step_ms = Keyword.get(opts, :pts_step_ms, 33)
+    stream_structure = Keyword.get(opts, :stream_structure, :avc1)
 
     Pipeline.start_link_supervised!(
       spec:
         child(:file_source, %Membrane.File.Source{
           location: "test/fixtures/bbb_with_aud.h264"
         })
-        |> child(:parser, %Membrane.H264.Parser{output_stream_structure: :avc1})
+        |> child(:parser, %Membrane.H264.Parser{output_stream_structure: stream_structure})
         |> child(:recorder, %BufferRecorder{
           recipient: self(),
           pts_step: Membrane.Time.milliseconds(pts_step_ms),
@@ -105,10 +130,11 @@ defmodule Membrane.MoQ.IntegrationTest do
         # receiver before the broadcast closes.
         |> child(:realtimer, Membrane.Realtimer)
         |> via_in(Pad.ref(:input, :video),
-          options: [broadcast: broadcast, track: @track]
+          options: [track: @track]
         )
         |> child(:moq_sink, %Membrane.MoQ.Sink{
           url: @relay_url,
+          broadcast: broadcast,
           disable_tls_verify?: true
         })
     )
@@ -133,8 +159,7 @@ defmodule Membrane.MoQ.IntegrationTest do
   defp drain_received_payloads(pipeline, acc \\ []) do
     receive do
       {Membrane.Testing.Pipeline, ^pipeline,
-       {:handle_child_notification,
-        {{:buffer, %Membrane.Buffer{payload: payload}}, :sink}}} ->
+       {:handle_child_notification, {{:buffer, %Membrane.Buffer{payload: payload}}, :sink}}} ->
         drain_received_payloads(pipeline, [payload | acc])
     after
       0 -> Enum.reverse(acc)

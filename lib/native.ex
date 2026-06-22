@@ -139,25 +139,53 @@ defmodule Membrane.MoQ.Native do
   def remove_track(_track_res),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  @type subscriber :: reference()
+
   @doc """
-  Connects to a MoQ relay and subscribes to `track` inside `broadcast`.
+  Connects to a MoQ relay and prepares to subscribe to tracks of `broadcast`.
+
+  A single shared QUIC connection serves every track; subscribe to individual
+  tracks with `subscribe_track/3`.
+
+  `latency_ns` is how long each track buffers received frames before emitting
+  them, in nanoseconds, trading delay for resilience to jitter and reordering.
 
   Sends the following messages to `pid`:
-    * `:moq_connected` once the broadcast is announced and the subscription is open
-    * `{:moq_frame, payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
-      for every received frame
+    * `:moq_connected` once the broadcast is announced
     * `{:moq_setup_failed, reason :: String.t()}` if connection or broadcast
       discovery fails
-    * `{:moq_disconnected, reason :: String.t()}` when the track or session ends
+    * `{:moq_disconnected, reason :: String.t()}` when the session ends
   """
-  @spec start_subscriber(String.t(), String.t(), String.t(), pid(), boolean()) ::
-          {:ok, subscriber :: reference()} | {:error, reason :: String.t()}
-  def start_subscriber(_url, _broadcast, _track, _pid, _disable_tls_verify?),
+  @spec start_subscriber(String.t(), String.t(), pid(), boolean(), non_neg_integer()) ::
+          {:ok, subscriber()} | {:error, reason :: String.t()}
+  def start_subscriber(_url, _broadcast, _pid, _disable_tls_verify?, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Tears down a subscriber. Idempotent.
+  Subscribes to `track` within the broadcast opened by `start_subscriber/4`.
+
+  `token` is an opaque integer echoed back in this track's messages so the
+  caller can route them to the originating pad. Sends to the subscriber's `pid`:
+    * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
+      for every received frame
+    * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the
+      track ends cleanly or errors (not sent when cancelled via `unsubscribe_track/2`)
   """
-  @spec stop_subscriber(reference()) :: :ok
-  def stop_subscriber(_resource), do: :erlang.nif_error(:nif_not_loaded)
+  @spec subscribe_track(subscriber(), String.t(), integer()) :: :ok
+  def subscribe_track(_subscriber, _track, _token),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Cancels the subscription identified by `token`. No `{:moq_track_ended, ...}`
+  is sent for a cancelled track. Idempotent.
+  """
+  @spec unsubscribe_track(subscriber(), integer()) :: :ok
+  def unsubscribe_track(_subscriber, _token),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Tears down a subscriber and all its track subscriptions. Idempotent.
+  """
+  @spec stop_subscriber(subscriber()) :: :ok
+  def stop_subscriber(_subscriber), do: :erlang.nif_error(:nif_not_loaded)
 end

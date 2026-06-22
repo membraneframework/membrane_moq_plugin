@@ -7,7 +7,7 @@ defmodule Membrane.MoQ.SinkTest do
     pipeline = Pipeline.start_supervised!()
     ref = Process.monitor(pipeline)
 
-    spec = child(:sink, %Membrane.MoQ.Sink{url: "not a url"})
+    spec = child(:sink, %Membrane.MoQ.Sink{url: "not a url", broadcast: "test"})
     :ok = Pipeline.execute_actions(pipeline, spec: spec)
 
     assert_receive {:DOWN, ^ref, :process, ^pipeline, reason}, 5_000

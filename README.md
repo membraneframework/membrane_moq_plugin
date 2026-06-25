@@ -17,7 +17,7 @@ The package can be installed by adding `membrane_template_plugin` to your list o
 ```elixir
 def deps do
   [
-    {:membrane_template_plugin, "~> 0.1.0"}
+    {:membrane_template_plugin, "~> 0.1.1"}
   ]
 end
 ```

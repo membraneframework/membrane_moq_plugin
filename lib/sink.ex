@@ -99,14 +99,24 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_setup(_ctx, %State{url: url, disable_tls_verify?: disable_tls_verify?} = state) do
+  def handle_setup(ctx, %State{url: url, disable_tls_verify?: disable_tls_verify?} = state) do
     {:ok, session} = Native.setup_session(url, self(), disable_tls_verify?)
+
+    Membrane.ResourceGuard.register(ctx.resource_guard, fn ->
+      Native.close_session(session)
+    end)
+
     {[setup: :incomplete], %{state | session: session}}
   end
 
   @impl true
-  def handle_info(:moq_connected, _ctx, %State{session: session, broadcast: broadcast} = state) do
+  def handle_info(:moq_connected, ctx, %State{session: session, broadcast: broadcast} = state) do
     {:ok, resource} = Native.open_broadcast(session, broadcast)
+
+    Membrane.ResourceGuard.register(ctx.resource_guard, fn ->
+      Native.close_broadcast(resource)
+    end)
+
     {[setup: :complete], %{state | broadcast_resource: resource}}
   end
 
@@ -191,14 +201,8 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_end_of_stream(pad, _ctx, %State{broadcast_resource: resource} = state) do
+  def handle_end_of_stream(pad, _ctx, state) do
     state = close_pad(pad, state)
-
-    if state.pads == %{} do
-      Native.close_broadcast(resource)
-      :ok = Native.close_session(state.session)
-    end
-
     {[], state}
   end
 

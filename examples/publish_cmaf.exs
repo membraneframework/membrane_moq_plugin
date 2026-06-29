@@ -1,18 +1,8 @@
-# Publishes a sample H.264/AAC stream to a local MoQ relay via the CMAF muxer.
-#
-# Prerequisites:
-#   - A MoQ relay running at https://localhost:4443 (e.g. moq-relay)
-#   - An OBS instance with the moq-obs plugin subscribed to broadcast "example"
-#
-# Run with:
-#   elixir examples/publish_cmaf.exs
-
 Mix.install([
   :membrane_aac_plugin,
   :membrane_h26x_plugin,
   :membrane_hackney_plugin,
   {:membrane_mp4_plugin, "~> 0.34.0"},
-  # Playback branch deps
   {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"},
   {:membrane_aac_fdk_plugin, "~> 0.18.13"},
   {:membrane_sdl_plugin, "~> 0.18.6"},
@@ -70,8 +60,9 @@ defmodule Example do
         segment_min_duration: Time.seconds(2)
       })
       |> child(:sink, %Membrane.MoQ.Sink{
-        url: "https://localhost:4443",
-        broadcast: "example"
+        url: "https://localhost:4443/anon",
+        broadcast: "example",
+        disable_tls_verify?: true
       }),
 
       # --- Playback branch (comment out to use MoQ branch only) ---

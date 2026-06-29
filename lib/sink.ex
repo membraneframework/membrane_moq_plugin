@@ -210,7 +210,10 @@ defmodule Membrane.MoQ.Sink do
   defp close_pad(pad, state) do
     case Map.pop(state.pads, pad) do
       {%{track_resource: track_resource}, pads} ->
-        :ok = Native.remove_track(track_resource)
+        if not is_nil(track_resource) do
+          :ok = Native.remove_track(track_resource)
+        end
+
         %{state | pads: pads}
 
       {nil, _pads} ->

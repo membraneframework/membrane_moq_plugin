@@ -16,6 +16,8 @@ defmodule Membrane.MoQ.Test.BufferRecorder do
   This lets a test capture exactly the bytes published through the `Sink` and
   later assert they match the bytes received through the `Source`.
   """
+
+  # __jm__ TODO: remove this module or add it to Membrane.Testing if necessary
   use Membrane.Filter
 
   def_options recipient: [

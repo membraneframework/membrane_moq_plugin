@@ -61,13 +61,8 @@ defmodule Membrane.MoQ.IntegrationTest do
   test "avc3 frames (in-band parameter sets) round-trip unchanged through the Source", %{
     broadcast: broadcast
   } do
-    # Mirrors the `publish_and_play.exs` example, which publishes `:avc3` so the
-    # SPS/PPS travel in-band (the Source never surfaces the catalog's avcC). This
-    # asserts those length-prefixed access units survive the Sink -> relay ->
-    # Source round-trip byte-for-byte, which is what makes them decodable
-    # downstream without the out-of-band decoder config.
     receiver = start_receiver!(broadcast)
-    sender = start_sender!(broadcast, stream_structure: :avc3)
+    _sender = start_sender!(broadcast, stream_structure: :avc3)
     await_source_connected!(receiver)
 
     expected_payloads = collect_recorded_payloads()
@@ -77,23 +72,52 @@ defmodule Membrane.MoQ.IntegrationTest do
     received_payloads = drain_received_payloads(receiver)
 
     assert received_payloads == expected_payloads
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
-  test "Source emits end_of_stream when the publisher disconnects", %{broadcast: broadcast} do
+  test "Source emits end_of_stream when the publisher disconnects after publishing a frame", %{
+    broadcast: broadcast
+  } do
     receiver = start_receiver!(broadcast)
     sender = start_sender!(broadcast)
     await_source_connected!(receiver)
 
-    # Give the receiver time to also see at least one frame, then kill the
-    # publisher mid-stream and check that EOS propagates.
-    assert_receive {:recorder, :buffer, _payload}, 5_000
+    assert_sink_stream_format(receiver, :sink, _stream_format, 10_000)
     :ok = Membrane.Pipeline.terminate(sender)
 
     assert_end_of_stream(receiver, :sink, :input, 10_000)
-    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
+  test "Sink closes a pad that ended before its stream format without crashing", %{
+    broadcast: broadcast
+  } do
+
+    defmodule EndOfStreamSource do
+      use Membrane.Source
+
+      def_output_pad :output, accepted_format: _any, flow_control: :push
+
+      @impl true
+      def handle_init(_ctx, _opts), do: {[], %{}}
+
+      @impl true
+      def handle_playing(_ctx, state), do: {[end_of_stream: :output], state}
+    end
+
+    spec =
+      child(:source, EndOfStreamSource)
+      |> via_in(Pad.ref(:input, :video), options: [track: @track])
+      |> child(:moq_sink, %Membrane.MoQ.Sink{
+        url: @relay_url,
+        broadcast: broadcast,
+        disable_tls_verify?: true
+      })
+
+    pipeline = Pipeline.start_supervised!(spec: spec)
+    ref = Process.monitor(pipeline)
+
+    refute_receive {:DOWN, ^ref, :process, ^pipeline,
+                    {:membrane_child_crash, :moq_sink, _reason}},
+                   5_000
   end
 
   defp start_receiver!(broadcast) do

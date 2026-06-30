@@ -26,7 +26,9 @@ pub(crate) mod atoms {
         moq_setup_failed,
         moq_disconnected,
         moq_frame,
+        moq_track_format,
         moq_track_ended,
+        moq_tracks,
     }
 }
 

@@ -14,17 +14,16 @@ defmodule Membrane.MoQ.Sink do
   require Membrane.H264
   require Membrane.H265
 
-  alias Membrane.{AAC, H264, H265, Opus}
-  alias Membrane.MoQ.Native
+  alias Membrane.MoQ.{Native, TrackFormat}
 
   def_input_pad :input,
     availability: :on_request,
     accepted_format:
       any_of(
-        AAC,
-        Opus,
-        %H264{stream_structure: ss} when H264.is_avc(ss),
-        %H265{stream_structure: ss} when H265.is_hvc(ss)
+        Membrane.AAC,
+        Membrane.Opus,
+        %Membrane.H264{stream_structure: ss} when Membrane.H264.is_avc(ss),
+        %Membrane.H265{stream_structure: ss} when Membrane.H265.is_hvc(ss)
       ),
     options: [
       track: [
@@ -153,7 +152,7 @@ defmodule Membrane.MoQ.Sink do
   def handle_stream_format(pad, fmt, _ctx, %State{broadcast_resource: broadcast_res} = state) do
     pad_state = Map.fetch!(state.pads, pad)
 
-    track_fmt = track_format(fmt)
+    track_fmt = TrackFormat.from_stream_format(fmt)
 
     track_res =
       pad_state.track_resource
@@ -220,83 +219,6 @@ defmodule Membrane.MoQ.Sink do
         state
     end
   end
-
-  @spec track_format(Membrane.StreamFormat.t()) :: Native.track_format()
-  defp track_format(%H264{
-         height: height,
-         width: width,
-         framerate: framerate,
-         stream_structure: {tag, dcr}
-       }) do
-    dcr_parsed = Membrane.H264.DecoderConfigurationRecord.parse(dcr)
-
-    {:h264,
-     %{
-       params: %Membrane.MoQ.Native.VideoTrackParams{
-         width: width,
-         height: height,
-         framerate: framerate_to_float(framerate)
-       },
-       dcr: dcr,
-       codec: %Membrane.MoQ.Native.H264Codec{
-         inline:
-           case tag do
-             :avc1 -> false
-             :avc3 -> true
-           end,
-         profile: dcr_parsed.avc_profile_indication,
-         constraints: dcr_parsed.profile_compatibility,
-         level: dcr_parsed.avc_level
-       }
-     }}
-  end
-
-  defp track_format(%H265{
-         height: height,
-         width: width,
-         framerate: framerate,
-         stream_structure: {tag, dcr}
-       }) do
-    dcr_parsed = Membrane.H265.DecoderConfigurationRecord.parse(dcr)
-
-    {:h265,
-     %{
-       params: %Membrane.MoQ.Native.VideoTrackParams{
-         width: width,
-         height: height,
-         framerate: framerate_to_float(framerate)
-       },
-       dcr: dcr,
-       codec: %Membrane.MoQ.Native.H265Codec{
-         in_band:
-           case tag do
-             :hev1 -> true
-             :hvc1 -> false
-           end,
-         profile_space: dcr_parsed.profile_space,
-         profile_idc: dcr_parsed.profile_idc,
-         profile_compatibility_flags:
-           <<dcr_parsed.profile_compatibility_flags::32>> |> :binary.bin_to_list(),
-         tier_flag: dcr_parsed.tier_flag > 0,
-         level_idc: dcr_parsed.level_idc,
-         constraint_flags: <<dcr_parsed.constraint_indicator_flags::48>> |> :binary.bin_to_list()
-       }
-     }}
-  end
-
-  defp track_format(%AAC{profile: profile, sample_rate: sample_rate, channels: channels}),
-    do:
-      {:aac,
-       %{profile: AAC.profile_to_aot_id(profile), sample_rate: sample_rate, channels: channels}}
-
-  defp track_format(%Opus{channels: channels}),
-    do: {:opus, %{sample_rate: 48_000, channels: channels}}
-
-  @spec framerate_to_float({integer(), integer()} | nil) :: float()
-  defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,
-    do: num / den
-
-  defp framerate_to_float(nil), do: 0.0
 
   @spec keyframe?(Membrane.Buffer.t()) :: boolean()
   defp keyframe?(%Membrane.Buffer{metadata: %{h264: %{key_frame?: kf}}}), do: kf

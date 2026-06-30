@@ -1,6 +1,6 @@
-use rustler::NifStruct;
+use rustler::{Binary, NifStruct, NifTaggedEnum};
 
-#[derive(NifStruct)]
+#[derive(NifStruct, Clone)]
 #[module = "Membrane.MoQ.Native.VideoTrackParams"]
 pub(crate) struct VideoTrackParams {
     pub(crate) width: u32,
@@ -8,7 +8,14 @@ pub(crate) struct VideoTrackParams {
     pub(crate) framerate: f64,
 }
 
-#[derive(NifStruct)]
+#[derive(NifStruct, Clone)]
+#[module = "Membrane.MoQ.Native.AudioTrackParams"]
+pub(crate) struct AudioTrackParams {
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u32,
+}
+
+#[derive(NifStruct, Clone)]
 #[module = "Membrane.MoQ.Native.H264Codec"]
 pub(crate) struct H264Codec {
     pub(crate) inline: bool,
@@ -17,7 +24,7 @@ pub(crate) struct H264Codec {
     pub(crate) level: u8,
 }
 
-#[derive(NifStruct)]
+#[derive(NifStruct, Clone)]
 #[module = "Membrane.MoQ.Native.H265Codec"]
 pub(crate) struct H265Codec {
     pub(crate) in_band: bool,
@@ -27,4 +34,32 @@ pub(crate) struct H265Codec {
     pub(crate) tier_flag: bool,
     pub(crate) level_idc: u8,
     pub(crate) constraint_flags: Vec<u8>,
+}
+
+#[derive(NifStruct, Clone)]
+#[module = "Membrane.MoQ.Native.AACCodec"]
+pub(crate) struct AacCodec {
+    pub(crate) profile: u8,
+}
+
+#[derive(NifTaggedEnum)]
+pub(crate) enum TrackFormat<'a> {
+    H264 {
+        params: VideoTrackParams,
+        description: Binary<'a>,
+        codec: H264Codec,
+    },
+    H265 {
+        params: VideoTrackParams,
+        description: Binary<'a>,
+        codec: H265Codec,
+    },
+    Aac {
+        params: AudioTrackParams,
+        codec: AacCodec,
+    },
+    Opus {
+        params: AudioTrackParams,
+    },
+    Unrecognized,
 }

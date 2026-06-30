@@ -1,13 +1,13 @@
 use hang::moq_net;
 
 use bytes::Bytes;
-use rustler::{Atom, Binary, NifResult, NifTaggedEnum, Resource, ResourceArc};
+use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
 use std::sync::Mutex;
 
 use crate::{
     atoms,
     broadcast::BroadcastResource,
-    nif_types::{H264Codec, H265Codec, VideoTrackParams},
+    nif_types::{H264Codec, H265Codec, TrackFormat, VideoTrackParams},
     runtime,
 };
 
@@ -31,29 +31,6 @@ pub(crate) enum TrackKind {
     Audio,
 }
 
-#[derive(NifTaggedEnum)]
-pub(crate) enum TrackFormat<'a> {
-    H264 {
-        params: VideoTrackParams,
-        dcr: Binary<'a>,
-        codec: H264Codec,
-    },
-    H265 {
-        params: VideoTrackParams,
-        dcr: Binary<'a>,
-        codec: H265Codec,
-    },
-    Aac {
-        profile: u8,
-        sample_rate: u32,
-        channels: u32,
-    },
-    Opus {
-        sample_rate: u32,
-        channels: u32,
-    },
-}
-
 enum ResolvedConfig {
     Video(hang::catalog::VideoConfig),
     Audio(hang::catalog::AudioConfig),
@@ -71,21 +48,27 @@ impl ResolvedConfig {
 impl TrackFormat<'_> {
     fn resolve(self) -> NifResult<ResolvedConfig> {
         let config = match self {
-            TrackFormat::H264 { params, dcr, codec } => {
-                ResolvedConfig::Video(h264_video_config(params, dcr.as_slice(), codec))
+            TrackFormat::H264 {
+                params,
+                description,
+                codec,
+            } => ResolvedConfig::Video(h264_video_config(params, description.as_slice(), codec)),
+            TrackFormat::H265 {
+                params,
+                description,
+                codec,
+            } => ResolvedConfig::Video(h265_video_config(params, description.as_slice(), codec)?),
+            TrackFormat::Aac { params, codec } => ResolvedConfig::Audio(aac_audio_config(
+                codec.profile,
+                params.sample_rate,
+                params.channels,
+            )),
+            TrackFormat::Opus { params } => {
+                ResolvedConfig::Audio(opus_audio_config(params.sample_rate, params.channels))
             }
-            TrackFormat::H265 { params, dcr, codec } => {
-                ResolvedConfig::Video(h265_video_config(params, dcr.as_slice(), codec)?)
+            TrackFormat::Unrecognized => {
+                return Err(crate::nif_error!("cannot publish an unrecognized track format"))
             }
-            TrackFormat::Aac {
-                profile,
-                sample_rate,
-                channels,
-            } => ResolvedConfig::Audio(aac_audio_config(profile, sample_rate, channels)),
-            TrackFormat::Opus {
-                sample_rate,
-                channels,
-            } => ResolvedConfig::Audio(opus_audio_config(sample_rate, channels)),
         };
         Ok(config)
     }

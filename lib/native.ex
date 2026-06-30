@@ -9,13 +9,23 @@ defmodule Membrane.MoQ.Native do
   @type session :: reference()
 
   defmodule VideoTrackParams do
-    @moduledoc "Parameters that describe a `hang` video track."
+    @moduledoc "Codec-agnostic parameters of a `hang` video track"
     @type t :: %__MODULE__{
             width: non_neg_integer(),
             height: non_neg_integer(),
             framerate: float()
           }
     @enforce_keys [:width, :height, :framerate]
+    defstruct @enforce_keys
+  end
+
+  defmodule AudioTrackParams do
+    @moduledoc "Codec-agnostic parameters of a `hang` audio track"
+    @type t :: %__MODULE__{
+            sample_rate: non_neg_integer(),
+            channels: non_neg_integer()
+          }
+    @enforce_keys [:sample_rate, :channels]
     defstruct @enforce_keys
   end
 
@@ -46,6 +56,13 @@ defmodule Membrane.MoQ.Native do
       :level_idc,
       :constraint_flags
     ]
+    defstruct @enforce_keys
+  end
+
+  defmodule AACCodec do
+    @moduledoc "AAC parameters required by `hang`"
+    @type t :: %__MODULE__{profile: byte()}
+    @enforce_keys [:profile]
     defstruct @enforce_keys
   end
 
@@ -87,12 +104,15 @@ defmodule Membrane.MoQ.Native do
   def close_broadcast(_broadcast_resource),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  @typedoc """
+  Codec configuration mirroring `hang`'s catalog config.
+  """
   @type track_format() ::
-          {:h264, %{params: VideoTrackParams.t(), dcr: binary(), codec: H264Codec.t()}}
-          | {:h265, %{params: VideoTrackParams.t(), dcr: binary(), codec: H265Codec.t()}}
-          | {:aac,
-             %{profile: byte(), sample_rate: non_neg_integer(), channels: non_neg_integer()}}
-          | {:opus, %{sample_rate: non_neg_integer(), channels: Membrane.Opus.channels_t()}}
+          {:h264, %{params: VideoTrackParams.t(), description: binary(), codec: H264Codec.t()}}
+          | {:h265, %{params: VideoTrackParams.t(), description: binary(), codec: H265Codec.t()}}
+          | {:aac, %{params: AudioTrackParams.t(), codec: AACCodec.t()}}
+          | {:opus, %{params: AudioTrackParams.t()}}
+          | :unrecognized
 
   @doc """
   Adds a track of any supported codec to the given broadcast and returns a track
@@ -151,10 +171,14 @@ defmodule Membrane.MoQ.Native do
   them, in nanoseconds, trading delay for resilience to jitter and reordering.
 
   Sends the following messages to `pid`:
-    * `:moq_connected` once the broadcast is announced
-    * `{:moq_setup_failed, reason :: String.t()}` if connection or broadcast
-      discovery fails
-    * `{:moq_disconnected, reason :: String.t()}` when the session ends
+    * `:moq_connected`
+        once the broadcast is announced
+    * `{:moq_setup_failed, reason :: String.t()}`
+        if connection or broadcast discovery fails
+    * `{:moq_disconnected, reason :: String.t()}`
+        when the session ends
+    * `{:moq_tracks, [{name :: String.t(), format :: track_format()}]}`
+        whenever the broadcast catalog changes
   """
   @spec start_subscriber(String.t(), String.t(), pid(), boolean(), non_neg_integer()) ::
           {:ok, subscriber()} | {:error, reason :: String.t()}
@@ -166,6 +190,9 @@ defmodule Membrane.MoQ.Native do
 
   `token` is an opaque integer echoed back in this track's messages so the
   caller can route them to the originating pad. Sends to the subscriber's `pid`:
+    * `{:moq_track_format, token :: integer(), format}` once the catalog
+      advertises the track, before any frame. `format` is a `t:track_format/0`,
+      the same shape as in `{:moq_tracks, ...}` (see `start_subscriber/5`)
     * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
       for every received frame
     * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the

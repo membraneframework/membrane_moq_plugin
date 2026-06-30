@@ -2,33 +2,47 @@ defmodule Membrane.MoQ.Source do
   @moduledoc """
   Membrane Source acting as a MoQ subscriber.
 
-  Connects to a MoQ relay server and subscribes to tracks of a single
-  broadcast over one shared QUIC connection. Each `:output` pad subscribes to
-  one track, named via the pad's `track` option; add as many output pads as the
-  tracks you want to receive. Received frames are emitted as `Membrane.Buffer`s
-  on the pad with `pts` set to the frame's presentation timestamp and a
-  `keyframe?` flag in `metadata`. When a track ends (or the session
-  disconnects) the source sends an end-of-stream on the affected pad(s).
+  Connects to a MoQ relay server and subscribes to tracks of a single broadcast over one shared QUIC connection.
+  An output pad corresponds to one MoQ track.
 
-  Pads can be added or removed at any time during the pipeline lifecycle.
+  ## Track announcements
+
+  #{__MODULE__} watches the broadcast catalog and notifies its parent as tracks come and go,
+  so a pipeline can discover tracks and wire up pads dynamically instead of hard-coding track names:
+
+    * `{:new_track, Membrane.MoQ.Source.TrackInfo.t()}`
+        when a track is advertised.
+    * `{:track_removed, track :: String.t()}`
+        when an advertised track disappears from the catalog (e.g. the publisher ended it).
+    * `{:disconnected, reason :: String.t()}`
+        when the broadcast goes away (the publisher left) or the session drops.
+        The source end-of-streams its pads and and terminates.
   """
   use Membrane.Source
 
   require Membrane.Logger
+  require Membrane.{H264, H265}
 
-  alias Membrane.MoQ.Native
+  alias Membrane.MoQ.{Native, TrackFormat}
 
   def_output_pad :output,
     availability: :on_request,
-    accepted_format: Membrane.RemoteStream,
+    accepted_format:
+      any_of(
+        Membrane.AAC,
+        Membrane.Opus,
+        %Membrane.H264{stream_structure: ss} when Membrane.H264.is_avc(ss),
+        %Membrane.H265{stream_structure: ss} when Membrane.H265.is_hvc(ss),
+        Membrane.RemoteStream
+      ),
     flow_control: :push,
     options: [
       track: [
         spec: String.t(),
-        description:
-          "Catalog rendition key within the broadcast to subscribe to on this pad, " <>
-            "see `Track` at " <>
-            "https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
+        description: """
+        Catalog rendition key within the broadcast to subscribe to on this pad,
+        see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology
+        """
       ]
     ]
 
@@ -39,33 +53,52 @@ defmodule Membrane.MoQ.Source do
               ],
               broadcast: [
                 spec: String.t(),
-                description:
-                  "Broadcast path to subscribe to, see `Broadcast` at " <>
-                    "https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
+                description: """
+                Broadcast path to subscribe to,
+                see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology
+                """
               ],
               disable_tls_verify?: [
                 spec: boolean(),
                 default: false,
-                description:
-                  "If `true`, the QUIC client skips TLS certificate verification. " <>
-                    "Useful for self-signed local relays only."
+                description: """
+                If `true`, the QUIC client skips TLS certificate verification.
+                Useful for self-signed local relays only.
+                """
               ],
               latency: [
                 spec: Membrane.Time.t(),
                 default: Membrane.Time.seconds(1),
-                description:
-                  "How long each track buffers received frames before emitting them, " <>
-                    "trading end-to-end delay for resilience to network jitter and reordering."
+                description: """
+                How long each track buffers received frames before emitting them,
+                trading end-to-end delay for resilience to network jitter and reordering.
+                """
               ]
+
+  defmodule TrackInfo do
+    @moduledoc """
+    Describes a track advertised by the subscribed broadcast.
+
+    Carried by the `{:new_track, t:t/0}` parent notification (see `Membrane.MoQ.Source`).
+    """
+
+    @type t :: %__MODULE__{
+            track: String.t(),
+            type: :video | :audio | :unknown,
+            stream_format:
+              Membrane.H264.t()
+              | Membrane.H265.t()
+              | Membrane.AAC.t()
+              | Membrane.Opus.t()
+              | Membrane.RemoteStream.t()
+          }
+
+    @enforce_keys [:track, :type, :stream_format]
+    defstruct @enforce_keys
+  end
 
   defmodule State do
     @moduledoc false
-
-    @type pad_state :: %{
-            track: String.t(),
-            token: integer(),
-            eos?: boolean()
-          }
 
     @type t :: %__MODULE__{
             url: String.t(),
@@ -74,8 +107,8 @@ defmodule Membrane.MoQ.Source do
             latency: Membrane.Time.t(),
             subscriber: Native.subscriber() | nil,
             next_token: integer(),
-            pads: %{Membrane.Pad.ref() => pad_state()},
-            tokens: %{integer() => Membrane.Pad.ref()},
+            tokens: BiMap.t(),
+            advertised: %{String.t() => TrackInfo.t()},
             disconnect_pending?: boolean()
           }
 
@@ -84,8 +117,8 @@ defmodule Membrane.MoQ.Source do
                 [
                   subscriber: nil,
                   next_token: 0,
-                  pads: %{},
-                  tokens: %{},
+                  tokens: BiMap.new(),
+                  advertised: %{},
                   disconnect_pending?: false
                 ]
   end
@@ -123,62 +156,80 @@ defmodule Membrane.MoQ.Source do
   def handle_pad_added(pad, %{pad_options: %{track: track}} = ctx, state) do
     token = state.next_token
 
-    pad_state = %{track: track, token: token, eos?: false}
-
     state = %{
       state
       | next_token: token + 1,
-        pads: Map.put(state.pads, pad, pad_state),
-        tokens: Map.put(state.tokens, token, pad)
+        tokens: BiMap.put(state.tokens, token, pad)
     }
 
-    # A pad added after we're already playing must start streaming immediately;
-    # one added earlier is started in `handle_playing`.
     if ctx.playback == :playing do
-      start_pad(pad, state)
-    else
-      {[], state}
+      start_pad(track, token, state)
     end
+
+    {[], state}
   end
 
   @impl true
-  def handle_playing(_ctx, state) do
-    {actions, state} =
-      Enum.reduce(state.pads, {[], state}, fn {pad, _}, {acc, state} ->
-        {pad_actions, state} = start_pad(pad, state)
-        {acc ++ pad_actions, state}
-      end)
+  def handle_playing(ctx, %{disconnect_pending?: true} = state) do
+    {eos_all(ctx.pads), state}
+  end
 
-    # A disconnect can arrive while we're still in setup; in that case we
-    # remembered it and emit EOS (after stream_format above) now that we can.
-    if state.disconnect_pending? do
-      {eos_actions, state} = eos_all(state)
-      {actions ++ eos_actions, %{state | disconnect_pending?: false}}
-    else
-      {actions, state}
-    end
+  def handle_playing(ctx, state) do
+    Enum.each(state.tokens, fn {token, pad} ->
+      start_pad(ctx.pads[pad].options.track, token, state)
+    end)
+
+    {[], state}
   end
 
   @impl true
   def handle_pad_removed(pad, _ctx, state) do
-    case Map.pop(state.pads, pad) do
-      {nil, _pads} ->
+    case BiMap.get_key(state.tokens, pad) do
+      nil ->
         {[], state}
 
-      {%{token: token}, pads} ->
+      token ->
         Native.unsubscribe_track(state.subscriber, token)
-        {[], %{state | pads: pads, tokens: Map.delete(state.tokens, token)}}
+        {[], %{state | tokens: BiMap.delete_value(state.tokens, pad)}}
     end
   end
 
   @impl true
   def handle_info(:moq_connected, _ctx, state), do: {[setup: :complete], state}
 
-  def handle_info({:moq_frame, token, payload, timestamp_us, keyframe?}, _ctx, state)
-      when is_integer(token) and is_binary(payload) and is_integer(timestamp_us) and
-             is_boolean(keyframe?) do
-    case pad_for_token(state, token) do
-      {pad, %{eos?: false}} ->
+  def handle_info({:moq_tracks, tracks}, _ctx, %{advertised: old_advertised} = state) do
+    new_advertised =
+      Map.new(tracks, fn {name, format} -> {name, build_track_info(name, format)} end)
+
+    added =
+      for {name, info} <- new_advertised, not Map.has_key?(old_advertised, name) do
+        {:notify_parent, {:new_track, info}}
+      end
+
+    removed =
+      for {name, _info} <- old_advertised, not Map.has_key?(new_advertised, name) do
+        {:notify_parent, {:track_removed, name}}
+      end
+
+    {added ++ removed, %{state | advertised: new_advertised}}
+  end
+
+  def handle_info({:moq_track_format, token, format}, ctx, state) do
+    actions =
+      case active_pad(ctx, state, token) do
+        nil -> []
+        pad -> [stream_format: {pad, TrackFormat.to_stream_format(format)}]
+      end
+
+    {actions, state}
+  end
+
+  def handle_info({:moq_frame, token, payload, timestamp_us, keyframe?}, ctx, state) do
+    case active_pad(ctx, state, token) do
+      nil ->
+        {[], state}
+
+      pad ->
         buffer = %Membrane.Buffer{
           payload: payload,
           pts: Membrane.Time.microseconds(timestamp_us),
@@ -186,20 +237,19 @@ defmodule Membrane.MoQ.Source do
         }
 
         {[buffer: {pad, buffer}], state}
-
-      # Frame for a removed/ended track; drop it.
-      _ ->
-        {[], state}
     end
   end
 
-  def handle_info({:moq_track_ended, token, reason}, _ctx, state) do
+  def handle_info({:moq_track_ended, token, reason}, ctx, state) do
     Membrane.Logger.info("MoQ track ended: #{inspect(reason)}")
 
-    case pad_for_token(state, token) do
-      {pad, _pad_state} -> eos_pad(pad, state)
-      nil -> {[], state}
-    end
+    actions =
+      case active_pad(ctx, state, token) do
+        nil -> []
+        pad -> [end_of_stream: pad]
+      end
+
+    {actions, state}
   end
 
   def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
@@ -209,11 +259,12 @@ defmodule Membrane.MoQ.Source do
   def handle_info({:moq_disconnected, reason}, ctx, state) do
     Membrane.Logger.info("MoQ subscriber disconnected: #{inspect(reason)}")
 
-    if ctx.playback == :playing do
-      eos_all(state)
-    else
-      # EOS actions are only valid in :playing; defer until we get there.
-      {[], %{state | disconnect_pending?: true}}
+    state = %{state | advertised: %{}}
+    notify_disconnected = [notify_parent: {:disconnected, reason}]
+
+    case ctx.playback do
+      :playing -> {notify_disconnected ++ eos_all(ctx.pads), state}
+      _other -> {notify_disconnected, %{state | disconnect_pending?: true}}
     end
   end
 
@@ -222,45 +273,34 @@ defmodule Membrane.MoQ.Source do
     {[], state}
   end
 
-  # Sends the stream format and opens the track subscription for a pad. Frames
-  # arrive asynchronously as `{:moq_frame, token, ...}` once the relay starts
-  # serving the track.
-  @spec start_pad(Membrane.Pad.ref(), State.t()) :: {[Membrane.Element.Action.t()], State.t()}
-  defp start_pad(pad, state) do
-    pad_state = Map.fetch!(state.pads, pad)
-    :ok = Native.subscribe_track(state.subscriber, pad_state.track, pad_state.token)
-    {[stream_format: {pad, %Membrane.RemoteStream{}}], state}
+  @spec start_pad(String.t(), integer(), State.t()) :: :ok
+  defp start_pad(track, token, state) do
+    Native.subscribe_track(state.subscriber, track, token)
   end
 
-  @spec eos_pad(Membrane.Pad.ref(), State.t()) :: {[Membrane.Element.Action.t()], State.t()}
-  defp eos_pad(pad, state) do
-    case Map.fetch(state.pads, pad) do
-      {:ok, %{eos?: true}} ->
-        {[], state}
-
-      {:ok, pad_state} ->
-        {[end_of_stream: pad], put_in(state.pads[pad], %{pad_state | eos?: true})}
-
-      :error ->
-        {[], state}
+  @spec eos_all(%{Membrane.Pad.ref() => map()}) :: [Membrane.Element.Action.t()]
+  defp eos_all(pads) do
+    for {pad, %{end_of_stream?: false}} <- pads do
+      {:end_of_stream, pad}
     end
   end
 
-  @spec eos_all(State.t()) :: {[Membrane.Element.Action.t()], State.t()}
-  defp eos_all(state) do
-    Enum.reduce(state.pads, {[], state}, fn {pad, _}, {acc, state} ->
-      {actions, state} = eos_pad(pad, state)
-      {acc ++ actions, state}
-    end)
+  @spec build_track_info(String.t(), Native.track_format()) :: TrackInfo.t()
+  defp build_track_info(name, format) do
+    %TrackInfo{
+      track: name,
+      type: TrackFormat.media_type(format),
+      stream_format: TrackFormat.to_stream_format(format)
+    }
   end
 
-  @spec pad_for_token(State.t(), integer()) :: {Membrane.Pad.ref(), State.pad_state()} | nil
-  defp pad_for_token(state, token) do
-    with pad when not is_nil(pad) <- Map.get(state.tokens, token),
-         {:ok, pad_state} <- Map.fetch(state.pads, pad) do
-      {pad, pad_state}
+  @spec active_pad(map(), State.t(), integer()) :: Membrane.Pad.ref() | nil
+  defp active_pad(ctx, state, token) do
+    with {:ok, pad} <- BiMap.fetch(state.tokens, token),
+         %{end_of_stream?: false} <- ctx.pads[pad] do
+      pad
     else
-      _ -> nil
+      _error -> nil
     end
   end
 end

@@ -3,11 +3,17 @@ use std::time::Duration;
 
 use hang::moq_net;
 use moq_native::ClientConfig;
-use rustler::{Atom, Encoder, LocalPid, NifResult, OwnedBinary, OwnedEnv, Resource, ResourceArc};
-use tokio::sync::{mpsc, watch};
+use rustler::{
+    Atom, Binary, Encoder, Env, LocalPid, NifResult, OwnedBinary, OwnedEnv, Resource, ResourceArc,
+    Term,
+};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
 use url::Url;
 
+use crate::nif_types::{
+    AacCodec, AudioTrackParams, H264Codec, H265Codec, TrackFormat, VideoTrackParams,
+};
 use crate::{atoms, runtime};
 
 /// Token the Elixir side assigns to each subscription so it can route
@@ -15,9 +21,6 @@ use crate::{atoms, runtime};
 /// right pad. Opaque to Rust beyond being echoed in those messages.
 type Token = i64;
 
-/// Commands the session task accepts over its lifetime. Subscribing/unsubscribing
-/// tracks is driven from Elixir as pads are added and removed, so a single QUIC
-/// connection serves every track of one broadcast.
 enum Command {
     Subscribe { track: String, token: Token },
     Unsubscribe { token: Token },
@@ -38,8 +41,12 @@ impl Resource for SubscriberResource {}
 /// - `{:moq_setup_failed, reason :: String.t()}` is sent if connecting or finding
 ///   the broadcast fails.
 /// - `{:moq_disconnected, reason :: String.t()}` is sent when the session ends.
+/// - `{:moq_tracks, [{name, format}]}` is sent whenever the broadcast catalog
+///   changes, listing every advertised track and its codec parameters.
 ///
-/// Tracks are subscribed via [`subscribe_track`], each producing
+/// Tracks are subscribed via [`subscribe_track`]. Once the catalog advertises a
+/// subscribed track, `{:moq_track_format, token, format}` is sent (`format` is
+/// the same tagged codec-parameter term as in `{:moq_tracks, ...}`), followed by
 /// `{:moq_frame, token, payload, timestamp_us, keyframe?}` per frame and a final
 /// `{:moq_track_ended, token, reason}` when that track ends or errors.
 ///
@@ -66,8 +73,16 @@ pub(crate) fn start_subscriber(
             config
         };
 
-        if let Err(e) =
-            run_session(url, broadcast, &pid, config, latency, commands_rx, shutdown_rx).await
+        if let Err(e) = run_session(
+            url,
+            broadcast,
+            &pid,
+            config,
+            latency,
+            commands_rx,
+            shutdown_rx,
+        )
+        .await
         {
             send_setup_failed(&pid, e.to_string());
         }
@@ -146,6 +161,19 @@ async fn run_session(
     let mut pumps: JoinSet<()> = JoinSet::new();
     let mut cancels: HashMap<Token, watch::Sender<bool>> = HashMap::new();
 
+    // Watch the catalog and forward the advertised track list to Elixir as it
+    // changes, so the source can announce tracks to its parent. Lives in the
+    // same JoinSet, so it is aborted when this session task returns. When the
+    // catalog closes (the broadcast was unannounced, e.g. the publisher left)
+    // the watcher reports why via `catalog_done`, and we end the session so the
+    // Elixir side can tear down and resubscribe, mirroring moq-gst's moqsrc.
+    let (catalog_done_tx, mut catalog_done_rx) = oneshot::channel::<String>();
+    pumps.spawn(run_catalog_watcher(
+        broadcast.clone(),
+        *pid,
+        catalog_done_tx,
+    ));
+
     let disconnect_reason = loop {
         tokio::select! {
             command = commands_rx.recv() => match command {
@@ -166,6 +194,12 @@ async fn run_session(
             // A pump finished; the JoinSet reaps it. It already sent its own
             // {:moq_track_ended, ...}, so there's nothing to forward here.
             _ = pumps.join_next(), if !pumps.is_empty() => {}
+            // The catalog closed: the broadcast is gone. End the session so the
+            // Elixir side disconnects and can resubscribe to a fresh announce.
+            reason = &mut catalog_done_rx => break match reason {
+                Ok(reason) => reason,
+                Err(_) => "catalog watcher stopped".to_string(),
+            },
             result = session.closed() => break match result {
                 Ok(()) => "session closed gracefully".to_string(),
                 Err(e) => format!("session error: {e}"),
@@ -210,8 +244,11 @@ async fn pump_track(
     // Wait for the hang catalog to advertise the requested track before
     // subscribing to it. Publishers (including our own Sink) create tracks
     // lazily on the first stream_format, so a naive subscribe_track racing
-    // the broadcast announcement returns NotFound from the relay.
-    wait_for_track(broadcast, track_name).await?;
+    // the broadcast announcement returns NotFound from the relay. The catalog
+    // also tells us the track's codec parameters, which we forward as the stream
+    // format before any frame so the Elixir side can build the pad's format.
+    let params = wait_for_track(broadcast, track_name).await?;
+    send_track_format(pid, token, &params);
 
     let track_ref = moq_net::Track {
         name: track_name.to_string(),
@@ -246,10 +283,13 @@ async fn await_broadcast(
     None
 }
 
+/// Block until the catalog advertises `track_name`, then return its codec
+/// parameters. Mirrors the codecs the Sink can publish; anything else (or a
+/// codec we don't translate) resolves to [`TrackParams::Unrecognized`].
 async fn wait_for_track(
     broadcast: &moq_net::BroadcastConsumer,
     track_name: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<TrackParams> {
     let catalog_track = broadcast
         .subscribe_track(&hang::Catalog::default_track())
         .map_err(|e| anyhow::anyhow!("subscribe_track(catalog) failed: {e}"))?;
@@ -260,10 +300,11 @@ async fn wait_for_track(
             anyhow::anyhow!("catalog track closed before {track_name:?} appeared")
         })?;
 
-        if snapshot.video.renditions.contains_key(track_name)
-            || snapshot.audio.renditions.contains_key(track_name)
-        {
-            return Ok(());
+        if let Some(config) = snapshot.video.renditions.get(track_name) {
+            return Ok(video_params(config));
+        }
+        if let Some(config) = snapshot.audio.renditions.get(track_name) {
+            return Ok(audio_params(config));
         }
     }
 }
@@ -302,9 +343,206 @@ async fn pump_frames(
     Ok(())
 }
 
+/// Owned, NIF-free description of one advertised track, ready to encode.
+struct TrackEntry {
+    name: String,
+    params: TrackParams,
+}
+
+enum VideoCodecParams {
+    H264(H264Codec),
+    H265(H265Codec),
+}
+
+enum AudioCodecParams {
+    Aac(AacCodec),
+    Opus,
+}
+
+/// Owned (env-free) form of a track's codec parameters, collected by the
+/// catalog watcher and converted to a [`TrackFormat`] at encode time. Mirrors
+/// `TrackFormat` but holds owned bytes instead of an `env`-bound `Binary`, so it
+/// can be carried across `await` points before a term env exists.
+enum TrackParams {
+    Video {
+        params: VideoTrackParams,
+        /// Decoder configuration record (avcC/hvcC); empty when carried in-band.
+        description: Vec<u8>,
+        codec: VideoCodecParams,
+    },
+    Audio {
+        params: AudioTrackParams,
+        codec: AudioCodecParams,
+    },
+    /// A track whose codec the source does not translate to a Membrane format.
+    Unrecognized,
+}
+
+/// Subscribe to the broadcast catalog and forward the full advertised track set
+/// to `pid` on every update as `{:moq_tracks, [{name, format}]}`. Reports why it
+/// stopped on `done` once the catalog closes (broadcast gone) or `pid` dies.
+async fn run_catalog_watcher(
+    broadcast: moq_net::BroadcastConsumer,
+    pid: LocalPid,
+    done: oneshot::Sender<String>,
+) {
+    let reason = match watch_catalog(&broadcast, &pid).await {
+        Ok(()) => "broadcast ended".to_string(),
+        Err(e) => format!("catalog error: {e}"),
+    };
+    let _ = done.send(reason);
+}
+
+async fn watch_catalog(
+    broadcast: &moq_net::BroadcastConsumer,
+    pid: &LocalPid,
+) -> anyhow::Result<()> {
+    let catalog_track = broadcast
+        .subscribe_track(&hang::Catalog::default_track())
+        .map_err(|e| anyhow::anyhow!("subscribe_track(catalog) failed: {e}"))?;
+    let mut catalog = moq_mux::catalog::hang::Consumer::<()>::new(catalog_track);
+
+    while let Some(snapshot) = catalog.next().await? {
+        let mut entries = Vec::new();
+        for (name, config) in &snapshot.video.renditions {
+            entries.push(TrackEntry {
+                name: name.clone(),
+                params: video_params(config),
+            });
+        }
+        for (name, config) in &snapshot.audio.renditions {
+            entries.push(TrackEntry {
+                name: name.clone(),
+                params: audio_params(config),
+            });
+        }
+        send_tracks(pid, &entries)?;
+    }
+
+    Ok(())
+}
+
+fn video_params(config: &hang::catalog::VideoConfig) -> TrackParams {
+    let codec = match &config.codec {
+        hang::catalog::VideoCodec::H264(h) => VideoCodecParams::H264(H264Codec {
+            inline: h.inline,
+            profile: h.profile,
+            constraints: h.constraints,
+            level: h.level,
+        }),
+        hang::catalog::VideoCodec::H265(h) => VideoCodecParams::H265(H265Codec {
+            in_band: h.in_band,
+            profile_space: h.profile_space,
+            profile_idc: h.profile_idc,
+            profile_compatibility_flags: h.profile_compatibility_flags.to_vec(),
+            tier_flag: h.tier_flag,
+            level_idc: h.level_idc,
+            constraint_flags: h.constraint_flags.to_vec(),
+        }),
+        _ => return TrackParams::Unrecognized,
+    };
+
+    // `VideoTrackParams` carries concrete values; the catalog leaves these
+    // optional, so coerce a missing dimension/framerate to 0 (the Elixir side
+    // treats a 0 framerate as "unknown").
+    TrackParams::Video {
+        params: VideoTrackParams {
+            width: config.coded_width.unwrap_or(0),
+            height: config.coded_height.unwrap_or(0),
+            framerate: config.framerate.unwrap_or(0.0),
+        },
+        description: config
+            .description
+            .as_ref()
+            .map(|b| b.to_vec())
+            .unwrap_or_default(),
+        codec,
+    }
+}
+
+fn audio_params(config: &hang::catalog::AudioConfig) -> TrackParams {
+    let codec = match &config.codec {
+        hang::catalog::AudioCodec::AAC(aac) => AudioCodecParams::Aac(AacCodec {
+            profile: aac.profile,
+        }),
+        hang::catalog::AudioCodec::Opus => AudioCodecParams::Opus,
+        _ => return TrackParams::Unrecognized,
+    };
+
+    TrackParams::Audio {
+        params: AudioTrackParams {
+            sample_rate: config.sample_rate,
+            channels: config.channel_count,
+        },
+        codec,
+    }
+}
+
+fn send_tracks(pid: &LocalPid, tracks: &[TrackEntry]) -> anyhow::Result<()> {
+    let result = OwnedEnv::new().send_and_clear(pid, |env| {
+        let list: Vec<Term> = tracks.iter().map(|t| encode_track(env, t)).collect();
+        (atoms::moq_tracks(), list).encode(env)
+    });
+    result.map_err(|_| anyhow::anyhow!("subscriber pid is dead"))
+}
+
+fn encode_track<'a>(env: Env<'a>, entry: &TrackEntry) -> Term<'a> {
+    (entry.name.as_str(), encode_format(env, &entry.params)).encode(env)
+}
+
+/// Build the shared [`TrackFormat`] term from owned params. This is the inverse
+/// of the Sink's decode, so both directions speak the identical shape.
+fn encode_format<'a>(env: Env<'a>, params: &TrackParams) -> Term<'a> {
+    let format = match params {
+        TrackParams::Video {
+            params,
+            description,
+            codec,
+        } => {
+            let description = make_binary(env, description);
+            match codec {
+                VideoCodecParams::H264(codec) => TrackFormat::H264 {
+                    params: params.clone(),
+                    description,
+                    codec: codec.clone(),
+                },
+                VideoCodecParams::H265(codec) => TrackFormat::H265 {
+                    params: params.clone(),
+                    description,
+                    codec: codec.clone(),
+                },
+            }
+        }
+        TrackParams::Audio { params, codec } => match codec {
+            AudioCodecParams::Aac(codec) => TrackFormat::Aac {
+                params: params.clone(),
+                codec: codec.clone(),
+            },
+            AudioCodecParams::Opus => TrackFormat::Opus {
+                params: params.clone(),
+            },
+        },
+        TrackParams::Unrecognized => TrackFormat::Unrecognized,
+    };
+
+    format.encode(env)
+}
+
+fn make_binary<'a>(env: Env<'a>, bytes: &[u8]) -> Binary<'a> {
+    let mut bin = OwnedBinary::new(bytes.len()).expect("binary allocation should succeed");
+    bin.as_mut_slice().copy_from_slice(bytes);
+    bin.release(env)
+}
+
 fn send_setup_failed(pid: &LocalPid, reason: String) {
     let _ =
         OwnedEnv::new().send_and_clear(pid, |env| (atoms::moq_setup_failed(), reason).encode(env));
+}
+
+fn send_track_format(pid: &LocalPid, token: Token, params: &TrackParams) {
+    let _ = OwnedEnv::new().send_and_clear(pid, |env| {
+        (atoms::moq_track_format(), token, encode_format(env, params)).encode(env)
+    });
 }
 
 fn send_track_ended(pid: &LocalPid, token: Token, reason: String) {

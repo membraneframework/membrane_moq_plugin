@@ -29,11 +29,7 @@ pub(crate) fn setup_session(
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
 
     runtime().spawn(async move {
-        let config = {
-            let mut config = moq_native::ClientConfig::default();
-            config.tls.disable_verify = Some(disable_tls_verify);
-            config
-        };
+        let config = client_config(disable_tls_verify);
 
         let session = create_session(url, consume, config).await;
         match session {
@@ -68,6 +64,12 @@ pub(crate) fn setup_session(
 pub(crate) fn close_session(session: ResourceArc<SessionResource>) -> Atom {
     let _ = session.shutdown.send(());
     atoms::ok()
+}
+
+pub(crate) fn client_config(disable_tls_verify: bool) -> ClientConfig {
+    let mut config = ClientConfig::default();
+    config.tls.disable_verify = Some(disable_tls_verify);
+    config
 }
 
 async fn create_session(

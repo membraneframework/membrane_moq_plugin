@@ -1,11 +1,14 @@
+TODO: make this a livebook when separating to ex_moq
 # Rust bindings for MoQ publishing/subscribing
 
 ## Conceptual model
 
 Each MoQ track needs to be assigned to a broadcast.
 A broadcast is a collection of tracks, and a session is a collection of broadcasts.
+For details, see https://doc.moq.dev/concept/layer/moq-lite.html#terminology
 
-Here's a simple usage example:
+## Publishing example
+
 ```elixir
 alias Membrane.MoQ.Native
 
@@ -19,18 +22,36 @@ end
 
 {:ok, broadcast} = Native.open_broadcast(session, "my_broadcast")
 
-{:ok, audio_track} = Native.add_aac_track(broadcast, "my_audio_track", profile, sample_rate, channels)
-{:ok, video_track} = Native.add_h264_track(broadcast, "my_video_track", params, dcr, codec)
+format =
+  {:h264,
+   %{
+     params: %Native.VideoTrackParams{width: 1280, height: 720, framerate: 30.0},
+     description: avc_decoder_config_record,
+     codec: %Native.H264Codec{inline: false, profile: 100, constraints: 0, level: 31}
+   }}
+
+{:ok, video_track} = Native.add_track(broadcast, "my_video_track", format)
 
 IO.puts("MoQ setup successful, you can start streaming frames to PID #{inspect(self())}")
 
 Stream.repeatedly(fn ->
   receive do
-    {:audio, buf, timestamp_us} -> Native.send_frame(audio_track, timestamp_us, true, buf)
-    {:video, buf, timestamp_us, keyframe?} -> Native.send_frame(video_track, timestamp_us, keyframe?, buf)
+    {:video, buf, timestamp_us, keyframe?} ->
+      Native.send_frame(video_track, timestamp_us, keyframe?, buf)
   end
-end) |> Stream.run()
+end)
+|> Stream.run()
 ```
 
-For details, see https://doc.moq.dev/concept/layer/moq-lite.html#terminology
+## Subscribing example
+
+```elixir
+alias Membrane.MoQ.Native
+
+{:ok, subscriber} = Native.start_subscriber(url, "my_broadcast", self(), false, latency_ns)
+
+Native.subscribe_track(subscriber, "my_video_track", token)
+
+# TODO: add receiving snippet example here
+```
 

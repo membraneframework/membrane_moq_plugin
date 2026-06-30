@@ -1,14 +1,13 @@
 use hang::moq_net;
 
-use bytes::Bytes;
 use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
 use std::sync::Mutex;
 
 use crate::{
     atoms,
     broadcast::BroadcastResource,
-    nif_types::{H264Codec, H265Codec, TrackFormat, VideoTrackParams},
     runtime,
+    track_format::{ResolvedConfig, TrackFormat, TrackKind},
 };
 
 type LegacyProducer = moq_mux::container::Producer<moq_mux::container::legacy::Wire>;
@@ -24,55 +23,6 @@ pub(crate) struct TrackResource {
 }
 
 impl Resource for TrackResource {}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum TrackKind {
-    Video,
-    Audio,
-}
-
-enum ResolvedConfig {
-    Video(hang::catalog::VideoConfig),
-    Audio(hang::catalog::AudioConfig),
-}
-
-impl ResolvedConfig {
-    fn kind(&self) -> TrackKind {
-        match self {
-            ResolvedConfig::Video(_) => TrackKind::Video,
-            ResolvedConfig::Audio(_) => TrackKind::Audio,
-        }
-    }
-}
-
-impl TrackFormat<'_> {
-    fn resolve(self) -> NifResult<ResolvedConfig> {
-        let config = match self {
-            TrackFormat::H264 {
-                params,
-                description,
-                codec,
-            } => ResolvedConfig::Video(h264_video_config(params, description.as_slice(), codec)),
-            TrackFormat::H265 {
-                params,
-                description,
-                codec,
-            } => ResolvedConfig::Video(h265_video_config(params, description.as_slice(), codec)?),
-            TrackFormat::Aac { params, codec } => ResolvedConfig::Audio(aac_audio_config(
-                codec.profile,
-                params.sample_rate,
-                params.channels,
-            )),
-            TrackFormat::Opus { params } => {
-                ResolvedConfig::Audio(opus_audio_config(params.sample_rate, params.channels))
-            }
-            TrackFormat::Unrecognized => {
-                return Err(crate::nif_error!("cannot publish an unrecognized track format"))
-            }
-        };
-        Ok(config)
-    }
-}
 
 #[rustler::nif]
 pub(crate) fn add_track(
@@ -185,74 +135,6 @@ pub(crate) fn replace_track(
     ))
 }
 
-fn h264_video_config(
-    video_params: VideoTrackParams,
-    dcr: &[u8],
-    codec: H264Codec,
-) -> hang::catalog::VideoConfig {
-    let codec = hang::catalog::VideoCodec::H264(hang::catalog::H264 {
-        inline: codec.inline,
-        profile: codec.profile,
-        constraints: codec.constraints,
-        level: codec.level,
-    });
-
-    let description = (!dcr.is_empty()).then(|| Bytes::copy_from_slice(dcr));
-
-    create_video_config(
-        codec,
-        video_params.width,
-        video_params.height,
-        video_params.framerate,
-        description,
-    )
-}
-
-fn h265_video_config(
-    video_params: VideoTrackParams,
-    dcr: &[u8],
-    codec: H265Codec,
-) -> NifResult<hang::catalog::VideoConfig> {
-    let profile_compatibility_flags: [u8; 4] = codec
-        .profile_compatibility_flags
-        .try_into()
-        .map_err(|_| crate::nif_error!("profile_compatibility_flags must be exactly 4 bytes"))?;
-
-    let constraint_flags: [u8; 6] = codec
-        .constraint_flags
-        .try_into()
-        .map_err(|_| crate::nif_error!("constraint_flags must be exactly 6 bytes"))?;
-
-    let codec = hang::catalog::VideoCodec::H265(hang::catalog::H265 {
-        in_band: codec.in_band,
-        profile_space: codec.profile_space,
-        profile_idc: codec.profile_idc,
-        profile_compatibility_flags,
-        tier_flag: codec.tier_flag,
-        level_idc: codec.level_idc,
-        constraint_flags,
-    });
-
-    let description = (!dcr.is_empty()).then(|| Bytes::copy_from_slice(dcr));
-
-    Ok(create_video_config(
-        codec,
-        video_params.width,
-        video_params.height,
-        video_params.framerate,
-        description,
-    ))
-}
-
-fn aac_audio_config(profile: u8, sample_rate: u32, channels: u32) -> hang::catalog::AudioConfig {
-    let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
-    create_audio_config(codec, sample_rate, channels)
-}
-
-fn opus_audio_config(sample_rate: u32, channels: u32) -> hang::catalog::AudioConfig {
-    create_audio_config(hang::catalog::AudioCodec::Opus, sample_rate, channels)
-}
-
 #[rustler::nif]
 pub(crate) fn send_frame(
     track_res: ResourceArc<TrackResource>,
@@ -295,29 +177,4 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     }
 
     atoms::ok()
-}
-
-fn create_video_config(
-    codec: hang::catalog::VideoCodec,
-    width: u32,
-    height: u32,
-    framerate: f64,
-    description: Option<Bytes>,
-) -> hang::catalog::VideoConfig {
-    let mut config = hang::catalog::VideoConfig::new(codec);
-    config.description = description;
-    config.coded_width = Some(width);
-    config.coded_height = Some(height);
-    config.framerate = Some(framerate);
-    config.optimize_for_latency = Some(true);
-    config.container = hang::catalog::Container::Legacy;
-    config
-}
-
-fn create_audio_config(
-    codec: hang::catalog::AudioCodec,
-    sample_rate: u32,
-    channel_count: u32,
-) -> hang::catalog::AudioConfig {
-    hang::catalog::AudioConfig::new(codec, sample_rate, channel_count)
 }

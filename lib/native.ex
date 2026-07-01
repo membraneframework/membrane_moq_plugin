@@ -188,8 +188,15 @@ defmodule Membrane.MoQ.Native do
   @doc """
   Subscribes to `track` within the broadcast opened by `start_subscriber/4`.
 
-  `token` is an opaque integer echoed back in this track's messages so the
-  caller can route them to the originating pad. Sends to the subscriber's `pid`:
+  `token` is a caller-chosen opaque integer echoed back in this track's messages
+  so the caller can route them to the originating pad. It identifies the
+  *subscription*, not the track: it is deliberately not the track name because a
+  track name is neither guaranteed unique per subscriber (two pads may subscribe
+  to the same rendition) nor stable across a remove/re-subscribe of the same
+  track. A fresh token per subscription gives each one a distinct, never-reused
+  handle, so messages from a torn-down subscription carry a token the caller no
+  longer knows and are dropped instead of misrouted to a new pad on that track.
+  Sends to the subscriber's `pid`:
     * `{:moq_track_format, token :: integer(), format}` once the catalog
       advertises the track, before any frame. `format` is a `t:track_format/0`,
       the same shape as in `{:moq_tracks, ...}` (see `start_subscriber/5`)

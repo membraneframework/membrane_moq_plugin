@@ -209,16 +209,19 @@ fn create_audio_config(
     hang::catalog::AudioConfig::new(codec, sample_rate, channel_count)
 }
 
+#[derive(Clone)]
 pub(crate) enum VideoCodecParams {
     H264(H264Codec),
     H265(H265Codec),
 }
 
+#[derive(Clone)]
 pub(crate) enum AudioCodecParams {
     Aac(AacCodec),
     Opus,
 }
 
+#[derive(Clone)]
 pub(crate) enum TrackParams {
     Video {
         params: VideoTrackParams,

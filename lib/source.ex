@@ -5,10 +5,9 @@ defmodule Membrane.MoQ.Source do
   Connects to a MoQ relay server and subscribes to tracks of a single broadcast over one shared QUIC connection.
   An output pad corresponds to one MoQ track.
 
-  ## Track announcements
+  ## Parent notifications
 
-  #{__MODULE__} watches the broadcast catalog and notifies its parent as tracks come and go,
-  so a pipeline can discover tracks and wire up pads dynamically instead of hard-coding track names:
+  #{__MODULE__} watches the broadcast catalog and notifies its parent about track changes:
 
     * `{:new_track, Membrane.MoQ.Source.TrackInfo.t()}`
         when a track is advertised.
@@ -19,7 +18,7 @@ defmodule Membrane.MoQ.Source do
       torn down and re-wired against the new format.
     * `{:disconnected, reason :: String.t()}`
         when the broadcast goes away (the publisher left) or the session drops.
-        The source end-of-streams its pads and and terminates.
+        The source end-of-streams its pads and terminates.
   """
   use Membrane.Source
 
@@ -117,7 +116,7 @@ defmodule Membrane.MoQ.Source do
     @enforce_keys [:url, :broadcast, :disable_tls_verify?, :latency]
     defstruct @enforce_keys ++
                 [
-                  subscriber: nil,
+                  :subscriber,
                   next_token: 0,
                   tokens: BiMap.new(),
                   disconnect_pending?: false
@@ -217,23 +216,26 @@ defmodule Membrane.MoQ.Source do
   end
 
   def handle_info({:moq_frame, token, payload, timestamp_us, keyframe?}, ctx, state) do
-    case active_pad(ctx, state, token) do
-      nil ->
-        {[], state}
+    actions =
+      case active_pad(ctx, state, token) do
+        nil ->
+          []
 
-      pad ->
-        buffer = %Membrane.Buffer{
-          payload: payload,
-          pts: Membrane.Time.microseconds(timestamp_us),
-          metadata: %{keyframe?: keyframe?}
-        }
+        pad ->
+          buffer = %Membrane.Buffer{
+            payload: payload,
+            pts: Membrane.Time.microseconds(timestamp_us),
+            metadata: %{keyframe?: keyframe?}
+          }
 
-        {[buffer: {pad, buffer}], state}
-    end
+          [buffer: {pad, buffer}]
+      end
+
+    {actions, state}
   end
 
   def handle_info({:moq_track_ended, token, reason}, ctx, state) do
-    Membrane.Logger.info("MoQ track ended: #{inspect(reason)}")
+    Membrane.Logger.debug("MoQ track ended: #{inspect(reason)}")
 
     actions =
       case active_pad(ctx, state, token) do
@@ -249,7 +251,7 @@ defmodule Membrane.MoQ.Source do
   end
 
   def handle_info({:moq_disconnected, reason}, ctx, state) do
-    Membrane.Logger.info("MoQ subscriber disconnected: #{inspect(reason)}")
+    Membrane.Logger.debug("MoQ subscriber disconnected: #{inspect(reason)}")
 
     notify_disconnected = [notify_parent: {:disconnected, reason}]
 

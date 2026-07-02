@@ -1,13 +1,7 @@
 defmodule Membrane.MoQ.TrackFormat do
   @moduledoc false
-  # Codec translation between Membrane stream formats and the native MoQ
-  # track-format term (`t:Membrane.MoQ.Native.track_format/0`).
-  #
-  # This is the conversion layer shared by `Membrane.MoQ.Sink` (publishing:
-  # stream format -> native term) and `Membrane.MoQ.Source` (subscribing: native
-  # term -> stream format). The two directions are inverses of each other. The
-  # functions are pure and hold no element state, which is why they live here
-  # rather than in either element.
+  # Codec translation between Membrane stream formats
+  # and the native MoQ track-format term (`t:Membrane.MoQ.Native.track_format/0`).
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
   alias Membrane.MoQ.Native

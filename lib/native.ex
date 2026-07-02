@@ -69,8 +69,8 @@ defmodule Membrane.MoQ.Native do
   @doc """
   Connect to a MoQ relay server and prepare the session.
 
-  Builds the origin synchronously so subsequent NIFs can publish broadcasts
-  immediately. The QUIC handshake completes asynchronously
+  Builds the origin synchronously so subsequent NIFs can publish broadcasts immediately.
+  The QUIC handshake completes asynchronously
   - `:moq_connected` is sent to `pid` once the session is up.
   - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the connection fails.
   - `{:moq_disconnected, reason :: String.t()}` is sent if the session terminates unexpectedly.
@@ -140,9 +140,10 @@ defmodule Membrane.MoQ.Native do
   @doc """
   Sends a frame to a track.
 
-  `timestamp_us` is the presentation timestamp in microseconds. `keyframe?`
-  must be `true` for IDR frames on video tracks (triggers a new MoQ group);
-  for audio tracks pass `true` for every frame.
+  `timestamp_us` is the presentation timestamp in microseconds.
+
+  `keyframe?` must be `true` for IDR frames on video tracks (triggers a new MoQ group).
+  For audio tracks pass `true` for every frame.
 
   Returns `:ok`, or `{:error, reason}` if the write fails (e.g. track closed).
   """
@@ -176,13 +177,11 @@ defmodule Membrane.MoQ.Native do
     * `{:moq_setup_failed, reason :: String.t()}`
         if connection or broadcast discovery fails
     * `{:moq_disconnected, reason :: String.t()}`
-        when the session ends
+        when the session terminates unexpectedly
     * `{:moq_track_added, name :: String.t(), format :: track_format()}`
-        when the catalog advertises a track (a burst of these arrives for the
-        initial catalog), or re-advertises one whose codec params changed
+        when the catalog advertises a track
     * `{:moq_track_removed, name :: String.t()}`
-        when the catalog drops a track, or is replacing one whose codec params
-        changed (a matching `:moq_track_added` follows)
+        when the catalog drops a track
   """
   @spec start_subscriber(String.t(), String.t(), pid(), boolean(), non_neg_integer()) ::
           {:ok, subscriber()} | {:error, reason :: String.t()}
@@ -193,29 +192,22 @@ defmodule Membrane.MoQ.Native do
   Subscribes to `track` within the broadcast opened by `start_subscriber/4`.
 
   `token` is a caller-chosen opaque integer echoed back in this track's messages
-  so the caller can route them to the originating pad. It identifies the
-  *subscription*, not the track: it is deliberately not the track name because a
-  track name is neither guaranteed unique per subscriber (two pads may subscribe
-  to the same rendition) nor stable across a remove/re-subscribe of the same
-  track. A fresh token per subscription gives each one a distinct, never-reused
-  handle, so messages from a torn-down subscription carry a token the caller no
-  longer knows and are dropped instead of misrouted to a new pad on that track.
+  so the caller can route them to the originating subscription.
   Sends to the subscriber's `pid`:
-    * `{:moq_track_format, token :: integer(), format}` once the catalog
-      advertises the track, before any frame. `format` is a `t:track_format/0`,
-      the same shape as in `{:moq_track_added, ...}` (see `start_subscriber/5`)
+    * `{:moq_track_format, token :: integer(), format :: track_format()}` once the catalog
+      advertises the track, before any frame
     * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
       for every received frame
     * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the
-      track ends cleanly or errors (not sent when cancelled via `unsubscribe_track/2`)
+      track ends cleanly or errors
   """
   @spec subscribe_track(subscriber(), String.t(), integer()) :: :ok
   def subscribe_track(_subscriber, _track, _token),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Cancels the subscription identified by `token`. No `{:moq_track_ended, ...}`
-  is sent for a cancelled track. Idempotent.
+  Cancels the subscription identified by `token`.
+  No `{:moq_track_ended, ...}` is sent for a cancelled track. Idempotent.
   """
   @spec unsubscribe_track(subscriber(), integer()) :: :ok
   def unsubscribe_track(_subscriber, _token),

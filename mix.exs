@@ -1,12 +1,12 @@
-defmodule Membrane.Template.Mixfile do
+defmodule Membrane.MoQ.Mixfile do
   use Mix.Project
 
   @version "0.1.0"
-  @github_url "https://github.com/membraneframework/membrane_template_plugin"
+  @github_url "https://github.com/membraneframework/membrane_moq_plugin"
 
   def project do
     [
-      app: :membrane_template_plugin,
+      app: :membrane_moq_plugin,
       version: @version,
       elixir: "~> 1.13",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -15,11 +15,11 @@ defmodule Membrane.Template.Mixfile do
       dialyzer: dialyzer(),
 
       # hex
-      description: "Template Plugin for Membrane Framework",
+      description: "Membrane Plugin for Media over QUIC (MoQ) streams",
       package: package(),
 
       # docs
-      name: "Membrane Template plugin",
+      name: "Membrane MoQ plugin",
       source_url: @github_url,
       docs: docs(),
       homepage_url: "https://membrane.stream"
@@ -38,6 +38,14 @@ defmodule Membrane.Template.Mixfile do
   defp deps do
     [
       {:membrane_core, "~> 1.0"},
+      {:rustler, "~> 0.37"},
+      {:membrane_h26x_plugin, "~> 0.10.7"},
+      {:membrane_h264_format, "~> 0.6.0"},
+      {:membrane_h265_format, "~> 0.2.0"},
+      {:membrane_aac_format, "~> 0.8.0"},
+      {:membrane_opus_format, "~> 0.3.0"},
+      {:membrane_file_plugin, "~> 0.17", only: :test},
+      {:membrane_realtimer_plugin, "~> 0.9", only: :test},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},
       {:dialyxir, ">= 0.0.0", only: :dev, runtime: false},
       {:credo, ">= 0.0.0", only: :dev, runtime: false}
@@ -74,7 +82,7 @@ defmodule Membrane.Template.Mixfile do
       extras: ["README.md"],
       formatters: ["html"],
       source_ref: "v#{@version}",
-      nest_modules_by_prefix: [Membrane.Template]
+      nest_modules_by_prefix: [Membrane.MoQ]
     ]
   end
 end

@@ -14,6 +14,9 @@ defmodule Membrane.MoQ.Source do
         when a track is advertised.
     * `{:track_removed, track :: String.t()}`
         when an advertised track disappears from the catalog (e.g. the publisher ended it).
+    * A track whose codec parameters change mid-broadcast is reported as a
+      `:track_removed` immediately followed by a `:new_track`, so a stale pad can be
+      torn down and re-wired against the new format.
     * `{:disconnected, reason :: String.t()}`
         when the broadcast goes away (the publisher left) or the session drops.
         The source end-of-streams its pads and and terminates.
@@ -108,7 +111,6 @@ defmodule Membrane.MoQ.Source do
             subscriber: Native.subscriber() | nil,
             next_token: integer(),
             tokens: BiMap.t(),
-            advertised: %{String.t() => TrackInfo.t()},
             disconnect_pending?: boolean()
           }
 
@@ -118,7 +120,6 @@ defmodule Membrane.MoQ.Source do
                   subscriber: nil,
                   next_token: 0,
                   tokens: BiMap.new(),
-                  advertised: %{},
                   disconnect_pending?: false
                 ]
   end
@@ -197,21 +198,12 @@ defmodule Membrane.MoQ.Source do
   @impl true
   def handle_info(:moq_connected, _ctx, state), do: {[setup: :complete], state}
 
-  def handle_info({:moq_tracks, tracks}, _ctx, %{advertised: old_advertised} = state) do
-    new_advertised =
-      Map.new(tracks, fn {name, format} -> {name, build_track_info(name, format)} end)
+  def handle_info({:moq_track_added, name, format}, _ctx, state) do
+    {[notify_parent: {:new_track, build_track_info(name, format)}], state}
+  end
 
-    added =
-      for {name, info} <- new_advertised, not Map.has_key?(old_advertised, name) do
-        {:notify_parent, {:new_track, info}}
-      end
-
-    removed =
-      for {name, _info} <- old_advertised, not Map.has_key?(new_advertised, name) do
-        {:notify_parent, {:track_removed, name}}
-      end
-
-    {added ++ removed, %{state | advertised: new_advertised}}
+  def handle_info({:moq_track_removed, name}, _ctx, state) do
+    {[notify_parent: {:track_removed, name}], state}
   end
 
   def handle_info({:moq_track_format, token, format}, ctx, state) do
@@ -259,7 +251,6 @@ defmodule Membrane.MoQ.Source do
   def handle_info({:moq_disconnected, reason}, ctx, state) do
     Membrane.Logger.info("MoQ subscriber disconnected: #{inspect(reason)}")
 
-    state = %{state | advertised: %{}}
     notify_disconnected = [notify_parent: {:disconnected, reason}]
 
     case ctx.playback do

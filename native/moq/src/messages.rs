@@ -3,15 +3,16 @@
 //!
 //! Lifecycle messages (`:moq_connected`, `:moq_setup_failed`,
 //! `:moq_disconnected`) are shared by the publisher and subscriber; the
-//! data messages (`:moq_tracks`, `:moq_track_format`, `:moq_frame`,
-//! `:moq_track_ended`) are emitted by the subscriber. Sends are best effort: a
-//! dead recipient is reported as [`PidDead`] for the data messages whose loops
-//! must stop, and ignored for the fire-and-forget lifecycle ones.
+//! data messages (`:moq_track_added`, `:moq_track_removed`, `:moq_track_format`,
+//! `:moq_frame`, `:moq_track_ended`) are emitted by the subscriber. Sends are
+//! best effort: a dead recipient is reported as [`PidDead`] for the data
+//! messages whose loops must stop, and ignored for the fire-and-forget
+//! lifecycle ones.
 
 use rustler::{Encoder, LocalPid, OwnedEnv};
 
 use crate::atoms;
-use crate::track_format::{encode_format, make_binary, TrackEntry, TrackParams};
+use crate::track_format::{encode_format, make_binary, TrackParams};
 
 /// The recipient process is gone, so no further message can be delivered.
 pub(crate) struct PidDead;
@@ -34,16 +35,25 @@ pub(crate) fn send_disconnected(pid: &LocalPid, reason: String) {
         OwnedEnv::new().send_and_clear(pid, |env| (atoms::moq_disconnected(), reason).encode(env));
 }
 
-/// `{:moq_tracks, [{name, format}]}` — the full advertised track set.
-pub(crate) fn send_tracks(pid: &LocalPid, tracks: &[TrackEntry]) -> Result<(), PidDead> {
+/// `{:moq_track_added, name, format}` — a track the catalog just advertised, or
+/// re-advertised after its codec params changed.
+pub(crate) fn send_track_added(
+    pid: &LocalPid,
+    name: &str,
+    params: &TrackParams,
+) -> Result<(), PidDead> {
     OwnedEnv::new()
         .send_and_clear(pid, |env| {
-            let list: Vec<_> = tracks
-                .iter()
-                .map(|t| (t.name.as_str(), encode_format(env, &t.params)).encode(env))
-                .collect();
-            (atoms::moq_tracks(), list).encode(env)
+            (atoms::moq_track_added(), name, encode_format(env, params)).encode(env)
         })
+        .map_err(|_| PidDead)
+}
+
+/// `{:moq_track_removed, name}` — a track the catalog dropped, or is replacing
+/// because its codec params changed (a matching `:moq_track_added` follows).
+pub(crate) fn send_track_removed(pid: &LocalPid, name: &str) -> Result<(), PidDead> {
+    OwnedEnv::new()
+        .send_and_clear(pid, |env| (atoms::moq_track_removed(), name).encode(env))
         .map_err(|_| PidDead)
 }
 

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use rustler::{Binary, Encoder, Env, NifResult, NifStruct, NifTaggedEnum, OwnedBinary, Term};
 
-#[derive(NifStruct, Clone)]
+#[derive(NifStruct, Clone, PartialEq)]
 #[module = "Membrane.MoQ.Native.VideoTrackParams"]
 pub(crate) struct VideoTrackParams {
     pub(crate) width: u32,
@@ -9,14 +9,14 @@ pub(crate) struct VideoTrackParams {
     pub(crate) framerate: f64,
 }
 
-#[derive(NifStruct, Clone)]
+#[derive(NifStruct, Clone, PartialEq)]
 #[module = "Membrane.MoQ.Native.AudioTrackParams"]
 pub(crate) struct AudioTrackParams {
     pub(crate) sample_rate: u32,
     pub(crate) channels: u32,
 }
 
-#[derive(NifStruct, Clone)]
+#[derive(NifStruct, Clone, PartialEq)]
 #[module = "Membrane.MoQ.Native.H264Codec"]
 pub(crate) struct H264Codec {
     pub(crate) inline: bool,
@@ -25,7 +25,7 @@ pub(crate) struct H264Codec {
     pub(crate) level: u8,
 }
 
-#[derive(NifStruct, Clone)]
+#[derive(NifStruct, Clone, PartialEq)]
 #[module = "Membrane.MoQ.Native.H265Codec"]
 pub(crate) struct H265Codec {
     pub(crate) in_band: bool,
@@ -37,7 +37,7 @@ pub(crate) struct H265Codec {
     pub(crate) constraint_flags: Vec<u8>,
 }
 
-#[derive(NifStruct, Clone)]
+#[derive(NifStruct, Clone, PartialEq)]
 #[module = "Membrane.MoQ.Native.AACCodec"]
 pub(crate) struct AacCodec {
     pub(crate) profile: u8,
@@ -209,19 +209,19 @@ fn create_audio_config(
     hang::catalog::AudioConfig::new(codec, sample_rate, channel_count)
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) enum VideoCodecParams {
     H264(H264Codec),
     H265(H265Codec),
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) enum AudioCodecParams {
     Aac(AacCodec),
     Opus,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) enum TrackParams {
     Video {
         params: VideoTrackParams,
@@ -235,12 +235,6 @@ pub(crate) enum TrackParams {
     },
     /// A track whose codec the source does not translate to a Membrane format.
     Unrecognized,
-}
-
-/// Owned, NIF-free description of one advertised track, ready to encode.
-pub(crate) struct TrackEntry {
-    pub(crate) name: String,
-    pub(crate) params: TrackParams,
 }
 
 /// Codec parameters of a catalog video config, or [`TrackParams::Unrecognized`]

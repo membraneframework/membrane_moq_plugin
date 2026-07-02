@@ -177,8 +177,12 @@ defmodule Membrane.MoQ.Native do
         if connection or broadcast discovery fails
     * `{:moq_disconnected, reason :: String.t()}`
         when the session ends
-    * `{:moq_tracks, [{name :: String.t(), format :: track_format()}]}`
-        whenever the broadcast catalog changes
+    * `{:moq_track_added, name :: String.t(), format :: track_format()}`
+        when the catalog advertises a track (a burst of these arrives for the
+        initial catalog), or re-advertises one whose codec params changed
+    * `{:moq_track_removed, name :: String.t()}`
+        when the catalog drops a track, or is replacing one whose codec params
+        changed (a matching `:moq_track_added` follows)
   """
   @spec start_subscriber(String.t(), String.t(), pid(), boolean(), non_neg_integer()) ::
           {:ok, subscriber()} | {:error, reason :: String.t()}
@@ -199,7 +203,7 @@ defmodule Membrane.MoQ.Native do
   Sends to the subscriber's `pid`:
     * `{:moq_track_format, token :: integer(), format}` once the catalog
       advertises the track, before any frame. `format` is a `t:track_format/0`,
-      the same shape as in `{:moq_tracks, ...}` (see `start_subscriber/5`)
+      the same shape as in `{:moq_track_added, ...}` (see `start_subscriber/5`)
     * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
       for every received frame
     * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the

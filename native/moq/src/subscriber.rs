@@ -12,7 +12,7 @@ use hang::moq_net;
 use moq_native::ClientConfig;
 
 use crate::messages::{self, Token};
-use crate::track_format::{audio_params, video_params, TrackEntry, TrackParams};
+use crate::track_format::{audio_params, video_params, TrackParams};
 use crate::{atoms, runtime};
 
 enum Command {
@@ -26,6 +26,27 @@ pub(crate) struct SubscriberResource {
 }
 
 impl Resource for SubscriberResource {}
+
+type CatalogSnapshot = HashMap<String, TrackParams>;
+
+/// Mutable state the session loop threads through each iteration by value, so
+/// handlers own it rather than reaching into scattered `&mut` locals.
+struct LoopState {
+    /// Latest codec params per track name, from the most recent catalog snapshot.
+    params: CatalogSnapshot,
+    pumps: JoinSet<()>,
+    cancels: HashMap<Token, watch::Sender<bool>>,
+    /// Subscribe commands whose track has not yet appeared in the catalog. Held
+    /// here (with their cancel receiver) until a snapshot advertises the track.
+    pending: HashMap<Token, (String, watch::Receiver<bool>)>,
+}
+
+/// Immutable context shared by every loop iteration.
+struct Ctx<'a> {
+    broadcast: &'a moq_net::BroadcastConsumer,
+    latency: Duration,
+    pid: &'a LocalPid,
+}
 
 #[rustler::nif]
 pub(crate) fn start_subscriber(
@@ -121,81 +142,33 @@ async fn run_session(
 
     let mut catalog = subscribe_catalog(&broadcast)?;
 
-    let mut pumps: JoinSet<()> = JoinSet::new();
-    let mut cancels: HashMap<Token, watch::Sender<bool>> = HashMap::new();
-    // Latest codec params per track name, from the most recent catalog snapshot.
-    let mut params: HashMap<String, TrackParams> = HashMap::new();
-    // Subscribe commands whose track has not yet appeared in the catalog. Held
-    // here (with their cancel receiver) until a snapshot advertises the track.
-    let mut pending: HashMap<Token, (String, watch::Receiver<bool>)> = HashMap::new();
+    let ctx = Ctx {
+        broadcast: &broadcast,
+        latency,
+        pid,
+    };
+
+    let mut state = LoopState {
+        params: HashMap::new(),
+        pumps: JoinSet::new(),
+        cancels: HashMap::new(),
+        pending: HashMap::new(),
+    };
 
     let disconnect_reason = loop {
         tokio::select! {
             command = commands_rx.recv() => match command {
-                Some(Command::Subscribe { track, token }) => {
-                    let (cancel_tx, cancel_rx) = watch::channel(false);
-                    cancels.insert(token, cancel_tx);
-                    // Only subscribe to the track once the catalog advertises it:
-                    // publishers create tracks lazily on the first stream_format,
-                    // so subscribing earlier races the announcement and the relay
-                    // answers NotFound. If we already have params, start now;
-                    // otherwise park the command until a snapshot resolves it.
-                    match params.get(&track) {
-                        Some(track_params) => {
-                            messages::send_track_format(pid, token, track_params);
-                            pumps.spawn(run_pump(
-                                broadcast.clone(), track, token, *pid, latency, cancel_rx,
-                            ));
-                        }
-                        None => {
-                            pending.insert(token, (track, cancel_rx));
-                        }
-                    }
-                }
-                Some(Command::Unsubscribe { token }) => {
-                    if let Some(cancel) = cancels.remove(&token) {
-                        let _ = cancel.send(true);
-                    }
-                    pending.remove(&token);
-                }
+                Some(command) => state = handle_command(command, state, &ctx),
                 // The resource was dropped without a stop; treat as shutdown.
                 None => return Ok(()),
             },
             _ = shutdown_rx.recv() => return Ok(()),
-            _ = pumps.join_next(), if !pumps.is_empty() => {}
+            _ = state.pumps.join_next(), if !state.pumps.is_empty() => {}
             snapshot = catalog.next() => {
-                let snapshot = match snapshot {
-                    Ok(Some(snapshot)) => snapshot,
-                    Ok(None) => break "broadcast ended".to_string(),
-                    Err(e) => break format!("catalog error: {e}"),
+                state = match handle_new_catalog(snapshot, state, &ctx) {
+                    Ok(state) => state,
+                    Err(reason) => break reason,
                 };
-
-                params = catalog_params(&snapshot);
-
-                let entries: Vec<TrackEntry> = params
-                    .iter()
-                    .map(|(name, params)| TrackEntry {
-                        name: name.clone(),
-                        params: params.clone(),
-                    })
-                    .collect();
-                if messages::send_tracks(pid, &entries).is_err() {
-                    break "subscriber pid is dead".to_string();
-                }
-
-                // Start pumps for any parked commands the snapshot just resolved.
-                let ready: Vec<Token> = pending
-                    .iter()
-                    .filter(|(_, (track, _))| params.contains_key(track))
-                    .map(|(token, _)| *token)
-                    .collect();
-                for token in ready {
-                    let (track, cancel_rx) = pending.remove(&token).unwrap();
-                    messages::send_track_format(pid, token, &params[&track]);
-                    pumps.spawn(run_pump(
-                        broadcast.clone(), track, token, *pid, latency, cancel_rx,
-                    ));
-                }
             }
             result = session.closed() => break match result {
                 Ok(()) => "session closed gracefully".to_string(),
@@ -206,6 +179,105 @@ async fn run_session(
 
     messages::send_disconnected(pid, disconnect_reason);
     Ok(())
+}
+
+fn handle_command(command: Command, mut state: LoopState, ctx: &Ctx) -> LoopState {
+    match command {
+        Command::Subscribe { track, token } => {
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            state.cancels.insert(token, cancel_tx);
+            // Only subscribe to the track once the catalog advertises it:
+            // publishers create tracks lazily on the first stream_format, so
+            // subscribing earlier races the announcement and the relay answers
+            // NotFound. If we already have params, start now; otherwise park the
+            // command until a snapshot resolves it.
+            match state.params.get(&track) {
+                Some(track_params) => {
+                    messages::send_track_format(ctx.pid, token, track_params);
+                    state.pumps.spawn(run_pump(
+                        ctx.broadcast.clone(),
+                        track,
+                        token,
+                        *ctx.pid,
+                        ctx.latency,
+                        cancel_rx,
+                    ));
+                }
+                None => {
+                    state.pending.insert(token, (track, cancel_rx));
+                }
+            }
+        }
+        Command::Unsubscribe { token } => {
+            if let Some(cancel) = state.cancels.remove(&token) {
+                let _ = cancel.send(true);
+            }
+            state.pending.remove(&token);
+        }
+    }
+    state
+}
+
+fn handle_new_catalog(
+    snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
+    mut state: LoopState,
+    ctx: &Ctx,
+) -> Result<LoopState, String> {
+    let new_params = update_catalog(ctx.pid, snapshot, &state.params)?;
+
+    // Start pumps for any parked commands the snapshot just resolved.
+    let ready: Vec<Token> = state
+        .pending
+        .iter()
+        .filter(|(_, (track, _))| new_params.contains_key(track))
+        .map(|(token, _)| *token)
+        .collect();
+    for token in ready {
+        let (track, cancel_rx) = state.pending.remove(&token).unwrap();
+        messages::send_track_format(ctx.pid, token, &new_params[&track]);
+        state.pumps.spawn(run_pump(
+            ctx.broadcast.clone(),
+            track,
+            token,
+            *ctx.pid,
+            ctx.latency,
+            cancel_rx,
+        ));
+    }
+
+    state.params = new_params;
+    Ok(state)
+}
+
+/// Diff the incoming catalog snapshot against the previous one, notifying Elixir
+/// of added/removed tracks, and return the new per-track params. Errors carry a
+/// disconnect reason that ends the session loop.
+fn update_catalog(
+    pid: &LocalPid,
+    snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
+    old_catalog: &CatalogSnapshot,
+) -> Result<CatalogSnapshot, String> {
+    let snapshot = match snapshot {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => return Err("broadcast ended".to_string()),
+        Err(e) => return Err(format!("catalog error: {e}")),
+    };
+
+    let new_catalog = catalog_params(&snapshot);
+
+    let pid_dead = || "subscriber pid is dead".to_string();
+    for (name, params) in old_catalog {
+        if new_catalog.get(name) != Some(params) {
+            messages::send_track_removed(pid, name).map_err(|_| pid_dead())?;
+        }
+    }
+    for (name, params) in &new_catalog {
+        if old_catalog.get(name) != Some(params) {
+            messages::send_track_added(pid, name, params).map_err(|_| pid_dead())?;
+        }
+    }
+
+    Ok(new_catalog)
 }
 
 async fn run_pump(
@@ -275,10 +347,7 @@ fn subscribe_catalog(
     Ok(moq_mux::catalog::hang::Consumer::<()>::new(catalog_track))
 }
 
-/// Flatten a catalog snapshot into per-track codec params. Unrecognized codecs
-/// still get an entry (as [`TrackParams::Unrecognized`]) so the track list Elixir
-/// sees matches what the broadcast advertises.
-fn catalog_params(snapshot: &moq_mux::catalog::hang::Catalog) -> HashMap<String, TrackParams> {
+fn catalog_params(snapshot: &moq_mux::catalog::hang::Catalog) -> CatalogSnapshot {
     let mut params = HashMap::new();
     for (name, config) in &snapshot.video.renditions {
         params.insert(name.clone(), video_params(config));

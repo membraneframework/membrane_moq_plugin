@@ -148,6 +148,7 @@ pub(crate) fn send_frame(
         timestamp,
         payload: bytes::Bytes::copy_from_slice(data.as_slice()),
         keyframe,
+        duration: None,
     };
 
     let _guard = runtime().handle().enter();

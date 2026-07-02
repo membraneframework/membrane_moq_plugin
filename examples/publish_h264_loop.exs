@@ -19,7 +19,31 @@
 #   - A MoQ relay running at https://localhost:4443 (e.g. moq-relay)
 #
 # Run with:
-#   elixir examples/publish_h264_loop.exs
+#   elixir examples/publish_h264_loop.exs <broadcast>
+#
+# where <broadcast> is the broadcast name, ending with .hang or .msf
+# (e.g. h264-loop.hang).
+
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to publish; it must end with
+      .hang or .msf (e.g. h264-loop.hang).
+      """)
+
+      System.halt(1)
+  end
 
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true},
@@ -153,7 +177,12 @@ defmodule VideoLooper do
   end
 
   defp take(size, acc, %{remaining: [%Buffer{} = buffer | rest]} = state) do
-    shifted = %{buffer | pts: shift(buffer.pts, state.offset), dts: shift(buffer.dts, state.offset)}
+    shifted = %{
+      buffer
+      | pts: shift(buffer.pts, state.offset),
+        dts: shift(buffer.dts, state.offset)
+    }
+
     take(size - 1, [shifted | acc], %{state | remaining: rest})
   end
 
@@ -167,10 +196,10 @@ defmodule Example do
   @video_url "https://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/big-buck-bunny/bun33s_720x480.h264"
   @framerate {25, 1}
 
-  def start_link(), do: Membrane.Pipeline.start_link(__MODULE__)
+  def start_link(broadcast), do: Membrane.Pipeline.start_link(__MODULE__, broadcast)
 
   @impl true
-  def handle_init(_ctx, _opts) do
+  def handle_init(_ctx, broadcast) do
     spec = [
       child(:video_source, %Membrane.Hackney.Source{
         location: @video_url,
@@ -186,7 +215,7 @@ defmodule Example do
       |> via_in(Pad.ref(:input, :video), options: [track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
         url: "https://localhost:4443/anon",
-        broadcast: "h264-loop",
+        broadcast: broadcast,
         disable_tls_verify?: true
       })
     ]
@@ -203,7 +232,7 @@ defmodule Example do
   def handle_element_end_of_stream(_child, _pad, _ctx, state), do: {[], state}
 end
 
-{:ok, _supervisor_pid, pipeline_pid} = Example.start_link()
+{:ok, _supervisor_pid, pipeline_pid} = Example.start_link(broadcast)
 
 # Publish until a key is pressed, then tear the pipeline down gracefully so the
 # sink's terminate path (unpublishing, closing the session) runs.

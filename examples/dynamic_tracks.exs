@@ -1,3 +1,24 @@
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to subscribe to; it must end
+      with .hang or .msf (e.g. format_change.hang).
+      """)
+
+      System.halt(1)
+  end
+
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true},
   {:membrane_h26x_plugin, "~> 0.10.7"}
@@ -125,8 +146,6 @@ defmodule Subscriber do
   defp parser_for(%Membrane.H264{}), do: Membrane.H264.Parser
   defp parser_for(%Membrane.H265{}), do: Membrane.H265.Parser
 end
-
-broadcast = "format_change"
 
 opts = [url: "https://localhost:4443/anon", broadcast: broadcast]
 

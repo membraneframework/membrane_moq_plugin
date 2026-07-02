@@ -1,3 +1,24 @@
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to publish; it must end with
+      .hang or .msf (e.g. test-h264-avc3.hang).
+      """)
+
+      System.halt(1)
+  end
+
 Mix.install([
   :membrane_realtimer_plugin,
   :membrane_hackney_plugin,
@@ -13,12 +34,12 @@ defmodule TestH264Avc3 do
 
   @input_url "https://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/big-buck-bunny/bun33s.mp4"
 
-  def start_link() do
-    Membrane.Pipeline.start_link(__MODULE__)
+  def start_link(broadcast) do
+    Membrane.Pipeline.start_link(__MODULE__, broadcast)
   end
 
   @impl true
-  def handle_init(_ctx, _opts) do
+  def handle_init(_ctx, broadcast) do
     spec = [
       child(:source, %Membrane.Hackney.Source{
         location: @input_url,
@@ -33,7 +54,7 @@ defmodule TestH264Avc3 do
       |> via_in(Pad.ref(:input, :video1), options: [track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
         url: "https://localhost:4443/anon",
-        broadcast: "test-h264-avc3",
+        broadcast: broadcast,
         disable_tls_verify?: true
       }),
       get_child(:demuxer)
@@ -51,7 +72,7 @@ defmodule TestH264Avc3 do
   def handle_element_end_of_stream(_child, _pad, _ctx, state), do: {[], state}
 end
 
-{:ok, _supervisor_pid, pipeline_pid} = TestH264Avc3.start_link()
+{:ok, _supervisor_pid, pipeline_pid} = TestH264Avc3.start_link(broadcast)
 ref = Process.monitor(pipeline_pid)
 
 receive do

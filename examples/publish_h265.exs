@@ -1,3 +1,24 @@
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to publish; it must end with
+      .hang or .msf (e.g. h265.hang).
+      """)
+
+      System.halt(1)
+  end
+
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_realtimer_plugin, " ~> 0.11.0"},
@@ -10,14 +31,14 @@ Logger.configure(level: :debug)
 defmodule Example do
   use Membrane.Pipeline
 
-  def start_link() do
-    Membrane.Pipeline.start_link(__MODULE__)
+  def start_link(broadcast) do
+    Membrane.Pipeline.start_link(__MODULE__, broadcast)
   end
 
   @video_url "http://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/ffmpeg-testsrc.h265"
 
   @impl true
-  def handle_init(_ctx, _opts) do
+  def handle_init(_ctx, broadcast) do
     spec = [
       child(:video_source, %Membrane.Hackney.Source{
         location: @video_url,
@@ -31,7 +52,7 @@ defmodule Example do
       |> via_in(Pad.ref(:input, :main), options: [track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
         url: "https://localhost:4443/anon",
-        broadcast: "h265",
+        broadcast: broadcast,
         disable_tls_verify?: true
       })
     ]
@@ -50,7 +71,7 @@ defmodule Example do
   end
 end
 
-{:ok, _supervisor_pid, pipeline_pid} = Example.start_link()
+{:ok, _supervisor_pid, pipeline_pid} = Example.start_link(broadcast)
 ref = Process.monitor(pipeline_pid)
 
 receive do

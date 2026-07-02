@@ -1,3 +1,24 @@
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to publish; it must end with
+      .hang or .msf (e.g. format_change.hang).
+      """)
+
+      System.halt(1)
+  end
+
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_h26x_plugin, "~> 0.10.7"},
@@ -186,12 +207,12 @@ end
 defmodule Example do
   use Membrane.Pipeline
 
-  def start_link(paths) do
-    Membrane.Pipeline.start_link(__MODULE__, paths)
+  def start_link(opts) do
+    Membrane.Pipeline.start_link(__MODULE__, opts)
   end
 
   @impl true
-  def handle_init(_ctx, paths) do
+  def handle_init(_ctx, %{paths: paths, broadcast: broadcast}) do
     h264_parser = fn framerate ->
       %Membrane.H264.Parser{
         generate_best_effort_timestamps: %{framerate: framerate},
@@ -217,7 +238,7 @@ defmodule Example do
       |> via_in(Pad.ref(:input, :video), options: [track: "video"])
       |> child(:sink, %Membrane.MoQ.Sink{
         url: "https://localhost:4443/anon",
-        broadcast: "format_change",
+        broadcast: broadcast,
         disable_tls_verify?: true
       })
       | Enum.map(inputs, fn {id, path, parser} ->
@@ -244,7 +265,7 @@ end
 
 paths = Fixtures.ensure_all()
 
-{:ok, _supervisor_pid, pipeline_pid} = Example.start_link(paths)
+{:ok, _supervisor_pid, pipeline_pid} = Example.start_link(%{paths: paths, broadcast: broadcast})
 ref = Process.monitor(pipeline_pid)
 
 receive do

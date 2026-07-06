@@ -30,7 +30,7 @@ format =
      codec: %Native.H264Codec{inline: false, profile: 100, constraints: 0, level: 31}
    }}
 
-{:ok, video_track} = Native.add_track(broadcast, "my_video_track", format)
+{:ok, video_track} = Native.add_track(broadcast, "my_video_track", format, _priority = 60)
 
 IO.puts("MoQ setup successful, you can start streaming frames to PID #{inspect(self())}")
 
@@ -58,7 +58,7 @@ end
 
 {:ok, consumer} = Native.create_broadcast_consumer(session, "my_broadcast", self(), latency_ns)
 
-Native.subscribe_track(consumer, "my_video_track", token)
+Native.subscribe_track(consumer, "my_video_track", token, _priority = 60)
 
 # TODO: add receiving snippet example here
 ```

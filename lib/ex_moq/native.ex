@@ -122,14 +122,17 @@ defmodule ExMoQ.Native do
     the result of calling `create_broadcast_producer/2`.
   The second argument is the name of the track.
   The third is the codec format, see `t:track_format/0`.
+  The fourth is the track's delivery priority:
+  under congestion, tracks with a higher value are sent first
   """
-  @spec add_track(broadcast_producer(), String.t(), track_format()) ::
+  @spec add_track(broadcast_producer(), String.t(), track_format(), 0..255) ::
           {:ok, track()} | {:error, reason :: String.t()}
-  def add_track(_broadcast_producer, _track, _format),
+  def add_track(_broadcast_producer, _track, _format, _priority),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Replaces a live track with one carrying `format`, published on a brand-new moq track.
+  Replaces a live track with one carrying `format`, published on a brand-new moq track
+  that keeps the replaced track's priority.
 
   Returns the new track resource along with the name of the newly generated moq track.
   """
@@ -192,6 +195,7 @@ defmodule ExMoQ.Native do
   `token` is a caller-chosen opaque integer echoed back in this track's messages
   so the caller can route them to the originating subscription.
   Keep tokens unique across all broadcast consumers reporting to the same pid.
+
   Sends to the consumer's `pid`:
     * `{:moq_track_format, token :: integer(), format :: track_format()}` once the catalog
       advertises the track, before any frame
@@ -200,8 +204,8 @@ defmodule ExMoQ.Native do
     * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the
       track ends cleanly or errors
   """
-  @spec subscribe_track(broadcast_consumer(), String.t(), integer()) :: :ok
-  def subscribe_track(_broadcast_consumer, _track, _token),
+  @spec subscribe_track(broadcast_consumer(), String.t(), integer(), 0..255) :: :ok
+  def subscribe_track(_broadcast_consumer, _track, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

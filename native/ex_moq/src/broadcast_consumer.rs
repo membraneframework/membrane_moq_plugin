@@ -14,8 +14,14 @@ use crate::track_format::{audio_params, video_params, TrackParams};
 use crate::{atoms, runtime};
 
 enum Command {
-    Subscribe { track: String, token: Token },
-    Unsubscribe { token: Token },
+    Subscribe {
+        track: String,
+        token: Token,
+        priority: u8,
+    },
+    Unsubscribe {
+        token: Token,
+    },
 }
 
 pub(crate) struct BroadcastConsumerResource {
@@ -31,7 +37,7 @@ struct ConsumerState {
     params: CatalogSnapshot,
     pumps: JoinSet<()>,
     cancels: HashMap<Token, watch::Sender<bool>>,
-    pending: HashMap<Token, (String, watch::Receiver<bool>)>,
+    pending: HashMap<Token, (String, u8, watch::Receiver<bool>)>,
 }
 
 struct Ctx<'a> {
@@ -80,8 +86,13 @@ pub(crate) fn subscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
     track: String,
     token: Token,
+    priority: u8,
 ) -> Atom {
-    let _ = consumer.commands.send(Command::Subscribe { track, token });
+    let _ = consumer.commands.send(Command::Subscribe {
+        track,
+        token,
+        priority,
+    });
     atoms::ok()
 }
 
@@ -170,7 +181,11 @@ async fn run_broadcast(
 
 fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> ConsumerState {
     match command {
-        Command::Subscribe { track, token } => {
+        Command::Subscribe {
+            track,
+            token,
+            priority,
+        } => {
             let (cancel_tx, cancel_rx) = watch::channel(false);
             state.cancels.insert(token, cancel_tx);
             match state.params.get(&track) {
@@ -180,13 +195,14 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
                         ctx.broadcast.clone(),
                         track,
                         token,
+                        priority,
                         *ctx.pid,
                         ctx.latency,
                         cancel_rx,
                     ));
                 }
                 None => {
-                    state.pending.insert(token, (track, cancel_rx));
+                    state.pending.insert(token, (track, priority, cancel_rx));
                 }
             }
         }
@@ -211,16 +227,17 @@ fn handle_new_catalog(
     let ready: Vec<Token> = state
         .pending
         .iter()
-        .filter(|(_, (track, _))| new_params.contains_key(track))
+        .filter(|(_, (track, _, _))| new_params.contains_key(track))
         .map(|(token, _)| *token)
         .collect();
     for token in ready {
-        let (track, cancel_rx) = state.pending.remove(&token).unwrap();
+        let (track, priority, cancel_rx) = state.pending.remove(&token).unwrap();
         messages::send_track_format(ctx.pid, token, &new_params[&track]);
         state.pumps.spawn(run_pump(
             ctx.broadcast.clone(),
             track,
             token,
+            priority,
             *ctx.pid,
             ctx.latency,
             cancel_rx,
@@ -263,13 +280,14 @@ async fn run_pump(
     broadcast: moq_net::BroadcastConsumer,
     track_name: String,
     token: Token,
+    priority: u8,
     pid: LocalPid,
     latency: Duration,
     mut cancel: watch::Receiver<bool>,
 ) {
     let reason = tokio::select! {
         _ = cancel.changed() => return,
-        result = pump_track(&broadcast, &track_name, token, &pid, latency) => match result {
+        result = pump_track(&broadcast, &track_name, token, priority, &pid, latency) => match result {
             Ok(()) => "track ended".to_string(),
             Err(e) => format!("track error: {e}"),
         }
@@ -282,12 +300,13 @@ async fn pump_track(
     broadcast: &moq_net::BroadcastConsumer,
     track_name: &str,
     token: Token,
+    priority: u8,
     pid: &LocalPid,
     latency: Duration,
 ) -> anyhow::Result<()> {
     let track_ref = moq_net::Track {
         name: track_name.to_string(),
-        priority: 0,
+        priority,
     };
     let track_consumer = broadcast
         .subscribe_track(&track_ref)

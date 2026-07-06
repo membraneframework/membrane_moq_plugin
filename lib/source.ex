@@ -46,6 +46,15 @@ defmodule Membrane.MoQ.Source do
         Catalog rendition key within the broadcast to subscribe to on this pad,
         see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology
         """
+      ],
+      priority: [
+        spec: 0..255,
+        default: 0,
+        description: """
+        Delivery priority of this subscription.
+        Under congestion, tracks with a higher value are sent first.
+        Recommended values are `80` for audio, `60` for video
+        """
       ]
     ]
 
@@ -149,7 +158,7 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
-  def handle_pad_added(pad, %{pad_options: %{track: track}} = ctx, state) do
+  def handle_pad_added(pad, %{pad_options: %{track: track, priority: priority}} = ctx, state) do
     token = state.next_token
 
     state = %{
@@ -159,7 +168,7 @@ defmodule Membrane.MoQ.Source do
     }
 
     if ctx.playback == :playing do
-      start_pad(track, token, state)
+      start_pad(track, priority, token, state)
     end
 
     {[], state}
@@ -172,7 +181,8 @@ defmodule Membrane.MoQ.Source do
 
   def handle_playing(ctx, state) do
     Enum.each(state.tokens, fn {token, pad} ->
-      start_pad(ctx.pads[pad].options.track, token, state)
+      options = ctx.pads[pad].options
+      start_pad(options.track, options.priority, token, state)
     end)
 
     {[], state}
@@ -301,9 +311,9 @@ defmodule Membrane.MoQ.Source do
     end
   end
 
-  @spec start_pad(String.t(), integer(), State.t()) :: :ok
-  defp start_pad(track, token, state) do
-    Native.subscribe_track(state.consumer, track, token)
+  @spec start_pad(String.t(), 0..255, integer(), State.t()) :: :ok
+  defp start_pad(track, priority, token, state) do
+    Native.subscribe_track(state.consumer, track, token, priority)
   end
 
   @spec eos_all(%{Membrane.Pad.ref() => map()}) :: [Membrane.Element.Action.t()]

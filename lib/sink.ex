@@ -35,6 +35,14 @@ defmodule Membrane.MoQ.Sink do
         On a mid-stream format change, the current track is removed,
         and a new track is added with a different track name to avoid races with the catalog track.
         """
+      ],
+      priority: [
+        spec: 0..255 | nil,
+        default: nil,
+        description: """
+        Delivery priority of this pad's track: under congestion.
+        Tracks with a higher value are sent first.
+        """
       ]
     ]
 
@@ -65,6 +73,7 @@ defmodule Membrane.MoQ.Sink do
 
     @type pad_state :: %{
             track: String.t(),
+            priority: 0..255 | nil,
             track_resource: Native.track() | nil
           }
 
@@ -137,9 +146,10 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_pad_added(pad, %{pad_options: %{track: track}} = _ctx, state) do
+  def handle_pad_added(pad, %{pad_options: %{track: track, priority: priority}} = _ctx, state) do
     pad_state = %{
       track: track,
+      priority: priority,
       track_resource: nil
     }
 
@@ -154,11 +164,12 @@ defmodule Membrane.MoQ.Sink do
     pad_state = Map.fetch!(state.pads, pad)
 
     track_fmt = TrackFormat.from_stream_format(fmt)
+    priority = pad_state.priority || default_priority(track_fmt)
 
     track_res =
       pad_state.track_resource
       |> case do
-        nil -> Native.add_track(producer, pad_state.track, track_fmt)
+        nil -> Native.add_track(producer, pad_state.track, track_fmt, priority)
         existing -> Native.replace_track(existing, track_fmt)
       end
       |> case do
@@ -217,6 +228,15 @@ defmodule Membrane.MoQ.Sink do
 
       {nil, _pads} ->
         state
+    end
+  end
+
+  # defaults used by upstream, hang convention
+  @spec default_priority(Native.track_format()) :: 0..255
+  defp default_priority(track_fmt) do
+    case TrackFormat.media_type(track_fmt) do
+      :audio -> 80
+      :video -> 60
     end
   end
 

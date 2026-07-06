@@ -20,6 +20,7 @@ pub(crate) struct TrackResource {
     // For the first rendition (before any stream format change), suffix == name
     suffix: String,
     kind: TrackKind,
+    priority: u8,
 }
 
 impl Resource for TrackResource {}
@@ -29,6 +30,7 @@ pub(crate) fn add_track(
     broadcast_res: ResourceArc<BroadcastProducerResource>,
     track: String,
     format: TrackFormat,
+    priority: u8,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
@@ -40,7 +42,7 @@ pub(crate) fn add_track(
         .unwrap()
         .create_track(moq_net::Track {
             name: track,
-            priority: 0,
+            priority,
         })
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
     let name = tp.name.clone();
@@ -69,6 +71,7 @@ pub(crate) fn add_track(
             broadcast_res,
             name,
             kind,
+            priority,
         }),
     ))
 }
@@ -93,13 +96,15 @@ pub(crate) fn replace_track(
 
     let broadcast_res = old_track_res.broadcast_res.clone();
     let suffix = old_track_res.suffix.clone();
+    let priority = old_track_res.priority;
 
-    let tp = broadcast_res
-        .broadcast
-        .lock()
-        .unwrap()
-        .unique_track(&suffix)
-        .map_err(|e| crate::nif_error!("unique_track failed: {e}"))?;
+    let tp = {
+        let mut broadcast = broadcast_res.broadcast.lock().unwrap();
+        let name = broadcast.unique_name(&suffix);
+        broadcast
+            .create_track(moq_net::Track { name, priority })
+            .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
+    };
 
     let name = tp.name.clone();
 
@@ -130,6 +135,7 @@ pub(crate) fn replace_track(
             name: name.clone(),
             suffix,
             kind,
+            priority,
         }),
         name,
     ))

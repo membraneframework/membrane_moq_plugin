@@ -8,7 +8,8 @@ defmodule Membrane.MoQ.TrackFormatTest do
   use ExUnit.Case, async: true
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
-  alias Membrane.MoQ.{Native, TrackFormat}
+  alias ExMoQ.Native
+  alias Membrane.MoQ.TrackFormat
 
   describe "AAC" do
     test "round-trips through from/to stream_format" do

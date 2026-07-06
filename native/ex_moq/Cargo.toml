@@ -1,5 +1,5 @@
 [package]
-name = "moq"
+name = "ex_moq"
 version = "0.1.0"
 authors = []
 edition = "2021"

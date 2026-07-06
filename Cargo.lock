@@ -595,6 +595,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ex_moq"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "hang",
+ "moq-mux",
+ "moq-native",
+ "rustler",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "fastbloom"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1357,20 +1371,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "moq"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "hang",
- "moq-mux",
- "moq-native",
- "rustler",
- "tokio",
- "url",
 ]
 
 [[package]]

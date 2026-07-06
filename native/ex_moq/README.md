@@ -10,9 +10,9 @@ For details, see https://doc.moq.dev/concept/layer/moq-lite.html#terminology
 ## Publishing example
 
 ```elixir
-alias Membrane.MoQ.Native
+alias ExMoQ.Native
 
-{:ok, session} = Native.setup_session(url, self(), false)
+{:ok, session} = Native.create_session(url, self(), false)
 
 receive do
   :moq_connected -> :ok
@@ -20,7 +20,7 @@ after
   2_000 -> raise "timeout"
 end
 
-{:ok, broadcast} = Native.open_broadcast(session, "my_broadcast")
+{:ok, broadcast} = Native.create_broadcast_producer(session, "my_broadcast")
 
 format =
   {:h264,
@@ -46,12 +46,19 @@ end)
 ## Subscribing example
 
 ```elixir
-alias Membrane.MoQ.Native
+alias ExMoQ.Native
 
-{:ok, subscriber} = Native.start_subscriber(url, "my_broadcast", self(), false, latency_ns)
+{:ok, session} = Native.create_session(url, self(), false)
 
-Native.subscribe_track(subscriber, "my_video_track", token)
+receive do
+  :moq_connected -> :ok
+after
+  2_000 -> raise "timeout"
+end
+
+{:ok, consumer} = Native.create_broadcast_consumer(session, "my_broadcast", self(), latency_ns)
+
+Native.subscribe_track(consumer, "my_video_track", token)
 
 # TODO: add receiving snippet example here
 ```
-

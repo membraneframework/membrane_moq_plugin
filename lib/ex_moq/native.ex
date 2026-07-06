@@ -1,8 +1,8 @@
-defmodule Membrane.MoQ.Native do
+defmodule ExMoQ.Native do
   @moduledoc """
   Elixir bindings to moq-net's native Rust API
   """
-  use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
+  use Rustler, otp_app: :membrane_moq_plugin, crate: "ex_moq"
 
   @type track :: reference()
   @type session :: reference()

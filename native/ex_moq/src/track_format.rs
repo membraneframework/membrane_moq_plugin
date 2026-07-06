@@ -2,7 +2,7 @@ use bytes::Bytes;
 use rustler::{Binary, Encoder, Env, NifResult, NifStruct, NifTaggedEnum, OwnedBinary, Term};
 
 #[derive(NifStruct, Clone, PartialEq)]
-#[module = "Membrane.MoQ.Native.VideoTrackParams"]
+#[module = "ExMoQ.Native.VideoTrackParams"]
 pub(crate) struct VideoTrackParams {
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -10,14 +10,14 @@ pub(crate) struct VideoTrackParams {
 }
 
 #[derive(NifStruct, Clone, PartialEq)]
-#[module = "Membrane.MoQ.Native.AudioTrackParams"]
+#[module = "ExMoQ.Native.AudioTrackParams"]
 pub(crate) struct AudioTrackParams {
     pub(crate) sample_rate: u32,
     pub(crate) channels: u32,
 }
 
 #[derive(NifStruct, Clone, PartialEq)]
-#[module = "Membrane.MoQ.Native.H264Codec"]
+#[module = "ExMoQ.Native.H264Codec"]
 pub(crate) struct H264Codec {
     pub(crate) inline: bool,
     pub(crate) profile: u8,
@@ -26,7 +26,7 @@ pub(crate) struct H264Codec {
 }
 
 #[derive(NifStruct, Clone, PartialEq)]
-#[module = "Membrane.MoQ.Native.H265Codec"]
+#[module = "ExMoQ.Native.H265Codec"]
 pub(crate) struct H265Codec {
     pub(crate) in_band: bool,
     pub(crate) profile_space: u8,
@@ -38,7 +38,7 @@ pub(crate) struct H265Codec {
 }
 
 #[derive(NifStruct, Clone, PartialEq)]
-#[module = "Membrane.MoQ.Native.AACCodec"]
+#[module = "ExMoQ.Native.AACCodec"]
 pub(crate) struct AacCodec {
     pub(crate) profile: u8,
 }

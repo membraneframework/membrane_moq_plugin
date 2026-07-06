@@ -14,7 +14,8 @@ defmodule Membrane.MoQ.Sink do
   require Membrane.H264
   require Membrane.H265
 
-  alias Membrane.MoQ.{Native, TrackFormat}
+  alias ExMoQ.Native
+  alias Membrane.MoQ.TrackFormat
 
   def_input_pad :input,
     availability: :on_request,

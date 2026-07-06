@@ -57,4 +57,4 @@ fn load(env: rustler::Env, _info: rustler::Term) -> bool {
     .all(std::result::Result::is_ok)
 }
 
-rustler::init!("Elixir.Membrane.MoQ.Native", load = load);
+rustler::init!("Elixir.ExMoQ.Native", load = load);

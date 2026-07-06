@@ -25,7 +25,8 @@ defmodule Membrane.MoQ.Source do
   require Membrane.Logger
   require Membrane.{H264, H265}
 
-  alias Membrane.MoQ.{Native, TrackFormat}
+  alias ExMoQ.Native
+  alias Membrane.MoQ.TrackFormat
 
   def_output_pad :output,
     availability: :on_request,

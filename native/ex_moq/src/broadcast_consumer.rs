@@ -31,10 +31,16 @@ pub(crate) struct BroadcastConsumerResource {
 
 impl Resource for BroadcastConsumerResource {}
 
-type CatalogSnapshot = HashMap<String, TrackParams>;
+#[derive(Clone, PartialEq)]
+struct Rendition {
+    params: TrackParams,
+    container: hang::catalog::Container,
+}
+
+type CatalogSnapshot = HashMap<String, Rendition>;
 
 struct ConsumerState {
-    params: CatalogSnapshot,
+    renditions: CatalogSnapshot,
     pumps: JoinSet<()>,
     cancels: HashMap<Token, watch::Sender<bool>>,
     pending: HashMap<Token, (String, u8, watch::Receiver<bool>)>,
@@ -152,7 +158,7 @@ async fn run_broadcast(
     };
 
     let mut state = ConsumerState {
-        params: HashMap::new(),
+        renditions: HashMap::new(),
         pumps: JoinSet::new(),
         cancels: HashMap::new(),
         pending: HashMap::new(),
@@ -188,18 +194,11 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
         } => {
             let (cancel_tx, cancel_rx) = watch::channel(false);
             state.cancels.insert(token, cancel_tx);
-            match state.params.get(&track) {
-                Some(track_params) => {
-                    messages::send_track_format(ctx.pid, token, track_params);
-                    state.pumps.spawn(run_pump(
-                        ctx.broadcast.clone(),
-                        track,
-                        token,
-                        priority,
-                        *ctx.pid,
-                        ctx.latency,
-                        cancel_rx,
-                    ));
+            match state.renditions.get(&track) {
+                Some(rendition) => {
+                    messages::send_track_format(ctx.pid, token, &rendition.params);
+                    let pump = Pump::new(ctx, track, rendition, token, priority);
+                    state.pumps.spawn(pump.run(cancel_rx));
                 }
                 None => {
                     state.pending.insert(token, (track, priority, cancel_rx));
@@ -221,30 +220,20 @@ fn handle_new_catalog(
     mut state: ConsumerState,
     ctx: &Ctx,
 ) -> Result<ConsumerState, String> {
-    let new_params = update_catalog(ctx, snapshot, &state.params)?;
+    let new_renditions = update_catalog(ctx, snapshot, &state.renditions)?;
 
     // Start pumps for any parked commands the snapshot just resolved.
-    let ready: Vec<Token> = state
+    state
         .pending
-        .iter()
-        .filter(|(_, (track, _, _))| new_params.contains_key(track))
-        .map(|(token, _)| *token)
-        .collect();
-    for token in ready {
-        let (track, priority, cancel_rx) = state.pending.remove(&token).unwrap();
-        messages::send_track_format(ctx.pid, token, &new_params[&track]);
-        state.pumps.spawn(run_pump(
-            ctx.broadcast.clone(),
-            track,
-            token,
-            priority,
-            *ctx.pid,
-            ctx.latency,
-            cancel_rx,
-        ));
-    }
+        .extract_if(|_, (track, _, _)| new_renditions.contains_key(track.as_str()))
+        .for_each(|(token, (track, priority, cancel_rx))| {
+            let rendition = &new_renditions[&track];
+            messages::send_track_format(ctx.pid, token, &rendition.params);
+            let pump = Pump::new(ctx, track, rendition, token, priority);
+            state.pumps.spawn(pump.run(cancel_rx));
+        });
 
-    state.params = new_params;
+    state.renditions = new_renditions;
     Ok(state)
 }
 
@@ -259,64 +248,80 @@ fn update_catalog(
         Err(e) => return Err(format!("catalog error: {e}")),
     };
 
-    let new_catalog = catalog_params(&snapshot);
+    let new_catalog = catalog_renditions(&snapshot);
 
     let pid_dead = |_| "consumer pid is dead".to_string();
-    for (name, params) in old_catalog {
-        if new_catalog.get(name) != Some(params) {
+    for (name, rendition) in old_catalog {
+        if new_catalog.get(name) != Some(rendition) {
             messages::send_track_removed(ctx.pid, ctx.path, name).map_err(pid_dead)?;
         }
     }
-    for (name, params) in &new_catalog {
-        if old_catalog.get(name) != Some(params) {
-            messages::send_track_added(ctx.pid, ctx.path, name, params).map_err(pid_dead)?;
+    for (name, rendition) in &new_catalog {
+        if old_catalog.get(name) != Some(rendition) {
+            messages::send_track_added(ctx.pid, ctx.path, name, &rendition.params)
+                .map_err(pid_dead)?;
         }
     }
 
     Ok(new_catalog)
 }
 
-async fn run_pump(
+/// Everything one track subscription needs to pump its frames to Elixir.
+struct Pump {
     broadcast: moq_net::BroadcastConsumer,
-    track_name: String,
+    track: String,
+    container: hang::catalog::Container,
     token: Token,
     priority: u8,
     pid: LocalPid,
     latency: Duration,
-    mut cancel: watch::Receiver<bool>,
-) {
-    let reason = tokio::select! {
-        _ = cancel.changed() => return,
-        result = pump_track(&broadcast, &track_name, token, priority, &pid, latency) => match result {
-            Ok(()) => "track ended".to_string(),
-            Err(e) => format!("track error: {e}"),
-        }
-    };
-
-    messages::send_track_ended(&pid, token, reason);
 }
 
-async fn pump_track(
-    broadcast: &moq_net::BroadcastConsumer,
-    track_name: &str,
-    token: Token,
-    priority: u8,
-    pid: &LocalPid,
-    latency: Duration,
-) -> anyhow::Result<()> {
-    let track_ref = moq_net::Track {
-        name: track_name.to_string(),
-        priority,
-    };
-    let track_consumer = broadcast
-        .subscribe_track(&track_ref)
-        .map_err(|e| anyhow::anyhow!("subscribe_track({track_name}) failed: {e}"))?;
+impl Pump {
+    fn new(ctx: &Ctx, track: String, rendition: &Rendition, token: Token, priority: u8) -> Self {
+        Self {
+            broadcast: ctx.broadcast.clone(),
+            track,
+            container: rendition.container.clone(),
+            token,
+            priority,
+            pid: *ctx.pid,
+            latency: ctx.latency,
+        }
+    }
 
-    let mut consumer =
-        moq_mux::container::Consumer::new(track_consumer, moq_mux::container::legacy::Wire)
-            .with_latency(latency);
+    async fn run(self, mut cancel: watch::Receiver<bool>) {
+        let reason = tokio::select! {
+            _ = cancel.changed() => return,
+            result = self.pump_track() => match result {
+                Ok(()) => "track ended".to_string(),
+                Err(e) => format!("track error: {e}"),
+            }
+        };
 
-    pump_frames(&mut consumer, token, pid).await
+        messages::send_track_ended(&self.pid, self.token, reason);
+    }
+
+    async fn pump_track(&self) -> anyhow::Result<()> {
+        let track = &self.track;
+
+        let wire = moq_mux::catalog::hang::Container::try_from(&self.container)
+            .map_err(|e| anyhow::anyhow!("unsupported container on track {track}: {e}"))?;
+
+        let track_ref = moq_net::Track {
+            name: track.clone(),
+            priority: self.priority,
+        };
+        let track_consumer = self
+            .broadcast
+            .subscribe_track(&track_ref)
+            .map_err(|e| anyhow::anyhow!("subscribe_track({track}) failed: {e}"))?;
+
+        let mut consumer =
+            moq_mux::container::Consumer::new(track_consumer, wire).with_latency(self.latency);
+
+        pump_frames(&mut consumer, self.token, &self.pid).await
+    }
 }
 
 fn subscribe_catalog(
@@ -328,19 +333,27 @@ fn subscribe_catalog(
     Ok(moq_mux::catalog::hang::Consumer::<()>::new(catalog_track))
 }
 
-fn catalog_params(snapshot: &moq_mux::catalog::hang::Catalog) -> CatalogSnapshot {
-    let mut params = HashMap::new();
+fn catalog_renditions(snapshot: &moq_mux::catalog::hang::Catalog) -> CatalogSnapshot {
+    let mut renditions = HashMap::new();
     for (name, config) in &snapshot.video.renditions {
-        params.insert(name.clone(), video_params(config));
+        let rendition = Rendition {
+            params: video_params(config),
+            container: config.container.clone(),
+        };
+        renditions.insert(name.clone(), rendition);
     }
     for (name, config) in &snapshot.audio.renditions {
-        params.insert(name.clone(), audio_params(config));
+        let rendition = Rendition {
+            params: audio_params(config),
+            container: config.container.clone(),
+        };
+        renditions.insert(name.clone(), rendition);
     }
-    params
+    renditions
 }
 
 async fn pump_frames(
-    consumer: &mut moq_mux::container::Consumer<moq_mux::container::legacy::Wire>,
+    consumer: &mut moq_mux::container::Consumer<moq_mux::catalog::hang::Container>,
     token: Token,
     pid: &LocalPid,
 ) -> anyhow::Result<()> {

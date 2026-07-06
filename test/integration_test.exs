@@ -3,12 +3,11 @@ defmodule Membrane.MoQ.IntegrationTest do
   End-to-end tests that exercise `Membrane.MoQ.Sink` and `Membrane.MoQ.Source`
   against a real MoQ relay.
 
-  These tests require a running MoQ relay; set `RELAY_URL` to point at it
-  (default: `https://localhost:4443`, matching the `localhost.toml` config
-  from moq-rs). They are tagged `:integration` and excluded from the default
-  test run; opt in with:
+  The relay is spawned automatically (see `Membrane.MoQ.Test.Relay`); set
+  `RELAY_URL` to use an already-running one instead. The tests are tagged
+  `:integration` and excluded from the default test run; opt in with:
 
-      RELAY_URL=https://localhost:4443 mix test --include integration
+      mix test --include integration
   """
 
   use ExUnit.Case, async: false
@@ -18,20 +17,17 @@ defmodule Membrane.MoQ.IntegrationTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.BufferRecorder
+  alias Membrane.MoQ.Test.{BufferRecorder, Relay}
   alias Membrane.Pad
   alias Membrane.Testing.{Pipeline, Sink}
 
   @moduletag :integration
 
-  @relay_url System.get_env("RELAY_URL", "https://localhost:4443")
-  # A local relay (like the one from `localhost.toml`) uses a self-signed
-  # certificate, so TLS verification must be off; a remote relay is expected
-  # to present a valid certificate.
-  @disable_tls_verify? URI.parse(@relay_url).host in ["localhost", "127.0.0.1", "::1"]
-  # Each test uses its own broadcast name so concurrent test runs don't fight
-  # over the same path. The name is randomised per test below.
   @track "video"
+
+  setup_all do
+    [relay: Relay.ensure!()]
+  end
 
   setup do
     broadcast = "membrane/test-#{System.unique_integer([:positive])}"
@@ -39,15 +35,16 @@ defmodule Membrane.MoQ.IntegrationTest do
   end
 
   test "frames sent through the Sink are received unchanged by the Source", %{
-    broadcast: broadcast
+    broadcast: broadcast,
+    relay: relay
   } do
-    receiver = start_receiver!(broadcast)
+    receiver = start_receiver!(relay, broadcast)
     # Without `await_source_connected!`, the sender races the receiver: the
     # source can finish setup AFTER the publisher has already finished, in
     # which case it sees no frames at all. The Sink announces in
     # `handle_pad_added`, so by the time we get past `start_sender!` the
     # broadcast is in the relay's announcement list.
-    sender = start_sender!(broadcast)
+    sender = start_sender!(relay, broadcast)
     await_source_connected!(receiver)
 
     expected_payloads = collect_recorded_payloads()
@@ -63,10 +60,11 @@ defmodule Membrane.MoQ.IntegrationTest do
   end
 
   test "avc3 frames (in-band parameter sets) round-trip unchanged through the Source", %{
-    broadcast: broadcast
+    broadcast: broadcast,
+    relay: relay
   } do
-    receiver = start_receiver!(broadcast)
-    _sender = start_sender!(broadcast, stream_structure: :avc3)
+    receiver = start_receiver!(relay, broadcast)
+    _sender = start_sender!(relay, broadcast, stream_structure: :avc3)
     await_source_connected!(receiver)
 
     expected_payloads = collect_recorded_payloads()
@@ -79,10 +77,11 @@ defmodule Membrane.MoQ.IntegrationTest do
   end
 
   test "Source emits end_of_stream when the publisher disconnects after publishing a frame", %{
-    broadcast: broadcast
+    broadcast: broadcast,
+    relay: relay
   } do
-    receiver = start_receiver!(broadcast)
-    sender = start_sender!(broadcast)
+    receiver = start_receiver!(relay, broadcast)
+    sender = start_sender!(relay, broadcast)
     await_source_connected!(receiver)
 
     assert_sink_stream_format(receiver, :sink, _stream_format, 10_000)
@@ -92,9 +91,9 @@ defmodule Membrane.MoQ.IntegrationTest do
   end
 
   test "Sink closes a pad that ended before its stream format without crashing", %{
-    broadcast: broadcast
+    broadcast: broadcast,
+    relay: relay
   } do
-
     defmodule EndOfStreamSource do
       use Membrane.Source
 
@@ -111,9 +110,9 @@ defmodule Membrane.MoQ.IntegrationTest do
       child(:source, EndOfStreamSource)
       |> via_in(Pad.ref(:input, :video), options: [track: @track])
       |> child(:moq_sink, %Membrane.MoQ.Sink{
-        url: @relay_url,
+        url: relay.url,
         broadcast: broadcast,
-        disable_tls_verify?: @disable_tls_verify?
+        disable_tls_verify?: relay.disable_tls_verify?
       })
 
     pipeline = Pipeline.start_supervised!(spec: spec)
@@ -124,20 +123,20 @@ defmodule Membrane.MoQ.IntegrationTest do
                    5_000
   end
 
-  defp start_receiver!(broadcast) do
+  defp start_receiver!(relay, broadcast) do
     Pipeline.start_link_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
-          url: @relay_url,
+          url: relay.url,
           broadcast: broadcast,
-          disable_tls_verify?: @disable_tls_verify?
+          disable_tls_verify?: relay.disable_tls_verify?
         })
         |> via_out(Pad.ref(:output, :video), options: [track: @track])
         |> child(:sink, Sink)
     )
   end
 
-  defp start_sender!(broadcast, opts \\ []) do
+  defp start_sender!(relay, broadcast, opts \\ []) do
     max_buffers = Keyword.get(opts, :max_buffers, 30)
     pts_step_ms = Keyword.get(opts, :pts_step_ms, 33)
     stream_structure = Keyword.get(opts, :stream_structure, :avc1)
@@ -161,9 +160,9 @@ defmodule Membrane.MoQ.IntegrationTest do
           options: [track: @track]
         )
         |> child(:moq_sink, %Membrane.MoQ.Sink{
-          url: @relay_url,
+          url: relay.url,
           broadcast: broadcast,
-          disable_tls_verify?: @disable_tls_verify?
+          disable_tls_verify?: relay.disable_tls_verify?
         })
     )
   end
@@ -177,10 +176,10 @@ defmodule Membrane.MoQ.IntegrationTest do
       {:recorder, :eos} -> Enum.reverse(acc)
     after
       30_000 ->
-        flunk(
-          "timed out waiting for recorder EOS after #{length(acc)} buffers; " <>
-            "is the relay accepting publishes?"
-        )
+        flunk("""
+        Timed out waiting for recorder EOS after #{length(acc)} buffers.
+        Is the relay accepting publishes?
+        """)
     end
   end
 

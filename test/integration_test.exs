@@ -25,6 +25,10 @@ defmodule Membrane.MoQ.IntegrationTest do
   @moduletag :integration
 
   @relay_url System.get_env("RELAY_URL", "https://localhost:4443")
+  # A local relay (like the one from `localhost.toml`) uses a self-signed
+  # certificate, so TLS verification must be off; a remote relay is expected
+  # to present a valid certificate.
+  @disable_tls_verify? URI.parse(@relay_url).host in ["localhost", "127.0.0.1", "::1"]
   # Each test uses its own broadcast name so concurrent test runs don't fight
   # over the same path. The name is randomised per test below.
   @track "video"
@@ -109,7 +113,7 @@ defmodule Membrane.MoQ.IntegrationTest do
       |> child(:moq_sink, %Membrane.MoQ.Sink{
         url: @relay_url,
         broadcast: broadcast,
-        disable_tls_verify?: true
+        disable_tls_verify?: @disable_tls_verify?
       })
 
     pipeline = Pipeline.start_supervised!(spec: spec)
@@ -126,7 +130,7 @@ defmodule Membrane.MoQ.IntegrationTest do
         child(:source, %Membrane.MoQ.Source{
           url: @relay_url,
           broadcast: broadcast,
-          disable_tls_verify?: true
+          disable_tls_verify?: @disable_tls_verify?
         })
         |> via_out(Pad.ref(:output, :video), options: [track: @track])
         |> child(:sink, Sink)
@@ -159,7 +163,7 @@ defmodule Membrane.MoQ.IntegrationTest do
         |> child(:moq_sink, %Membrane.MoQ.Sink{
           url: @relay_url,
           broadcast: broadcast,
-          disable_tls_verify?: true
+          disable_tls_verify?: @disable_tls_verify?
         })
     )
   end

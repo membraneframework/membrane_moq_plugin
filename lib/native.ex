@@ -5,8 +5,9 @@ defmodule Membrane.MoQ.Native do
   use Rustler, otp_app: :membrane_moq_plugin, crate: "moq"
 
   @type track :: reference()
-  @type broadcast :: reference()
   @type session :: reference()
+  @type broadcast_producer :: reference()
+  @type broadcast_consumer :: reference()
 
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
@@ -67,17 +68,18 @@ defmodule Membrane.MoQ.Native do
   end
 
   @doc """
-  Connect to a MoQ relay server and prepare the session.
+  Connect to a MoQ relay server and prepare a bidirectional session.
 
-  Builds the origin synchronously so subsequent NIFs can publish broadcasts immediately.
-  The QUIC handshake completes asynchronously
+  Builds the origins synchronously so subsequent NIFs can
+  create broadcast producers and consumers immediately.
+  The QUIC handshake completes asynchronously:
   - `:moq_connected` is sent to `pid` once the session is up.
   - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the connection fails.
   - `{:moq_disconnected, reason :: String.t()}` is sent if the session terminates unexpectedly.
   """
-  @spec setup_session(String.t(), pid(), boolean()) ::
+  @spec create_session(String.t(), pid(), boolean()) ::
           {:ok, session()} | {:error, reason :: String.t()}
-  def setup_session(_url, _pid, _disable_tls_verify?),
+  def create_session(_url, _pid, _disable_tls_verify?),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -87,21 +89,19 @@ defmodule Membrane.MoQ.Native do
   def close_session(_session),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  # Broadcast NIFs
-
   @doc """
-  Opens a broadcast on the session and creates its hang + MSF catalog tracks.
+  Opens a broadcast for publishing on the session and creates its hang + MSF catalog tracks.
   """
-  @spec open_broadcast(session(), String.t()) ::
-          {:ok, broadcast()} | {:error, reason :: String.t()}
-  def open_broadcast(_session, _path),
+  @spec create_broadcast_producer(session(), String.t()) ::
+          {:ok, broadcast_producer()} | {:error, reason :: String.t()}
+  def create_broadcast_producer(_session, _path),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Closes the broadcast, finishing the catalog and aborting in-flight tracks.
   """
-  @spec close_broadcast(broadcast()) :: :ok
-  def close_broadcast(_broadcast_resource),
+  @spec close_broadcast_producer(broadcast_producer()) :: :ok
+  def close_broadcast_producer(_broadcast_producer),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @typedoc """
@@ -118,13 +118,14 @@ defmodule Membrane.MoQ.Native do
   Adds a track of any supported codec to the given broadcast and returns a track
   resource that can be used to send frames.
 
-  The first argument is the target broadcast's resource, the result of calling `open_broadcast/2`.
+  The first argument is the target broadcast's resource,
+    the result of calling `create_broadcast_producer/2`.
   The second argument is the name of the track.
   The third is the codec format, see `t:track_format/0`.
   """
-  @spec add_track(broadcast(), String.t(), track_format()) ::
+  @spec add_track(broadcast_producer(), String.t(), track_format()) ::
           {:ok, track()} | {:error, reason :: String.t()}
-  def add_track(_broadcast_res, _track, _format),
+  def add_track(_broadcast_producer, _track, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -160,40 +161,38 @@ defmodule Membrane.MoQ.Native do
   def remove_track(_track_res),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @type subscriber :: reference()
-
   @doc """
-  Connects to a MoQ relay and prepares to subscribe to tracks of `broadcast`.
+  Prepares to consume tracks of the broadcast at `path` on the session.
 
-  A single shared QUIC connection serves every track; subscribe to individual
-  tracks with `subscribe_track/3`.
+  Multiple broadcast consumers may share one session.
+  Each one independently waits for its broadcast to be announced.
+  Subscribe to individual tracks with `subscribe_track/3`.
 
   `latency_ns` is how long each track buffers received frames before emitting
   them, in nanoseconds, trading delay for resilience to jitter and reordering.
 
   Sends the following messages to `pid`:
-    * `:moq_connected`
-        once the broadcast is announced
-    * `{:moq_setup_failed, reason :: String.t()}`
-        if connection or broadcast discovery fails
-    * `{:moq_disconnected, reason :: String.t()}`
-        when the session terminates unexpectedly
-    * `{:moq_track_added, name :: String.t(), format :: track_format()}`
+    * `{:moq_broadcast_ready, path :: String.t()}`
+        once the broadcast is announced and its catalog is subscribed
+    * `{:moq_broadcast_closed, path :: String.t(), reason :: String.t()}`
+        when the broadcast ends, errors, or the session closes underneath it
+    * `{:moq_track_added, path :: String.t(), name :: String.t(), format :: track_format()}`
         when the catalog advertises a track
-    * `{:moq_track_removed, name :: String.t()}`
+    * `{:moq_track_removed, path :: String.t(), name :: String.t()}`
         when the catalog drops a track
   """
-  @spec start_subscriber(String.t(), String.t(), pid(), boolean(), non_neg_integer()) ::
-          {:ok, subscriber()} | {:error, reason :: String.t()}
-  def start_subscriber(_url, _broadcast, _pid, _disable_tls_verify?, _latency_ns),
+  @spec create_broadcast_consumer(session(), String.t(), pid(), non_neg_integer()) ::
+          {:ok, broadcast_consumer()} | {:error, reason :: String.t()}
+  def create_broadcast_consumer(_session, _path, _pid, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Subscribes to `track` within the broadcast opened by `start_subscriber/4`.
+  Subscribes to `track` within the broadcast consumed by the given consumer.
 
   `token` is a caller-chosen opaque integer echoed back in this track's messages
   so the caller can route them to the originating subscription.
-  Sends to the subscriber's `pid`:
+  Keep tokens unique across all broadcast consumers reporting to the same pid.
+  Sends to the consumer's `pid`:
     * `{:moq_track_format, token :: integer(), format :: track_format()}` once the catalog
       advertises the track, before any frame
     * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
@@ -201,21 +200,21 @@ defmodule Membrane.MoQ.Native do
     * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the
       track ends cleanly or errors
   """
-  @spec subscribe_track(subscriber(), String.t(), integer()) :: :ok
-  def subscribe_track(_subscriber, _track, _token),
+  @spec subscribe_track(broadcast_consumer(), String.t(), integer()) :: :ok
+  def subscribe_track(_broadcast_consumer, _track, _token),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Cancels the subscription identified by `token`.
   No `{:moq_track_ended, ...}` is sent for a cancelled track. Idempotent.
   """
-  @spec unsubscribe_track(subscriber(), integer()) :: :ok
-  def unsubscribe_track(_subscriber, _token),
+  @spec unsubscribe_track(broadcast_consumer(), integer()) :: :ok
+  def unsubscribe_track(_broadcast_consumer, _token),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Tears down a subscriber and all its track subscriptions. Idempotent.
+  Tears down a broadcast consumer and all its track subscriptions. Idempotent.
   """
-  @spec stop_subscriber(subscriber()) :: :ok
-  def stop_subscriber(_subscriber), do: :erlang.nif_error(:nif_not_loaded)
+  @spec close_broadcast_consumer(broadcast_consumer()) :: :ok
+  def close_broadcast_consumer(_broadcast_consumer), do: :erlang.nif_error(:nif_not_loaded)
 end

@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use crate::{
     atoms,
-    broadcast::BroadcastResource,
+    broadcast_producer::BroadcastProducerResource,
     runtime,
     track_format::{ResolvedConfig, TrackFormat, TrackKind},
 };
@@ -14,7 +14,7 @@ type LegacyProducer = moq_mux::container::Producer<moq_mux::container::legacy::W
 
 pub(crate) struct TrackResource {
     producer: Mutex<LegacyProducer>,
-    broadcast_res: ResourceArc<BroadcastResource>,
+    broadcast_res: ResourceArc<BroadcastProducerResource>,
     name: String,
     // Used to generate new, unique track names if format changes mid-stream.
     // For the first rendition (before any stream format change), suffix == name
@@ -26,7 +26,7 @@ impl Resource for TrackResource {}
 
 #[rustler::nif]
 pub(crate) fn add_track(
-    broadcast_res: ResourceArc<BroadcastResource>,
+    broadcast_res: ResourceArc<BroadcastProducerResource>,
     track: String,
     format: TrackFormat,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {

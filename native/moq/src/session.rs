@@ -1,60 +1,63 @@
 use hang::moq_net;
 
 use moq_native::ClientConfig;
-use moq_net::OriginConsumer;
-use rustler::{Atom, Encoder, LocalPid, NifResult, OwnedEnv, ResourceArc};
+use rustler::{Atom, LocalPid, NifResult, ResourceArc};
+use std::sync::Mutex;
 use tokio::sync::mpsc;
 use url::Url;
 
-use crate::{atoms, runtime};
+use crate::{atoms, messages, runtime};
 
 pub(crate) struct SessionResource {
-    pub(crate) origin: moq_net::OriginProducer,
+    pub(crate) publish: moq_net::OriginProducer,
+    pub(crate) consume: Mutex<moq_net::OriginConsumer>,
     shutdown: mpsc::UnboundedSender<()>,
 }
 
 impl rustler::Resource for SessionResource {}
 
 #[rustler::nif]
-pub(crate) fn setup_session(
+pub(crate) fn create_session(
     url: String,
     pid: LocalPid,
     disable_tls_verify: bool,
 ) -> NifResult<(Atom, ResourceArc<SessionResource>)> {
     let url = Url::parse(&url).map_err(|e| crate::nif_error!("invalid url: {e}"))?;
 
-    let origin = moq_net::Origin::random().produce();
-    let consume = origin.consume();
+    let publish = moq_net::Origin::random().produce();
+    let published = publish.consume();
+
+    let consumed = moq_net::Origin::random().produce();
+    let consume = consumed.consume();
 
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
 
     runtime().spawn(async move {
-        let config = client_config(disable_tls_verify);
-
-        let session = create_session(url, consume, config).await;
+        let session = connect(url, published, consumed, disable_tls_verify).await;
         match session {
             Ok(session) => {
-                OwnedEnv::new()
-                    .send_and_clear(&pid, |env| atoms::moq_connected().to_term(env))
-                    .expect("sending message to parent should succeed");
+                messages::send_connected(&pid);
 
                 tokio::select! {
                     _ = shutdown_rx.recv() => {} // session closed gracefully by parent
-                    result = session.closed() => handle_session_closed(result, pid)
+                    result = session.closed() => {
+                        let reason = match result {
+                            Ok(()) => "MoQ session closed gracefully".to_string(),
+                            Err(e) => e.to_string(),
+                        };
+                        messages::send_disconnected(&pid, reason);
+                    }
                 }
             }
-            Err(e) => OwnedEnv::new()
-                .send_and_clear(&pid, |env| {
-                    (atoms::moq_setup_failed(), e.to_string()).encode(env)
-                })
-                .expect("sending message to parent should succeed"),
+            Err(e) => messages::send_setup_failed(&pid, e.to_string()),
         }
     });
 
     Ok((
         atoms::ok(),
         ResourceArc::new(SessionResource {
-            origin,
+            publish,
+            consume: Mutex::new(consume),
             shutdown: shutdown_tx,
         }),
     ))
@@ -66,32 +69,19 @@ pub(crate) fn close_session(session: ResourceArc<SessionResource>) -> Atom {
     atoms::ok()
 }
 
-pub(crate) fn client_config(disable_tls_verify: bool) -> ClientConfig {
+async fn connect(
+    url: Url,
+    published: moq_net::OriginConsumer,
+    consumed: moq_net::OriginProducer,
+    disable_tls_verify: bool,
+) -> Result<moq_native::moq_net::Session, moq_native::Error> {
     let mut config = ClientConfig::default();
     config.tls.disable_verify = Some(disable_tls_verify);
-    config
-}
 
-async fn create_session(
-    url: Url,
-    consumer: OriginConsumer,
-    config: ClientConfig,
-) -> Result<moq_native::moq_net::Session, moq_native::Error> {
     let client = config.init()?;
-    client.with_publish(consumer).connect(url).await
-}
-
-fn handle_session_closed(result: Result<(), moq_net::Error>, pid: LocalPid) {
-    let message = result.map_or_else(
-        |e| (atoms::moq_disconnected(), e.to_string()),
-        |()| {
-            (
-                atoms::moq_disconnected(),
-                "MoQ session closed gracefully".to_string(),
-            )
-        },
-    );
-    OwnedEnv::new()
-        .send_and_clear(&pid, |env| message.encode(env))
-        .expect("sending message to parent should succeed");
+    client
+        .with_publish(published)
+        .with_consume(consumed)
+        .connect(url)
+        .await
 }

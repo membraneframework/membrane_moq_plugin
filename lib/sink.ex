@@ -73,16 +73,16 @@ defmodule Membrane.MoQ.Sink do
             disable_tls_verify?: boolean(),
             session: Native.session(),
             broadcast: String.t(),
-            broadcast_resource: Native.broadcast(),
+            producer: Native.broadcast_producer(),
             pads: %{Membrane.Pad.ref() => pad_state()}
           }
 
     @enforce_keys [:url, :broadcast, :container, :disable_tls_verify?]
     defstruct @enforce_keys ++
                 [
-                  session: nil,
+                  :session,
+                  :producer,
                   pads: %{},
-                  broadcast_resource: nil
                 ]
   end
 
@@ -99,7 +99,7 @@ defmodule Membrane.MoQ.Sink do
 
   @impl true
   def handle_setup(ctx, %State{url: url, disable_tls_verify?: disable_tls_verify?} = state) do
-    {:ok, session} = Native.setup_session(url, self(), disable_tls_verify?)
+    {:ok, session} = Native.create_session(url, self(), disable_tls_verify?)
 
     Membrane.ResourceGuard.register(ctx.resource_guard, fn ->
       Native.close_session(session)
@@ -110,13 +110,13 @@ defmodule Membrane.MoQ.Sink do
 
   @impl true
   def handle_info(:moq_connected, ctx, %State{session: session, broadcast: broadcast} = state) do
-    {:ok, resource} = Native.open_broadcast(session, broadcast)
+    {:ok, producer} = Native.create_broadcast_producer(session, broadcast)
 
     Membrane.ResourceGuard.register(ctx.resource_guard, fn ->
-      Native.close_broadcast(resource)
+      Native.close_broadcast_producer(producer)
     end)
 
-    {[setup: :complete], %{state | broadcast_resource: resource}}
+    {[setup: :complete], %{state | producer: producer}}
   end
 
   @impl true
@@ -149,7 +149,7 @@ defmodule Membrane.MoQ.Sink do
   def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
 
   @impl true
-  def handle_stream_format(pad, fmt, _ctx, %State{broadcast_resource: broadcast_res} = state) do
+  def handle_stream_format(pad, fmt, _ctx, %State{producer: producer} = state) do
     pad_state = Map.fetch!(state.pads, pad)
 
     track_fmt = TrackFormat.from_stream_format(fmt)
@@ -157,7 +157,7 @@ defmodule Membrane.MoQ.Sink do
     track_res =
       pad_state.track_resource
       |> case do
-        nil -> Native.add_track(broadcast_res, pad_state.track, track_fmt)
+        nil -> Native.add_track(producer, pad_state.track, track_fmt)
         existing -> Native.replace_track(existing, track_fmt)
       end
       |> case do

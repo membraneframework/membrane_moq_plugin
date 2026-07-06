@@ -107,19 +107,21 @@ defmodule Membrane.MoQ.Source do
             broadcast: String.t(),
             disable_tls_verify?: boolean(),
             latency: Membrane.Time.t(),
-            subscriber: Native.subscriber() | nil,
+            session: Native.session() | nil,
+            consumer: Native.broadcast_consumer() | nil,
             next_token: integer(),
             tokens: BiMap.t(),
-            disconnect_pending?: boolean()
+            status: :connecting | :ready | :disconnect_pending | :disconnected
           }
 
     @enforce_keys [:url, :broadcast, :disable_tls_verify?, :latency]
     defstruct @enforce_keys ++
                 [
-                  :subscriber,
+                  :session,
+                  :consumer,
                   next_token: 0,
                   tokens: BiMap.new(),
-                  disconnect_pending?: false
+                  status: :connecting
                 ]
   end
 
@@ -136,20 +138,13 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_setup(ctx, %State{} = state) do
-    {:ok, subscriber} =
-      Native.start_subscriber(
-        state.url,
-        state.broadcast,
-        self(),
-        state.disable_tls_verify?,
-        Membrane.Time.as_nanoseconds(state.latency, :round)
-      )
+    {:ok, session} = Native.create_session(state.url, self(), state.disable_tls_verify?)
 
     Membrane.ResourceGuard.register(ctx.resource_guard, fn ->
-      Native.stop_subscriber(subscriber)
+      Native.close_session(session)
     end)
 
-    {[setup: :incomplete], %{state | subscriber: subscriber}}
+    {[setup: :incomplete], %{state | session: session}}
   end
 
   @impl true
@@ -170,8 +165,8 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
-  def handle_playing(ctx, %{disconnect_pending?: true} = state) do
-    {eos_all(ctx.pads), state}
+  def handle_playing(ctx, %{status: :disconnect_pending} = state) do
+    {eos_all(ctx.pads), %{state | status: :disconnected}}
   end
 
   def handle_playing(ctx, state) do
@@ -189,19 +184,40 @@ defmodule Membrane.MoQ.Source do
         {[], state}
 
       token ->
-        Native.unsubscribe_track(state.subscriber, token)
+        if state.consumer != nil do
+          Native.unsubscribe_track(state.consumer, token)
+        end
+
         {[], %{state | tokens: BiMap.delete_value(state.tokens, pad)}}
     end
   end
 
   @impl true
-  def handle_info(:moq_connected, _ctx, state), do: {[setup: :complete], state}
+  def handle_info(:moq_connected, ctx, state) do
+    {:ok, consumer} =
+      Native.create_broadcast_consumer(
+        state.session,
+        state.broadcast,
+        self(),
+        Membrane.Time.as_nanoseconds(state.latency, :round)
+      )
 
-  def handle_info({:moq_track_added, name, format}, _ctx, state) do
+    Membrane.ResourceGuard.register(ctx.resource_guard, fn ->
+      Native.close_broadcast_consumer(consumer)
+    end)
+
+    {[], %{state | consumer: consumer}}
+  end
+
+  def handle_info({:moq_broadcast_ready, _path}, _ctx, state) do
+    {[setup: :complete], %{state | status: :ready}}
+  end
+
+  def handle_info({:moq_track_added, _path, name, format}, _ctx, state) do
     {[notify_parent: {:new_track, build_track_info(name, format)}], state}
   end
 
-  def handle_info({:moq_track_removed, name}, _ctx, state) do
+  def handle_info({:moq_track_removed, _path, name}, _ctx, state) do
     {[notify_parent: {:track_removed, name}], state}
   end
 
@@ -251,14 +267,11 @@ defmodule Membrane.MoQ.Source do
   end
 
   def handle_info({:moq_disconnected, reason}, ctx, state) do
-    Membrane.Logger.debug("MoQ subscriber disconnected: #{inspect(reason)}")
+    handle_closed(reason, ctx, state)
+  end
 
-    notify_disconnected = [notify_parent: {:disconnected, reason}]
-
-    case ctx.playback do
-      :playing -> {notify_disconnected ++ eos_all(ctx.pads), state}
-      _other -> {notify_disconnected, %{state | disconnect_pending?: true}}
-    end
+  def handle_info({:moq_broadcast_closed, _path, reason}, ctx, state) do
+    handle_closed(reason, ctx, state)
   end
 
   def handle_info(msg, _ctx, state) do
@@ -266,9 +279,30 @@ defmodule Membrane.MoQ.Source do
     {[], state}
   end
 
+  @spec handle_closed(String.t(), map(), State.t()) ::
+          {[Membrane.Element.Action.t()], State.t()}
+  defp handle_closed(reason, _ctx, %{status: :connecting}) do
+    raise "MoQ subscriber setup failed: #{inspect(reason)}"
+  end
+
+  defp handle_closed(_reason, _ctx, %{status: status} = state)
+       when status in [:disconnect_pending, :disconnected],
+       do: {[], state}
+
+  defp handle_closed(reason, ctx, %{status: :ready} = state) do
+    Membrane.Logger.debug("MoQ subscriber disconnected: #{inspect(reason)}")
+
+    notify_disconnected = [notify_parent: {:disconnected, reason}]
+
+    case ctx.playback do
+      :playing -> {notify_disconnected ++ eos_all(ctx.pads), %{state | status: :disconnected}}
+      :stopped -> {notify_disconnected, %{state | status: :disconnect_pending}}
+    end
+  end
+
   @spec start_pad(String.t(), integer(), State.t()) :: :ok
   defp start_pad(track, token, state) do
-    Native.subscribe_track(state.subscriber, track, token)
+    Native.subscribe_track(state.consumer, track, token)
   end
 
   @spec eos_all(%{Membrane.Pad.ref() => map()}) :: [Membrane.Element.Action.t()]

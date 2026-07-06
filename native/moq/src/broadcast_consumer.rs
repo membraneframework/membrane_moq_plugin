@@ -1,17 +1,15 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use url::Url;
-
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 
 use rustler::{Atom, LocalPid, NifResult, Resource, ResourceArc};
 
 use hang::moq_net;
-use moq_native::ClientConfig;
 
 use crate::messages::{self, Token};
+use crate::session::SessionResource;
 use crate::track_format::{audio_params, video_params, TrackParams};
 use crate::{atoms, runtime};
 
@@ -20,70 +18,57 @@ enum Command {
     Unsubscribe { token: Token },
 }
 
-pub(crate) struct SubscriberResource {
+pub(crate) struct BroadcastConsumerResource {
     commands: mpsc::UnboundedSender<Command>,
     shutdown: mpsc::UnboundedSender<()>,
 }
 
-impl Resource for SubscriberResource {}
+impl Resource for BroadcastConsumerResource {}
 
 type CatalogSnapshot = HashMap<String, TrackParams>;
 
-/// Mutable state the session loop threads through each iteration by value, so
-/// handlers own it rather than reaching into scattered `&mut` locals.
-struct LoopState {
-    /// Latest codec params per track name, from the most recent catalog snapshot.
+struct ConsumerState {
     params: CatalogSnapshot,
     pumps: JoinSet<()>,
     cancels: HashMap<Token, watch::Sender<bool>>,
-    /// Subscribe commands whose track has not yet appeared in the catalog. Held
-    /// here (with their cancel receiver) until a snapshot advertises the track.
     pending: HashMap<Token, (String, watch::Receiver<bool>)>,
 }
 
-/// Immutable context shared by every loop iteration.
 struct Ctx<'a> {
     broadcast: &'a moq_net::BroadcastConsumer,
+    path: &'a str,
     latency: Duration,
     pid: &'a LocalPid,
 }
 
 #[rustler::nif]
-pub(crate) fn start_subscriber(
-    url: String,
-    broadcast: String,
+pub(crate) fn create_broadcast_consumer(
+    session: ResourceArc<SessionResource>,
+    path: String,
     pid: LocalPid,
-    disable_tls_verify: bool,
     latency_ns: u64,
-) -> NifResult<(Atom, ResourceArc<SubscriberResource>)> {
-    let url = Url::parse(&url).map_err(|e| crate::nif_error!("invalid url: {e}"))?;
+) -> NifResult<(Atom, ResourceArc<BroadcastConsumerResource>)> {
     let latency = Duration::from_nanos(latency_ns);
+
+    // A clone with its own announcement cursor, so each broadcast consumer
+    // awaits its broadcast independently of any sibling consumers.
+    let origin = session.consume.lock().unwrap().consume();
 
     let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
     let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel::<()>();
 
-    runtime().spawn(async move {
-        let config = crate::session::client_config(disable_tls_verify);
-
-        let result = run_session(
-            url,
-            broadcast,
-            &pid,
-            config,
-            latency,
-            commands_rx,
-            shutdown_rx,
-        )
-        .await;
-
-        if let Err(e) = result {
-            messages::send_setup_failed(&pid, e.to_string());
-        }
-    });
+    runtime().spawn(run_broadcast(
+        origin,
+        path,
+        pid,
+        latency,
+        commands_rx,
+        shutdown_rx,
+    ));
 
     Ok((
         atoms::ok(),
-        ResourceArc::new(SubscriberResource {
+        ResourceArc::new(BroadcastConsumerResource {
             commands: commands_tx,
             shutdown: shutdown_tx,
         }),
@@ -92,77 +77,84 @@ pub(crate) fn start_subscriber(
 
 #[rustler::nif]
 pub(crate) fn subscribe_track(
-    subscriber: ResourceArc<SubscriberResource>,
+    consumer: ResourceArc<BroadcastConsumerResource>,
     track: String,
     token: Token,
 ) -> Atom {
-    let _ = subscriber
-        .commands
-        .send(Command::Subscribe { track, token });
+    let _ = consumer.commands.send(Command::Subscribe { track, token });
     atoms::ok()
 }
 
 #[rustler::nif]
-pub(crate) fn unsubscribe_track(subscriber: ResourceArc<SubscriberResource>, token: Token) -> Atom {
-    let _ = subscriber.commands.send(Command::Unsubscribe { token });
+pub(crate) fn unsubscribe_track(
+    consumer: ResourceArc<BroadcastConsumerResource>,
+    token: Token,
+) -> Atom {
+    let _ = consumer.commands.send(Command::Unsubscribe { token });
     atoms::ok()
 }
 
 #[rustler::nif]
-pub(crate) fn stop_subscriber(subscriber: ResourceArc<SubscriberResource>) -> Atom {
-    let _ = subscriber.shutdown.send(());
+pub(crate) fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
+    let _ = consumer.shutdown.send(());
     atoms::ok()
 }
 
-async fn run_session(
-    url: Url,
-    broadcast_name: String,
-    pid: &LocalPid,
-    config: ClientConfig,
+async fn run_broadcast(
+    origin: moq_net::OriginConsumer,
+    path: String,
+    pid: LocalPid,
     latency: Duration,
     mut commands_rx: mpsc::UnboundedReceiver<Command>,
     mut shutdown_rx: mpsc::UnboundedReceiver<()>,
-) -> anyhow::Result<()> {
-    let origin = moq_net::Origin::random().produce();
-    let mut origin_consumer = origin.consume();
-
-    let client = config.init()?.with_consume(origin);
-    let session = client.connect(url).await?;
-
+) {
     let broadcast = tokio::select! {
-        broadcast = await_broadcast(&mut origin_consumer, &broadcast_name) => {
-            broadcast.ok_or_else(|| anyhow::anyhow!(
-                "broadcast {broadcast_name:?} was not announced before origin closed"
-            ))?
-        }
-        _ = shutdown_rx.recv() => return Ok(()),
+        broadcast = origin.announced_broadcast(path.as_str()) => match broadcast {
+            Some(broadcast) => broadcast,
+            None => {
+                messages::send_broadcast_closed(
+                    &pid,
+                    &path,
+                    format!("broadcast {path:?} was not announced before the session closed"),
+                );
+                return;
+            }
+        },
+        _ = shutdown_rx.recv() => return,
     };
 
-    messages::send_connected(pid);
+    let mut catalog = match subscribe_catalog(&broadcast) {
+        Ok(catalog) => catalog,
+        Err(e) => {
+            messages::send_broadcast_closed(&pid, &path, e.to_string());
+            return;
+        }
+    };
 
-    let mut catalog = subscribe_catalog(&broadcast)?;
+    messages::send_broadcast_ready(&pid, &path);
 
     let ctx = Ctx {
         broadcast: &broadcast,
+        path: &path,
         latency,
-        pid,
+        pid: &pid,
     };
 
-    let mut state = LoopState {
+    let mut state = ConsumerState {
         params: HashMap::new(),
         pumps: JoinSet::new(),
         cancels: HashMap::new(),
         pending: HashMap::new(),
     };
 
-    let disconnect_reason = loop {
+    let close_reason = loop {
         tokio::select! {
             command = commands_rx.recv() => match command {
                 Some(command) => state = handle_command(command, state, &ctx),
-                // The resource was dropped without a stop; treat as shutdown.
-                None => return Ok(()),
+                // The resource was dropped without a close; treat as shutdown.
+                None => return,
             },
-            _ = shutdown_rx.recv() => return Ok(()),
+            _ = shutdown_rx.recv() => return,
             _ = state.pumps.join_next(), if !state.pumps.is_empty() => {}
             snapshot = catalog.next() => {
                 state = match handle_new_catalog(snapshot, state, &ctx) {
@@ -170,27 +162,17 @@ async fn run_session(
                     Err(reason) => break reason,
                 };
             }
-            result = session.closed() => break match result {
-                Ok(()) => "session closed gracefully".to_string(),
-                Err(e) => format!("session error: {e}"),
-            },
         }
     };
 
-    messages::send_disconnected(pid, disconnect_reason);
-    Ok(())
+    messages::send_broadcast_closed(&pid, &path, close_reason);
 }
 
-fn handle_command(command: Command, mut state: LoopState, ctx: &Ctx) -> LoopState {
+fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> ConsumerState {
     match command {
         Command::Subscribe { track, token } => {
             let (cancel_tx, cancel_rx) = watch::channel(false);
             state.cancels.insert(token, cancel_tx);
-            // Only subscribe to the track once the catalog advertises it:
-            // publishers create tracks lazily on the first stream_format, so
-            // subscribing earlier races the announcement and the relay answers
-            // NotFound. If we already have params, start now; otherwise park the
-            // command until a snapshot resolves it.
             match state.params.get(&track) {
                 Some(track_params) => {
                     messages::send_track_format(ctx.pid, token, track_params);
@@ -220,10 +202,10 @@ fn handle_command(command: Command, mut state: LoopState, ctx: &Ctx) -> LoopStat
 
 fn handle_new_catalog(
     snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
-    mut state: LoopState,
+    mut state: ConsumerState,
     ctx: &Ctx,
-) -> Result<LoopState, String> {
-    let new_params = update_catalog(ctx.pid, snapshot, &state.params)?;
+) -> Result<ConsumerState, String> {
+    let new_params = update_catalog(ctx, snapshot, &state.params)?;
 
     // Start pumps for any parked commands the snapshot just resolved.
     let ready: Vec<Token> = state
@@ -249,11 +231,8 @@ fn handle_new_catalog(
     Ok(state)
 }
 
-/// Diff the incoming catalog snapshot against the previous one, notifying Elixir
-/// of added/removed tracks, and return the new per-track params. Errors carry a
-/// disconnect reason that ends the session loop.
 fn update_catalog(
-    pid: &LocalPid,
+    ctx: &Ctx,
     snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
     old_catalog: &CatalogSnapshot,
 ) -> Result<CatalogSnapshot, String> {
@@ -265,15 +244,15 @@ fn update_catalog(
 
     let new_catalog = catalog_params(&snapshot);
 
-    let pid_dead = || "subscriber pid is dead".to_string();
+    let pid_dead = |_| "consumer pid is dead".to_string();
     for (name, params) in old_catalog {
         if new_catalog.get(name) != Some(params) {
-            messages::send_track_removed(pid, name).map_err(|_| pid_dead())?;
+            messages::send_track_removed(ctx.pid, ctx.path, name).map_err(pid_dead)?;
         }
     }
     for (name, params) in &new_catalog {
         if old_catalog.get(name) != Some(params) {
-            messages::send_track_added(pid, name, params).map_err(|_| pid_dead())?;
+            messages::send_track_added(ctx.pid, ctx.path, name, params).map_err(pid_dead)?;
         }
     }
 
@@ -306,9 +285,6 @@ async fn pump_track(
     pid: &LocalPid,
     latency: Duration,
 ) -> anyhow::Result<()> {
-    // The caller only spawns a pump once the catalog advertises this track, so
-    // the subscribe below no longer races the announcement, and the stream
-    // format has already been sent to Elixir from the catalog params.
     let track_ref = moq_net::Track {
         name: track_name.to_string(),
         priority: 0,
@@ -322,20 +298,6 @@ async fn pump_track(
             .with_latency(latency);
 
     pump_frames(&mut consumer, token, pid).await
-}
-
-async fn await_broadcast(
-    consumer: &mut moq_net::OriginConsumer,
-    name: &str,
-) -> Option<moq_net::BroadcastConsumer> {
-    while let Some((path, broadcast)) = consumer.announced().await {
-        if path.as_str() == name {
-            if let Some(broadcast) = broadcast {
-                return Some(broadcast);
-            }
-        }
-    }
-    None
 }
 
 fn subscribe_catalog(
@@ -364,13 +326,10 @@ async fn pump_frames(
     pid: &LocalPid,
 ) -> anyhow::Result<()> {
     while let Some(frame) = consumer.read().await? {
-        // u128 → i64: real-world frame timestamps fit. If a stream somehow
-        // overflows i64 microseconds (~292,000 years), the cast wraps and the
-        // Elixir side sees a meaningless value, but no UB.
         let timestamp_us = frame.timestamp.as_micros() as i64;
 
         messages::send_frame(pid, token, &frame.payload, timestamp_us, frame.keyframe)
-            .map_err(|_| anyhow::anyhow!("subscriber pid is dead"))?;
+            .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
     }
     Ok(())
 }

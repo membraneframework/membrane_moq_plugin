@@ -1,15 +1,15 @@
 use std::sync::OnceLock;
 
-mod broadcast;
+mod broadcast_consumer;
+mod broadcast_producer;
 mod messages;
 mod session;
-mod subscriber;
 mod track;
 mod track_format;
 
-use broadcast::BroadcastResource;
+use broadcast_consumer::BroadcastConsumerResource;
+use broadcast_producer::BroadcastProducerResource;
 use session::SessionResource;
-use subscriber::SubscriberResource;
 use track::TrackResource;
 
 macro_rules! nif_error {
@@ -31,6 +31,8 @@ pub(crate) mod atoms {
         moq_track_ended,
         moq_track_added,
         moq_track_removed,
+        moq_broadcast_ready,
+        moq_broadcast_closed,
     }
 }
 
@@ -47,9 +49,9 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
 fn load(env: rustler::Env, _info: rustler::Term) -> bool {
     [
         env.register::<SessionResource>(),
-        env.register::<BroadcastResource>(),
+        env.register::<BroadcastProducerResource>(),
         env.register::<TrackResource>(),
-        env.register::<SubscriberResource>(),
+        env.register::<BroadcastConsumerResource>(),
     ]
     .iter()
     .all(std::result::Result::is_ok)

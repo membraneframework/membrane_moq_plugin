@@ -141,7 +141,7 @@ defmodule ExMoQ.Native do
   @doc """
   Sends a frame to a track.
 
-  `timestamp_us` is the presentation timestamp in microseconds.
+  `timestamp_ns` is the presentation timestamp in nanoseconds.
 
   `keyframe?` must be `true` for IDR frames on video tracks (triggers a new MoQ group).
   For audio tracks pass `true` for every frame.
@@ -150,7 +150,7 @@ defmodule ExMoQ.Native do
   """
   @spec send_frame(track(), pos_integer(), boolean(), binary()) ::
           :ok | {:error, reason :: String.t()}
-  def send_frame(_track_res, _timestamp_us, _keyframe?, _data),
+  def send_frame(_track_res, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -195,7 +195,7 @@ defmodule ExMoQ.Native do
   Sends to the consumer's `pid`:
     * `{:moq_track_format, token :: integer(), format :: track_format()}` once the catalog
       advertises the track, before any frame
-    * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_us :: integer(), keyframe? :: boolean()}`
+    * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
       for every received frame
     * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the
       track ends cleanly or errors

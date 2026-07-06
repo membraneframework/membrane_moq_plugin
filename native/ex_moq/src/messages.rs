@@ -71,7 +71,7 @@ pub(crate) fn send_frame(
     pid: &LocalPid,
     token: Token,
     payload: &[u8],
-    timestamp_us: i64,
+    timestamp_ns: i64,
     keyframe: bool,
 ) -> Result<(), PidDead> {
     OwnedEnv::new()
@@ -80,7 +80,7 @@ pub(crate) fn send_frame(
                 atoms::moq_frame(),
                 token,
                 make_binary(env, payload),
-                timestamp_us,
+                timestamp_ns,
                 keyframe,
             )
                 .encode(env)

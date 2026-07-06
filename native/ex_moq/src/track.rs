@@ -138,11 +138,11 @@ pub(crate) fn replace_track(
 #[rustler::nif]
 pub(crate) fn send_frame(
     track_res: ResourceArc<TrackResource>,
-    timestamp_us: u64,
+    timestamp_ns: u64,
     keyframe: bool,
     data: Binary,
 ) -> NifResult<Atom> {
-    let timestamp = moq_mux::container::Timestamp::from_micros(timestamp_us)
+    let timestamp = moq_mux::container::Timestamp::from_nanos(timestamp_ns)
         .map_err(|e| crate::nif_error!("timestamp conversion failed: {e}"))?;
     let frame = moq_mux::container::Frame {
         timestamp,

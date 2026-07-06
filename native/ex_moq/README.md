@@ -36,8 +36,8 @@ IO.puts("MoQ setup successful, you can start streaming frames to PID #{inspect(s
 
 Stream.repeatedly(fn ->
   receive do
-    {:video, buf, timestamp_us, keyframe?} ->
-      Native.send_frame(video_track, timestamp_us, keyframe?, buf)
+    {:video, buf, timestamp_ns, keyframe?} ->
+      Native.send_frame(video_track, timestamp_ns, keyframe?, buf)
   end
 end)
 |> Stream.run()

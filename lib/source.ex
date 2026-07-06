@@ -232,7 +232,7 @@ defmodule Membrane.MoQ.Source do
     {actions, state}
   end
 
-  def handle_info({:moq_frame, token, payload, timestamp_us, keyframe?}, ctx, state) do
+  def handle_info({:moq_frame, token, payload, timestamp_ns, keyframe?}, ctx, state) do
     actions =
       case active_pad(ctx, state, token) do
         nil ->
@@ -241,7 +241,7 @@ defmodule Membrane.MoQ.Source do
         pad ->
           buffer = %Membrane.Buffer{
             payload: payload,
-            pts: Membrane.Time.microseconds(timestamp_us),
+            pts: Membrane.Time.nanoseconds(timestamp_ns),
             metadata: %{keyframe?: keyframe?}
           }
 

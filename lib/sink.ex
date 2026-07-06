@@ -178,15 +178,14 @@ defmodule Membrane.MoQ.Sink do
   @impl true
   def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, state) do
     pad_state = Map.fetch!(state.pads, pad)
-    timestamp_us = Membrane.Time.as_microseconds(buffer.pts, :round)
 
-    if timestamp_us < 0 do
+    if buffer.pts < 0 do
       raise "Received buffer with negative timestamp"
     end
 
     case Native.send_frame(
            pad_state.track_resource,
-           timestamp_us,
+           buffer.pts,
            keyframe?(buffer),
            buffer.payload
          ) do

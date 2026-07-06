@@ -326,9 +326,9 @@ async fn pump_frames(
     pid: &LocalPid,
 ) -> anyhow::Result<()> {
     while let Some(frame) = consumer.read().await? {
-        let timestamp_us = frame.timestamp.as_micros() as i64;
+        let timestamp_ns = frame.timestamp.as_nanos() as i64;
 
-        messages::send_frame(pid, token, &frame.payload, timestamp_us, frame.keyframe)
+        messages::send_frame(pid, token, &frame.payload, timestamp_ns, frame.keyframe)
             .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
     }
     Ok(())

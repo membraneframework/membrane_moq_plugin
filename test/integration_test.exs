@@ -1,13 +1,6 @@
 defmodule Membrane.MoQ.IntegrationTest do
   @moduledoc """
-  End-to-end tests that exercise `Membrane.MoQ.Sink` and `Membrane.MoQ.Source`
-  against a real MoQ relay.
-
-  The relay is spawned automatically (see `Membrane.MoQ.Test.Relay`); set
-  `RELAY_URL` to use an already-running one instead. The tests are tagged
-  `:integration` and excluded from the default test run; opt in with:
-
-      mix test --include integration
+  End-to-end tests that exercise `Membrane.MoQ.Sink` and `Membrane.MoQ.Source` against a real MoQ relay.
   """
 
   use ExUnit.Case, async: false
@@ -17,9 +10,9 @@ defmodule Membrane.MoQ.IntegrationTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.{BufferRecorder, Relay}
+  alias Membrane.MoQ.Test.{Relay, Take}
   alias Membrane.Pad
-  alias Membrane.Testing.{Pipeline, Sink}
+  alias Membrane.Testing
 
   @moduletag :integration
 
@@ -47,11 +40,12 @@ defmodule Membrane.MoQ.IntegrationTest do
     sender = start_sender!(relay, broadcast)
     await_source_connected!(receiver)
 
-    expected_payloads = collect_recorded_payloads()
+    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
+    expected_payloads = drain_payloads(sender, :expected_sink)
     assert expected_payloads != []
 
     assert_end_of_stream(receiver, :sink, :input, 30_000)
-    received_payloads = drain_received_payloads(receiver)
+    received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
 
@@ -64,14 +58,15 @@ defmodule Membrane.MoQ.IntegrationTest do
     relay: relay
   } do
     receiver = start_receiver!(relay, broadcast)
-    _sender = start_sender!(relay, broadcast, stream_structure: :avc3)
+    sender = start_sender!(relay, broadcast, stream_structure: :avc3)
     await_source_connected!(receiver)
 
-    expected_payloads = collect_recorded_payloads()
+    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
+    expected_payloads = drain_payloads(sender, :expected_sink)
     assert expected_payloads != []
 
     assert_end_of_stream(receiver, :sink, :input, 30_000)
-    received_payloads = drain_received_payloads(receiver)
+    received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
   end
@@ -115,7 +110,7 @@ defmodule Membrane.MoQ.IntegrationTest do
         disable_tls_verify?: relay.disable_tls_verify?
       })
 
-    pipeline = Pipeline.start_supervised!(spec: spec)
+    pipeline = Testing.Pipeline.start_supervised!(spec: spec)
     ref = Process.monitor(pipeline)
 
     refute_receive {:DOWN, ^ref, :process, ^pipeline,
@@ -124,7 +119,7 @@ defmodule Membrane.MoQ.IntegrationTest do
   end
 
   defp start_receiver!(relay, broadcast) do
-    Pipeline.start_link_supervised!(
+    Testing.Pipeline.start_link_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
           url: relay.url,
@@ -132,29 +127,28 @@ defmodule Membrane.MoQ.IntegrationTest do
           disable_tls_verify?: relay.disable_tls_verify?
         })
         |> via_out(Pad.ref(:output, :video), options: [track: @track])
-        |> child(:sink, Sink)
+        |> child(:sink, Testing.Sink)
     )
   end
 
   defp start_sender!(relay, broadcast, opts \\ []) do
     max_buffers = Keyword.get(opts, :max_buffers, 30)
-    pts_step_ms = Keyword.get(opts, :pts_step_ms, 33)
     stream_structure = Keyword.get(opts, :stream_structure, :avc1)
 
-    Pipeline.start_link_supervised!(
-      spec:
+    Testing.Pipeline.start_link_supervised!(
+      spec: [
         child(:file_source, %Membrane.File.Source{
           location: "test/fixtures/bbb_with_aud.h264"
         })
-        |> child(:parser, %Membrane.H264.Parser{output_stream_structure: stream_structure})
-        |> child(:recorder, %BufferRecorder{
-          recipient: self(),
-          pts_step: Membrane.Time.milliseconds(pts_step_ms),
-          max_buffers: max_buffers
+        |> child(:parser, %Membrane.H264.Parser{
+          output_stream_structure: stream_structure,
+          generate_best_effort_timestamps: %{framerate: {30, 1}}
         })
-        # Realtimer paces the publish based on the pts assigned by
-        # `BufferRecorder`, so the relay has time to forward frames to the
-        # receiver before the broadcast closes.
+        |> child(:take, %Take{count: max_buffers})
+        |> child(:tee, Membrane.Tee)
+        # Realtimer paces the publish based on the pts assigned by the parser,
+        # so the relay has time to forward frames to the receiver before the
+        # broadcast closes.
         |> child(:realtimer, Membrane.Realtimer)
         |> via_in(Pad.ref(:input, :video),
           options: [track: @track]
@@ -163,31 +157,21 @@ defmodule Membrane.MoQ.IntegrationTest do
           url: relay.url,
           broadcast: broadcast,
           disable_tls_verify?: relay.disable_tls_verify?
-        })
+        }),
+        get_child(:tee)
+        |> child(:expected_sink, Testing.Sink)
+      ]
     )
   end
 
   defp await_source_connected!(receiver),
     do: assert_sink_playing(receiver, :sink, 10_000)
 
-  defp collect_recorded_payloads(acc \\ []) do
+  defp drain_payloads(pipeline, child, acc \\ []) do
     receive do
-      {:recorder, :buffer, payload} -> collect_recorded_payloads([payload | acc])
-      {:recorder, :eos} -> Enum.reverse(acc)
-    after
-      30_000 ->
-        flunk("""
-        Timed out waiting for recorder EOS after #{length(acc)} buffers.
-        Is the relay accepting publishes?
-        """)
-    end
-  end
-
-  defp drain_received_payloads(pipeline, acc \\ []) do
-    receive do
-      {Membrane.Testing.Pipeline, ^pipeline,
-       {:handle_child_notification, {{:buffer, %Membrane.Buffer{payload: payload}}, :sink}}} ->
-        drain_received_payloads(pipeline, [payload | acc])
+      {Testing.Pipeline, ^pipeline,
+       {:handle_child_notification, {{:buffer, %Membrane.Buffer{payload: payload}}, ^child}}} ->
+        drain_payloads(pipeline, child, [payload | acc])
     after
       0 -> Enum.reverse(acc)
     end

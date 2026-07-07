@@ -7,7 +7,8 @@
 # (legacy container) and by the moq CLI's fmp4 importer (CMAF).
 #
 # The track name is chosen by the publisher, so the pipeline wires its pad
-# from the Source's `{:new_track, info}` notification instead of hardcoding it.
+# from the Source's `{:new_track, {track, stream_format}}` notification
+# instead of hardcoding it.
 #
 # Prerequisites:
 #   - A MoQ relay at https://localhost:4443 with anonymous auth (e.g. moq-relay
@@ -110,22 +111,22 @@ defmodule Subscriber do
 
   @impl true
   def handle_child_notification(
-        {:new_track, %Membrane.MoQ.Source.TrackInfo{} = info},
+        {:new_track, {track, stream_format}},
         :source,
         _ctx,
         state
       ) do
-    if MapSet.member?(state.subscribed, info.track) do
+    if MapSet.member?(state.subscribed, track) do
       {[], state}
     else
-      Logger.info("announced #{info.track} (#{info.type}), subscribing")
+      Logger.info("announced #{track} (#{inspect(stream_format.__struct__)}), subscribing")
 
       spec =
         get_child(:source)
-        |> via_out(Pad.ref(:output, info.track), options: [track: info.track])
-        |> child({:logger, info.track}, %FrameLogger{track: info.track})
+        |> via_out(Pad.ref(:output, track), options: [track: track])
+        |> child({:logger, track}, %FrameLogger{track: track})
 
-      {[spec: spec], %{state | subscribed: MapSet.put(state.subscribed, info.track)}}
+      {[spec: spec], %{state | subscribed: MapSet.put(state.subscribed, track)}}
     end
   end
 

@@ -64,15 +64,15 @@ defmodule Subscriber do
 
   @impl true
   def handle_child_notification(
-        {:new_track, %Membrane.MoQ.Source.TrackInfo{} = info},
+        {:new_track, {track, %module{} = stream_format}},
         {:source, gen},
         _ctx,
         %{gen: gen} = state
       ) do
-    Logger.info("announced #{info.track} (#{info.type})")
+    Logger.info("announced #{track} (#{inspect(module)})")
 
-    if info.type == :video do
-      maybe_subscribe(put_in(state.available[info.track], info))
+    if module in [Membrane.H264, Membrane.H265] do
+      maybe_subscribe(put_in(state.available[track], stream_format))
     else
       {[], state}
     end
@@ -122,16 +122,15 @@ defmodule Subscriber do
   # Subscribe to the lowest-named advertised video track when idle.
   defp maybe_subscribe(%{current: nil, available: available} = state)
        when map_size(available) > 0 do
-    info = available |> Map.values() |> Enum.min_by(& &1.track)
-    Logger.info("subscribing to #{info.track}")
-    {[spec: track_spec(info, state.gen)], %{state | current: info.track}}
+    {name, stream_format} = Enum.min_by(available, fn {name, _format} -> name end)
+    Logger.info("subscribing to #{name}")
+    {[spec: track_spec(name, stream_format, state.gen)], %{state | current: name}}
   end
 
   defp maybe_subscribe(state), do: {[], state}
 
-  defp track_spec(info, gen) do
-    name = info.track
-    {parser, decoder} = playback_for(info.stream_format)
+  defp track_spec(name, stream_format, gen) do
+    {parser, decoder} = playback_for(stream_format)
 
     get_child({:source, gen})
     |> via_out(Pad.ref(:output, name), options: [track: name])

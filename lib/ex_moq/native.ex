@@ -9,6 +9,15 @@ defmodule ExMoQ.Native do
   @type broadcast_producer :: reference()
   @type broadcast_consumer :: reference()
 
+  @typedoc """
+  Wire container a published track's frames are encapsulated in.
+
+  `:cmaf` currently returns an error from `add_track/6`: publishing it is
+  blocked on upstream moq-mux exporting its init-segment synthesis
+  (`docs/upstream_moq_mux_contribution.md`, item 4).
+  """
+  @type container :: :legacy | :loc | :cmaf
+
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
     @type t :: %__MODULE__{
@@ -118,21 +127,32 @@ defmodule ExMoQ.Native do
   Adds a track of any supported codec to the given broadcast and returns a track
   resource that can be used to send frames.
 
-  The first argument is the target broadcast's resource,
-    the result of calling `create_broadcast_producer/2`.
-  The second argument is the name of the track.
-  The third is the codec format, see `t:track_format/0`.
-  The fourth is the track's delivery priority:
-  under congestion, tracks with a higher value are sent first
+  Arguments:
+    * `broadcast_producer` - the target broadcast's resource,
+      the result of calling `create_broadcast_producer/2`.
+    * `track` - name of the track.
+    * `format` - codec format, see `t:track_format/0`.
+    * `priority` - the track's delivery priority:
+      under congestion, tracks with a higher value are sent first.
+    * `container` - the wire container, see `t:container/0`.
+      Stamped into the track's catalog rendition so consumers pick the matching parser.
+    * `latency_ns` - how long the track buffers frames
+      before writing them to the wire, in nanoseconds (`0` writes each frame immediately).
   """
-  @spec add_track(broadcast_producer(), String.t(), track_format(), 0..255) ::
-          {:ok, track()} | {:error, reason :: String.t()}
-  def add_track(_broadcast_producer, _track, _format, _priority),
+  @spec add_track(
+          broadcast_producer(),
+          String.t(),
+          track_format(),
+          0..255,
+          container(),
+          non_neg_integer()
+        ) :: {:ok, track()} | {:error, reason :: String.t()}
+  def add_track(_broadcast_producer, _track, _format, _priority, _container, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Replaces a live track with one carrying `format`, published on a brand-new moq track
-  that keeps the replaced track's priority.
+  that keeps the replaced track's priority, container and latency.
 
   Returns the new track resource along with the name of the newly generated moq track.
   """

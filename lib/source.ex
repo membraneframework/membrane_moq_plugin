@@ -9,8 +9,10 @@ defmodule Membrane.MoQ.Source do
 
   #{__MODULE__} watches the broadcast catalog and notifies its parent about track changes:
 
-    * `{:new_track, Membrane.MoQ.Source.TrackInfo.t()}`
-        when a track is advertised.
+    * `{:new_track, {track :: String.t(), stream_format :: struct()}}`
+        when a track is advertised. `track` is the catalog rendition key to pass
+        as the `:track` option of an output pad; `stream_format` is the format
+        the pad will start with.
     * `{:track_removed, track :: String.t()}`
         when an advertised track disappears from the catalog (e.g. the publisher ended it).
     * A track whose codec parameters change mid-broadcast is reported as a
@@ -86,28 +88,6 @@ defmodule Membrane.MoQ.Source do
                 trading end-to-end delay for resilience to network jitter and reordering.
                 """
               ]
-
-  defmodule TrackInfo do
-    @moduledoc """
-    Describes a track advertised by the subscribed broadcast.
-
-    Carried by the `{:new_track, t:t/0}` parent notification (see `Membrane.MoQ.Source`).
-    """
-
-    @type t :: %__MODULE__{
-            track: String.t(),
-            type: :video | :audio | :unknown,
-            stream_format:
-              Membrane.H264.t()
-              | Membrane.H265.t()
-              | Membrane.AAC.t()
-              | Membrane.Opus.t()
-              | Membrane.RemoteStream.t()
-          }
-
-    @enforce_keys [:track, :type, :stream_format]
-    defstruct @enforce_keys
-  end
 
   defmodule State do
     @moduledoc false
@@ -225,7 +205,7 @@ defmodule Membrane.MoQ.Source do
   end
 
   def handle_info({:moq_track_added, _path, name, format}, _ctx, state) do
-    {[notify_parent: {:new_track, build_track_info(name, format)}], state}
+    {[notify_parent: {:new_track, {name, TrackFormat.to_stream_format(format)}}], state}
   end
 
   def handle_info({:moq_track_removed, _path, name}, _ctx, state) do
@@ -321,15 +301,6 @@ defmodule Membrane.MoQ.Source do
     for {pad, %{end_of_stream?: false}} <- pads do
       {:end_of_stream, pad}
     end
-  end
-
-  @spec build_track_info(String.t(), Native.track_format()) :: TrackInfo.t()
-  defp build_track_info(name, format) do
-    %TrackInfo{
-      track: name,
-      type: TrackFormat.media_type(format),
-      stream_format: TrackFormat.to_stream_format(format)
-    }
   end
 
   @spec active_pad(map(), State.t(), integer()) :: Membrane.Pad.ref() | nil

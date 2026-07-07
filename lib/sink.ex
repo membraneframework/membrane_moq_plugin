@@ -7,6 +7,9 @@ defmodule Membrane.MoQ.Sink do
 
   Pads can be added or removed at any time during the pipeline lifecycle. The
   catalog is republished on every track add/remove.
+
+  Frames are encapsulated in the wire container selected with the `container` option
+  and optionally batched with `latency`.
   """
   use Membrane.Sink
 
@@ -56,10 +59,25 @@ defmodule Membrane.MoQ.Sink do
                   "Broadcast path, see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
               ],
               container: [
-                spec: :legacy,
+                spec: :legacy | :loc | :cmaf,
                 default: :legacy,
-                description:
-                  "Container format for media frames. Only :legacy is supported for now."
+                description: """
+                Wire container for media frames,
+                applied to every track of this sink and advertised per rendition in the catalog.
+                `:cmaf` is not supported yet (raises on init); publishing it is blocked
+                on an upstream moq-mux change, see `docs/upstream_moq_mux_contribution.md`.
+                """
+              ],
+              latency: [
+                spec: Membrane.Time.t(),
+                default: 0,
+                description: """
+                How long each track buffers frames before writing them to the wire,
+                trading latency for batched writes.
+                With the default of `0`, every frame is written immediately.
+                Audio tracks are unaffected apart from up to one frame of added delay:
+                every audio frame starts a new MoQ group, which flushes the buffer.
+                """
               ],
               disable_tls_verify?: [
                 spec: boolean(),
@@ -79,7 +97,8 @@ defmodule Membrane.MoQ.Sink do
 
     @type t :: %__MODULE__{
             url: String.t(),
-            container: :legacy,
+            container: Native.container(),
+            latency: Membrane.Time.t(),
             disable_tls_verify?: boolean(),
             session: Native.session(),
             broadcast: String.t(),
@@ -87,22 +106,28 @@ defmodule Membrane.MoQ.Sink do
             pads: %{Membrane.Pad.ref() => pad_state()}
           }
 
-    @enforce_keys [:url, :broadcast, :container, :disable_tls_verify?]
+    @enforce_keys [:url, :broadcast, :container, :latency, :disable_tls_verify?]
     defstruct @enforce_keys ++
                 [
                   :session,
                   :producer,
-                  pads: %{},
+                  pads: %{}
                 ]
   end
 
   @impl true
   def handle_init(_ctx, opts) do
+    if opts.container == :cmaf do
+      raise ArgumentError,
+            "container: :cmaf is not supported yet, see docs/upstream_moq_mux_contribution.md"
+    end
+
     {[],
      %State{
        url: opts.url,
        broadcast: opts.broadcast,
        container: opts.container,
+       latency: opts.latency,
        disable_tls_verify?: opts.disable_tls_verify?
      }}
   end
@@ -169,8 +194,18 @@ defmodule Membrane.MoQ.Sink do
     track_res =
       pad_state.track_resource
       |> case do
-        nil -> Native.add_track(producer, pad_state.track, track_fmt, priority)
-        existing -> Native.replace_track(existing, track_fmt)
+        nil ->
+          Native.add_track(
+            producer,
+            pad_state.track,
+            track_fmt,
+            priority,
+            state.container,
+            Membrane.Time.as_nanoseconds(state.latency, :round)
+          )
+
+        existing ->
+          Native.replace_track(existing, track_fmt)
       end
       |> case do
         {:ok, track_res} ->

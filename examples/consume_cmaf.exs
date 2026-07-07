@@ -109,7 +109,12 @@ defmodule Subscriber do
   end
 
   @impl true
-  def handle_child_notification({:new_track, info}, :source, _ctx, state) do
+  def handle_child_notification(
+        {:new_track, %Membrane.MoQ.Source.TrackInfo{} = info},
+        :source,
+        _ctx,
+        state
+      ) do
     if MapSet.member?(state.subscribed, info.track) do
       {[], state}
     else

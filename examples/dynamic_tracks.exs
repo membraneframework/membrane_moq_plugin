@@ -71,7 +71,12 @@ defmodule Subscriber do
   end
 
   @impl true
-  def handle_child_notification({:new_track, info}, {:source, gen}, _ctx, %{gen: gen} = state) do
+  def handle_child_notification(
+        {:new_track, %Membrane.MoQ.Source.TrackInfo{} = info},
+        {:source, gen},
+        _ctx,
+        %{gen: gen} = state
+      ) do
     Logger.info("announced #{info.track} (#{info.type})")
 
     if info.type == :video do

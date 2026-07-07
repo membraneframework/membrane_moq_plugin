@@ -21,39 +21,31 @@ broadcast =
 
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true},
-  {:membrane_h26x_plugin, "~> 0.10.7"}
+  {:membrane_h26x_plugin, "~> 0.10.7"},
+  {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"},
+  {:membrane_h265_ffmpeg_plugin, "~> 0.4.3"},
+  {:membrane_sdl_plugin, "~> 0.18.6"},
+  {:membrane_realtimer_plugin, "~> 0.11.0"}
 ])
 
-Logger.configure(level: :debug)
+Logger.configure(level: :info)
 
-defmodule AuLogger do
-  use Membrane.Sink
-
-  require Logger
-
-  def_input_pad :input,
-    accepted_format: any_of(Membrane.H264, Membrane.H265),
-    flow_control: :auto
-
-  def_options track: [spec: String.t()]
-
-  @impl true
-  def handle_init(_ctx, opts), do: {[], %{track: opts.track, count: 0}}
-
-  @impl true
-  def handle_buffer(:input, _buffer, _ctx, state) do
-    count = state.count + 1
-    if rem(count, 30) == 0, do: Logger.info("[#{state.track}] #{count} access units decoded")
-    {[], %{state | count: count}}
-  end
-
-  @impl true
-  def handle_end_of_stream(:input, _ctx, state) do
-    Logger.info("[#{state.track}] end of stream (#{state.count} access units)")
-    {[], state}
-  end
-end
-
+# Reference for notification-driven pad wiring: follows a broadcast and plays
+# whatever video it advertises in an SDL window.
+#
+#   * subscribes to the lowest-named advertised video track (audio is skipped),
+#   * when that track is withdrawn (`:track_removed`), tears its playback
+#     subtree down and subscribes to the next available one,
+#   * when the broadcast drops (`:disconnected`), restarts the Source and waits
+#     for a republish.
+#
+# Pairs well with `examples/publish_format_change.exs` as the publisher: its
+# H264 -> H264 -> H265 rendition sequence exercises every branch above, with
+# the playback chain rebuilt per codec.
+#
+# Prerequisites:
+#   - a MoQ relay at https://localhost:4443 (e.g. moq-relay)
+#   - ffmpeg + SDL available for the decoder/player plugins
 defmodule Subscriber do
   use Membrane.Pipeline
 
@@ -139,17 +131,37 @@ defmodule Subscriber do
 
   defp track_spec(info, gen) do
     name = info.track
+    {parser, decoder} = playback_for(info.stream_format)
 
     get_child({:source, gen})
     |> via_out(Pad.ref(:output, name), options: [track: name])
-    |> child({:parser, name}, parser_for(info.stream_format))
-    |> child({:logger, name}, %AuLogger{track: name})
+    |> child({:parser, name}, parser)
+    |> child({:decoder, name}, decoder)
+    |> child({:rt, name}, Membrane.Realtimer)
+    |> child({:player, name}, Membrane.SDL.Player)
   end
 
-  defp subtree(name), do: [{:parser, name}, {:logger, name}]
+  defp subtree(name),
+    do: [{:parser, name}, {:decoder, name}, {:rt, name}, {:player, name}]
 
-  defp parser_for(%Membrane.H264{}), do: Membrane.H264.Parser
-  defp parser_for(%Membrane.H265{}), do: Membrane.H265.Parser
+  # `MoQ.Source` emits frames in decode order carrying their presentation PTS
+  # but no DTS, so the parser regenerates monotonic DTS/PTS from the bitstream
+  # structure (using the catalog's framerate) — otherwise the decoder would
+  # emit frames still in decode order and the playback would jitter. `:annexb`
+  # is what the FFmpeg decoders accept.
+  defp playback_for(%Membrane.H264{} = format) do
+    {%Membrane.H264.Parser{
+       generate_best_effort_timestamps: %{framerate: format.framerate || {30, 1}},
+       output_stream_structure: :annexb
+     }, Membrane.H264.FFmpeg.Decoder}
+  end
+
+  defp playback_for(%Membrane.H265{} = format) do
+    {%Membrane.H265.Parser{
+       generate_best_effort_timestamps: %{framerate: format.framerate || {30, 1}},
+       output_stream_structure: :annexb
+     }, Membrane.H265.FFmpeg.Decoder}
+  end
 end
 
 opts = [url: "https://localhost:4443/anon", broadcast: broadcast]

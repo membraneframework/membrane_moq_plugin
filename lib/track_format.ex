@@ -3,8 +3,9 @@ defmodule Membrane.MoQ.TrackFormat do
   # Codec translation between Membrane stream formats
   # and the native MoQ track-format term (`t:ExMoQ.Native.track_format/0`).
 
-  alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
   alias ExMoQ.Native
+
+  alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
 
   @doc """
   Build the native track-format term the Sink publishes from a Membrane stream

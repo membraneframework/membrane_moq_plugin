@@ -71,7 +71,7 @@ pub(crate) fn send_frame(
     pid: &LocalPid,
     token: Token,
     payload: &[u8],
-    timestamp_ns: i64,
+    timestamp_ns: u64,
     keyframe: bool,
 ) -> Result<(), PidDead> {
     OwnedEnv::new()

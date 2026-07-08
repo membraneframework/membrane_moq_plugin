@@ -1,7 +1,7 @@
 use hang::moq_net;
 
 use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::{
     atoms,
@@ -12,10 +12,10 @@ use crate::{
 
 /// Producer over the runtime-dispatched container enum,
 /// so one resource type covers every wire format the catalog can describe.
-type WireProducer = moq_mux::container::Producer<moq_mux::catalog::hang::Container>;
+pub(crate) type WireProducer = moq_mux::container::Producer<moq_mux::catalog::hang::Container>;
 
 pub(crate) struct TrackResource {
-    producer: Mutex<WireProducer>,
+    producer: Arc<Mutex<WireProducer>>,
     broadcast_res: ResourceArc<BroadcastProducerResource>,
     name: String,
     kind: TrackKind,
@@ -145,6 +145,14 @@ pub(crate) fn send_frame(
 #[rustler::nif]
 pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     let _guard = runtime().handle().enter();
+
+    track_res
+        .broadcast_res
+        .tracks
+        .lock()
+        .unwrap()
+        .remove(&track_res.name);
+
     let _ = track_res.producer.lock().unwrap().finish();
 
     let mut cp = track_res.broadcast_res.catalog.lock().unwrap();
@@ -195,10 +203,20 @@ fn init_track(
         }
     }
 
-    let producer = moq_mux::container::Producer::new(tp, wire).with_latency(settings.latency);
+    let producer = Arc::new(Mutex::new(
+        moq_mux::container::Producer::new(tp, wire).with_latency(settings.latency),
+    ));
+
+    {
+        let mut tracks = broadcast_res.tracks.lock().unwrap();
+        if let Some(old_name) = replaces {
+            tracks.remove(old_name);
+        }
+        tracks.insert(name.clone(), Arc::downgrade(&producer));
+    }
 
     Ok(TrackResource {
-        producer: Mutex::new(producer),
+        producer,
         broadcast_res,
         name,
         kind,

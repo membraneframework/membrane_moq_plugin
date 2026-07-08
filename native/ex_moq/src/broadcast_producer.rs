@@ -1,13 +1,15 @@
 use hang::moq_net;
 
 use rustler::{Atom, NifResult, Resource, ResourceArc};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, Weak};
 
-use crate::{atoms, runtime, session::SessionResource};
+use crate::{atoms, runtime, session::SessionResource, track::WireProducer};
 
 pub(crate) struct BroadcastProducerResource {
     pub(crate) broadcast: Mutex<moq_net::BroadcastProducer>,
     pub(crate) catalog: Mutex<moq_mux::catalog::Producer>,
+    pub(crate) tracks: Mutex<HashMap<String, Weak<Mutex<WireProducer>>>>,
 }
 
 impl Resource for BroadcastProducerResource {}
@@ -32,6 +34,7 @@ pub(crate) fn create_broadcast_producer(
         ResourceArc::new(BroadcastProducerResource {
             broadcast: Mutex::new(bp),
             catalog: Mutex::new(catalog),
+            tracks: Mutex::new(HashMap::new()),
         }),
     ))
 }
@@ -39,6 +42,17 @@ pub(crate) fn create_broadcast_producer(
 #[rustler::nif]
 pub(crate) fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) -> Atom {
     let _guard = runtime().handle().enter();
+
+    producer
+        .tracks
+        .lock()
+        .unwrap()
+        .values()
+        .filter_map(Weak::upgrade)
+        .for_each(|track| {
+            let _ = track.lock().unwrap().finish();
+        });
+
     let _ = producer.catalog.lock().unwrap().finish();
     let _ = producer
         .broadcast

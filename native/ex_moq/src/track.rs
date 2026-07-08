@@ -18,10 +18,17 @@ pub(crate) struct TrackResource {
     producer: Mutex<WireProducer>,
     broadcast_res: ResourceArc<BroadcastProducerResource>,
     name: String,
+    kind: TrackKind,
+    settings: TrackSettings,
+}
+
+/// Wire/delivery parameters a track keeps for its lifetime; a replacement
+/// rendition created on a mid-stream format change inherits them.
+#[derive(Clone)]
+struct TrackSettings {
     // Used to generate new, unique track names if format changes mid-stream.
     // For the first rendition (before any stream format change), suffix == name
     suffix: String,
-    kind: TrackKind,
     priority: u8,
     container: ContainerKind,
     latency: std::time::Duration,
@@ -52,17 +59,13 @@ pub(crate) fn add_track(
         })
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
 
-    let suffix = tp.name.clone();
-    let resource = init_track(
-        tp,
-        resolved,
-        broadcast_res,
-        suffix,
+    let settings = TrackSettings {
+        suffix: tp.name.clone(),
         priority,
         container,
-        std::time::Duration::from_nanos(latency_ns),
-        None,
-    )?;
+        latency: std::time::Duration::from_nanos(latency_ns),
+    };
+    let resource = init_track(tp, resolved, broadcast_res, settings, None)?;
 
     Ok((atoms::ok(), ResourceArc::new(resource)))
 }
@@ -85,26 +88,25 @@ pub(crate) fn replace_track(
     }
 
     let broadcast_res = old_track_res.broadcast_res.clone();
-    let suffix = old_track_res.suffix.clone();
-    let priority = old_track_res.priority;
+    // The new rendition keeps the replaced track's settings.
+    let settings = old_track_res.settings.clone();
 
     let tp = {
         let mut broadcast = broadcast_res.broadcast.lock().unwrap();
-        let name = broadcast.unique_name(&suffix);
+        let name = broadcast.unique_name(&settings.suffix);
         broadcast
-            .create_track(moq_net::Track { name, priority })
+            .create_track(moq_net::Track {
+                name,
+                priority: settings.priority,
+            })
             .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
     };
 
-    // The new rendition keeps the replaced track's container and latency.
     let resource = init_track(
         tp,
         resolved,
         broadcast_res,
-        suffix,
-        priority,
-        old_track_res.container,
-        old_track_res.latency,
+        settings,
         Some(&old_track_res.name),
     )?;
 
@@ -163,13 +165,10 @@ fn init_track(
     tp: moq_net::TrackProducer,
     mut resolved: ResolvedConfig,
     broadcast_res: ResourceArc<BroadcastProducerResource>,
-    suffix: String,
-    priority: u8,
-    container: ContainerKind,
-    latency: std::time::Duration,
+    settings: TrackSettings,
     replaces: Option<&str>,
 ) -> NifResult<TrackResource> {
-    let catalog_container = container.to_catalog()?;
+    let catalog_container = settings.container.to_catalog();
     let wire = moq_mux::catalog::hang::Container::try_from(&catalog_container)
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
     resolved.set_container(catalog_container);
@@ -196,16 +195,13 @@ fn init_track(
         }
     }
 
-    let producer = moq_mux::container::Producer::new(tp, wire).with_latency(latency);
+    let producer = moq_mux::container::Producer::new(tp, wire).with_latency(settings.latency);
 
     Ok(TrackResource {
         producer: Mutex::new(producer),
         broadcast_res,
         name,
-        suffix,
         kind,
-        priority,
-        container,
-        latency,
+        settings,
     })
 }

@@ -59,13 +59,11 @@ defmodule Membrane.MoQ.Sink do
                   "Broadcast path, see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology"
               ],
               container: [
-                spec: :legacy | :loc | :cmaf,
+                spec: :legacy | :loc,
                 default: :legacy,
                 description: """
-                Wire container for media frames,
-                applied to every track of this sink and advertised per rendition in the catalog.
-                `:cmaf` is not supported yet (raises on init); publishing it is blocked
-                on an upstream moq-mux change, see `docs/upstream_moq_mux_contribution.md`.
+                Wire container for media frames, applied to every track of this sink
+                and advertised per rendition in the catalog.
                 """
               ],
               latency: [
@@ -100,9 +98,9 @@ defmodule Membrane.MoQ.Sink do
             container: Native.container(),
             latency: Membrane.Time.t(),
             disable_tls_verify?: boolean(),
-            session: Native.session(),
+            session: Native.session() | nil,
             broadcast: String.t(),
-            producer: Native.broadcast_producer(),
+            producer: Native.broadcast_producer() | nil,
             pads: %{Membrane.Pad.ref() => pad_state()}
           }
 
@@ -117,11 +115,6 @@ defmodule Membrane.MoQ.Sink do
 
   @impl true
   def handle_init(_ctx, opts) do
-    if opts.container == :cmaf do
-      raise ArgumentError,
-            "container: :cmaf is not supported yet, see docs/upstream_moq_mux_contribution.md"
-    end
-
     {[],
      %State{
        url: opts.url,
@@ -225,8 +218,8 @@ defmodule Membrane.MoQ.Sink do
   def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, state) do
     pad_state = Map.fetch!(state.pads, pad)
 
-    if buffer.pts < 0 do
-      raise "Received buffer with negative timestamp"
+    if buffer.pts == nil or buffer.pts < 0 do
+      raise "Buffer PTS must be a non-negative integer, received: #{inspect(buffer.pts)}"
     end
 
     case Native.send_frame(

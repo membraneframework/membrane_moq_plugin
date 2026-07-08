@@ -11,12 +11,8 @@ defmodule ExMoQ.Native do
 
   @typedoc """
   Wire container a published track's frames are encapsulated in.
-
-  `:cmaf` currently returns an error from `add_track/6`: publishing it is
-  blocked on upstream moq-mux exporting its init-segment synthesis
-  (`docs/upstream_moq_mux_contribution.md`, item 4).
   """
-  @type container :: :legacy | :loc | :cmaf
+  @type container :: :legacy | :loc
 
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
@@ -171,7 +167,7 @@ defmodule ExMoQ.Native do
 
   Returns `:ok`, or `{:error, reason}` if the write fails (e.g. track closed).
   """
-  @spec send_frame(track(), pos_integer(), boolean(), binary()) ::
+  @spec send_frame(track(), non_neg_integer(), boolean(), binary()) ::
           :ok | {:error, reason :: String.t()}
   def send_frame(_track_res, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -189,7 +185,7 @@ defmodule ExMoQ.Native do
 
   Multiple broadcast consumers may share one session.
   Each one independently waits for its broadcast to be announced.
-  Subscribe to individual tracks with `subscribe_track/3`.
+  Subscribe to individual tracks with `subscribe_track/4`.
 
   `latency_ns` is how long each track buffers received frames before emitting
   them, in nanoseconds, trading delay for resilience to jitter and reordering.

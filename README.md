@@ -17,7 +17,7 @@ Broadcasts use the [hang](https://doc.moq.dev/concept/layer/hang.html) catalog,
 so they interoperate with the `moq` CLI, moq-gst and the JS `@moq/hang` player.
 
 Publishing encapsulates frames in the `:legacy` or `:loc` wire container.
-Consuming selects each track's container — legacy, CMAF or LOC — from the catalog automatically.
+Consuming selects each track's container from the catalog automatically.
 
 It is a part of [Membrane Multimedia Framework](https://membrane.stream).
 
@@ -78,8 +78,7 @@ The `examples/` directory has runnable scripts covering the common setups:
 - multi-track A/V from an MP4 (`publish_mp4.exs`), H.265 (`publish_h265.exs`)
 - endless looped publishing (`publish_h264_loop.exs`)
 - mid-stream format changes (`publish_format_change.exs`)
-- notification-driven subscribing (`dynamic_subscriber.exs`)
-- consuming CMAF broadcasts from external publishers (`consume_cmaf.exs`).
+- notification-driven subscribing (`dynamic_subscriber.exs`).
 
 ## Testing
 
@@ -88,12 +87,6 @@ Integration tests exercise a real relay and are opt-in:
 
 ```shell
 mix test --include integration
-```
-
-To run tests exercising MoQ.Source against CMAF output with a moq-cli publisher, run:
-
-```shell
-mix test --include interop
 ```
 
 ## Copyright and License

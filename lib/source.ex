@@ -20,7 +20,7 @@ defmodule Membrane.MoQ.Source do
       torn down and re-wired against the new format.
     * `{:disconnected, reason :: String.t()}`
         when the broadcast goes away (the publisher left) or the session drops.
-        The source end-of-streams its pads and terminates.
+        The source sends `:end_of_stream` to all active pads.
   """
   use Membrane.Source
 
@@ -38,7 +38,7 @@ defmodule Membrane.MoQ.Source do
         Membrane.Opus,
         %Membrane.H264{stream_structure: ss} when Membrane.H264.is_avc(ss),
         %Membrane.H265{stream_structure: ss} when Membrane.H265.is_hvc(ss),
-        Membrane.RemoteStream
+        %Membrane.RemoteStream{type: :packetized}
       ),
     flow_control: :push,
     options: [

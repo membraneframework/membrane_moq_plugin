@@ -8,21 +8,13 @@ use rustler::{
 pub(crate) enum ContainerKind {
     Legacy,
     Loc,
-    Cmaf,
 }
 
 impl ContainerKind {
-    /// Catalog entry for this container. CMAF is rejected until upstream
-    /// moq-mux exports its init-segment synthesis (the catalog entry needs an
-    /// `init` blob; see docs/upstream_moq_mux_contribution.md item 4).
-    pub(crate) fn to_catalog(self) -> NifResult<hang::catalog::Container> {
+    pub(crate) fn to_catalog(self) -> hang::catalog::Container {
         match self {
-            Self::Legacy => Ok(hang::catalog::Container::Legacy),
-            Self::Loc => Ok(hang::catalog::Container::Loc),
-            Self::Cmaf => Err(crate::nif_error!(
-                "cmaf publishing is not supported yet \
-                 (blocked on upstream moq-mux exporting CMAF init synthesis)"
-            )),
+            Self::Legacy => hang::catalog::Container::Legacy,
+            Self::Loc => hang::catalog::Container::Loc,
         }
     }
 }

@@ -109,14 +109,14 @@ defmodule Membrane.MoQ.TrackFormat do
          %{
            params: %{width: width, height: height, framerate: framerate},
            description: dcr,
-           codec: %{inline: inline}
+           codec: %{inline: inline} = codec
          }}
       ) do
     %H264{
       width: width,
       height: height,
       framerate: framerate(framerate),
-      stream_structure: {if(inline, do: :avc3, else: :avc1), dcr}
+      stream_structure: {if(inline, do: :avc3, else: :avc1), h264_dcr(dcr, codec)}
     }
   end
 
@@ -152,6 +152,16 @@ defmodule Membrane.MoQ.TrackFormat do
   end
 
   def to_stream_format(:unrecognized), do: %Membrane.RemoteStream{type: :packetized}
+
+  @spec h264_dcr(binary(), map()) :: binary()
+  # hang allows an in-band (avc3) rendition to omit the catalog description.
+  # Membrane's avc3 still requires an avcC, so synthesise one from the codec fields.
+  defp h264_dcr(<<>>, %{inline: true, profile: profile, constraints: constraints, level: level}) do
+    <<1, profile, constraints, level, 0b111111::6, _length_size_minus_one = 3::2, 0b111::3,
+      _num_sps = 0::5, _num_pps = 0::8>>
+  end
+
+  defp h264_dcr(dcr, _codec), do: dcr
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float()
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,

@@ -76,6 +76,19 @@ defmodule Membrane.MoQ.TrackFormatTest do
       assert TrackFormat.to_stream_format(native) == fmt
     end
 
+    test "an in-band track without a description gets a synthesized avcC" do
+      native =
+        {:h264,
+         %{
+           params: %{width: 1280, height: 720, framerate: 30.0},
+           description: <<>>,
+           codec: %{inline: true, profile: 100, constraints: 0, level: 31}
+         }}
+
+      assert %H264{stream_structure: {:avc3, dcr}} = TrackFormat.to_stream_format(native)
+      assert dcr == avcc(100, 0, 31)
+    end
+
     test "media_type/1 is :video" do
       assert TrackFormat.media_type({:h264, %{}}) == :video
     end

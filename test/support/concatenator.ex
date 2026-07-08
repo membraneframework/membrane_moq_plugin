@@ -11,6 +11,9 @@ defmodule Membrane.MoQ.Test.Concatenator do
   so the output clock is continuous across inputs.
   """
 
+  # NOTE: it would probably be a good idea
+  # to upstream this filter like Membrane.Funnel
+
   use Membrane.Filter
 
   require Membrane.Logger

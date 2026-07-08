@@ -1,23 +1,15 @@
 defmodule Membrane.MoQ.Test.RestartingSubscriber do
   @moduledoc """
-  NOTE: This test support module was LLM-generated.
+  Notification-driven subscriber pipeline.
 
-  Notification-driven subscriber pipeline: wires an H26x parser directly onto
-  the Source pad from `{:new_track, info}` (the pad carries a full stream
-  format, no filter in between), and on `{:disconnected, _}` tears the
-  generation down and starts a fresh Source to resubscribe.
-
-  Run it through `Membrane.Testing.Pipeline` (`module:` + `custom_args:`), so
-  the test process observes everything via `Membrane.Testing.Assertions` —
-  notifications land through `assert_pipeline_notified` and each generation's
-  `Membrane.Testing.Sink` (named `{:sink, gen}`) through `assert_sink_*`.
+  Wires an H26x parser directly onto the Source pad from `{:new_track, {track, stream_format}}`
+  On `{:disconnected, _}`, tears the generation down and starts a fresh Source to resubscribe.
   """
 
   use Membrane.Pipeline
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Source.TrackInfo
   alias Membrane.Pad
   alias Membrane.Testing
 
@@ -39,19 +31,19 @@ defmodule Membrane.MoQ.Test.RestartingSubscriber do
 
   @impl true
   def handle_child_notification(
-        {:new_track, %TrackInfo{} = info},
+        {:new_track, {track, %module{} = stream_format}},
         {:source, gen},
         _ctx,
         %{gen: gen, current: nil} = state
       )
-      when info.type == :video do
+      when module in [Membrane.H264, Membrane.H265] do
     spec =
       get_child({:source, gen})
-      |> via_out(Pad.ref(:output, info.track), options: [track: info.track])
-      |> child({:parser, gen}, parser_for(info.stream_format))
+      |> via_out(Pad.ref(:output, track), options: [track: track])
+      |> child({:parser, gen}, parser_for(stream_format))
       |> child({:sink, gen}, Testing.Sink)
 
-    {[spec: spec], %{state | current: info.track}}
+    {[spec: spec], %{state | current: track}}
   end
 
   def handle_child_notification(

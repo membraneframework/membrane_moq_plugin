@@ -1,5 +1,31 @@
 use bytes::Bytes;
-use rustler::{Binary, Encoder, Env, NifResult, NifStruct, NifTaggedEnum, OwnedBinary, Term};
+use rustler::{
+    Binary, Encoder, Env, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum, OwnedBinary, Term,
+};
+
+/// Wire container selected by the Sink, crossing the NIF boundary as an atom.
+#[derive(NifUnitEnum, Clone, Copy, PartialEq)]
+pub(crate) enum ContainerKind {
+    Legacy,
+    Loc,
+    Cmaf,
+}
+
+impl ContainerKind {
+    /// Catalog entry for this container. CMAF is rejected until upstream
+    /// moq-mux exports its init-segment synthesis (the catalog entry needs an
+    /// `init` blob; see docs/upstream_moq_mux_contribution.md item 4).
+    pub(crate) fn to_catalog(self) -> NifResult<hang::catalog::Container> {
+        match self {
+            Self::Legacy => Ok(hang::catalog::Container::Legacy),
+            Self::Loc => Ok(hang::catalog::Container::Loc),
+            Self::Cmaf => Err(crate::nif_error!(
+                "cmaf publishing is not supported yet \
+                 (blocked on upstream moq-mux exporting CMAF init synthesis)"
+            )),
+        }
+    }
+}
 
 #[derive(NifStruct, Clone, PartialEq)]
 #[module = "ExMoQ.Native.VideoTrackParams"]
@@ -81,6 +107,13 @@ impl ResolvedConfig {
         match self {
             ResolvedConfig::Video(_) => TrackKind::Video,
             ResolvedConfig::Audio(_) => TrackKind::Audio,
+        }
+    }
+
+    pub(crate) fn set_container(&mut self, container: hang::catalog::Container) {
+        match self {
+            ResolvedConfig::Video(config) => config.container = container,
+            ResolvedConfig::Audio(config) => config.container = container,
         }
     }
 }
@@ -197,7 +230,6 @@ fn create_video_config(
     config.coded_height = Some(height);
     config.framerate = Some(framerate);
     config.optimize_for_latency = Some(true);
-    config.container = hang::catalog::Container::Legacy;
     config
 }
 

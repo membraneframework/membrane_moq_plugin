@@ -9,9 +9,15 @@ defmodule Membrane.MoQ.Test.Relay do
     * If `RELAY_URL` is set, that relay is used as-is and nothing is spawned.
     * Otherwise a `moq-relay` binary (`MOQ_RELAY` env var, or found on `$PATH`)
       is spawned on a random free port with a self-signed certificate and
-      anonymous auth. The instance is shared by all test modules in the run;
-      its OS process is killed when the VM exits (the spawn wrapper watches
-      stdin).
+      anonymous auth. The instance is shared by all test modules in the run.
+
+  Cleanup of the spawned relay is layered:
+
+    * `ExUnit.after_suite/1` (registered on spawn) stops the server once the
+      suite finishes, closing the port and deleting the generated config.
+    * Should the VM die without running that callback (e.g. SIGKILL), the
+      spawn wrapper still reaps the relay: it watches our end of the stdin
+      pipe and kills the relay when the pipe closes (see `init/1`).
   """
 
   use GenServer
@@ -39,13 +45,28 @@ defmodule Membrane.MoQ.Test.Relay do
 
   defp spawned_relay!() do
     # Unlinked and named, so one relay serves every test module in the run.
-    pid = case GenServer.start(__MODULE__, nil, name: __MODULE__) do
-      {:ok, pid} -> pid
-      {:error, {:already_started, pid}} -> pid
-      {:error, reason} -> raise "failed to start the test relay: #{Exception.format_exit(reason)}"
-    end
+    pid =
+      case GenServer.start(__MODULE__, nil, name: __MODULE__) do
+        {:ok, pid} ->
+          pid
+
+        {:error, {:already_started, pid}} ->
+          pid
+
+        {:error, reason} ->
+          raise "failed to start the test relay: #{Exception.format_exit(reason)}"
+      end
 
     GenServer.call(pid, :relay, :infinity)
+  end
+
+  @doc "Stops the spawned relay, if any. Registered as an `ExUnit.after_suite/1` callback."
+  @spec stop() :: :ok
+  def stop() do
+    case GenServer.whereis(__MODULE__) do
+      nil -> :ok
+      pid -> GenServer.stop(pid)
+    end
   end
 
   @impl true
@@ -78,7 +99,23 @@ defmodule Membrane.MoQ.Test.Relay do
 
     await_ready!(port_number, port)
 
-    {:ok, %{relay: %{url: "https://localhost:#{port_number}", disable_tls_verify?: true}, port: port}}
+    ExUnit.after_suite(fn _stats -> stop() end)
+
+    {:ok,
+     %{
+       relay: %{url: "https://localhost:#{port_number}", disable_tls_verify?: true},
+       port: port,
+       config_path: config_path
+     }}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    # Closing our end of the stdin pipe makes the wrapper's `cat` return EOF
+    # and kill the relay.
+    if Port.info(state.port) != nil, do: Port.close(state.port)
+    File.rm(state.config_path)
+    :ok
   end
 
   @impl true
@@ -162,7 +199,9 @@ defmodule Membrane.MoQ.Test.Relay do
   defp probe(port_number) do
     case :gen_tcp.connect(~c"127.0.0.1", port_number, [:binary, active: false], 1_000) do
       {:ok, socket} ->
-        request = "GET /certificate.sha256 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"
+        request =
+          "GET /certificate.sha256 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"
+
         :ok = :gen_tcp.send(socket, request)
         response = :gen_tcp.recv(socket, 0, 1_000)
         :gen_tcp.close(socket)
@@ -175,8 +214,11 @@ defmodule Membrane.MoQ.Test.Relay do
 
   defp drain_output(port, acc \\ []) do
     receive do
-      {^port, {:data, data}} -> drain_output(port, [acc, data])
-      {^port, {:exit_status, status}} -> IO.iodata_to_binary([acc, "\n(exited with status #{status})"])
+      {^port, {:data, data}} ->
+        drain_output(port, [acc, data])
+
+      {^port, {:exit_status, status}} ->
+        IO.iodata_to_binary([acc, "\n(exited with status #{status})"])
     after
       0 -> IO.iodata_to_binary(acc)
     end

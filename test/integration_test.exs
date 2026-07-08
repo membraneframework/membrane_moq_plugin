@@ -71,6 +71,56 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert received_payloads == expected_payloads
   end
 
+  test "LOC frames round-trip unchanged with keyframe flags intact", %{
+    broadcast: broadcast,
+    relay: relay
+  } do
+    receiver = start_receiver!(relay, broadcast)
+    sender = start_sender!(relay, broadcast, sink_opts: [container: :loc])
+    await_source_connected!(receiver)
+
+    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
+    expected_buffers = drain_buffers(sender, :expected_sink)
+    assert expected_buffers != []
+
+    assert_end_of_stream(receiver, :sink, :input, 30_000)
+    received_buffers = drain_buffers(receiver, :sink)
+
+    assert Enum.map(received_buffers, & &1.payload) ==
+             Enum.map(expected_buffers, & &1.payload)
+
+    # LOC doesn't carry the keyframe bit on the wire:
+    # the producer starts a group per keyframe
+    # and the consumer flags each group's first frame,
+    # so the published flags must survive the round-trip 1:1.
+    assert Enum.map(received_buffers, & &1.metadata.keyframe?) ==
+             Enum.map(expected_buffers, & &1.metadata.h264.key_frame?)
+  end
+
+  test "frames buffered with the latency option all arrive, unchanged and in order", %{
+    broadcast: broadcast,
+    relay: relay
+  } do
+    receiver = start_receiver!(relay, broadcast)
+
+    sender =
+      start_sender!(relay, broadcast,
+        sink_opts: [container: :loc, latency: Membrane.Time.milliseconds(500)]
+      )
+
+    await_source_connected!(receiver)
+
+    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
+    expected_payloads = drain_payloads(sender, :expected_sink)
+    assert expected_payloads != []
+
+    # EOS closes the track, which flushes the tail of the latency buffer.
+    assert_end_of_stream(receiver, :sink, :input, 30_000)
+    received_payloads = drain_payloads(receiver, :sink)
+
+    assert received_payloads == expected_payloads
+  end
+
   test "Source emits end_of_stream when the publisher disconnects after publishing a frame", %{
     broadcast: broadcast,
     relay: relay
@@ -135,6 +185,16 @@ defmodule Membrane.MoQ.IntegrationTest do
     max_buffers = Keyword.get(opts, :max_buffers, 30)
     stream_structure = Keyword.get(opts, :stream_structure, :avc1)
 
+    sink =
+      struct!(
+        %Membrane.MoQ.Sink{
+          url: relay.url,
+          broadcast: broadcast,
+          disable_tls_verify?: relay.disable_tls_verify?
+        },
+        Keyword.get(opts, :sink_opts, [])
+      )
+
     Testing.Pipeline.start_link_supervised!(
       spec: [
         child(:file_source, %Membrane.File.Source{
@@ -153,11 +213,7 @@ defmodule Membrane.MoQ.IntegrationTest do
         |> via_in(Pad.ref(:input, :video),
           options: [track: @track]
         )
-        |> child(:moq_sink, %Membrane.MoQ.Sink{
-          url: relay.url,
-          broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?
-        }),
+        |> child(:moq_sink, sink),
         get_child(:tee)
         |> child(:expected_sink, Testing.Sink)
       ]
@@ -167,11 +223,15 @@ defmodule Membrane.MoQ.IntegrationTest do
   defp await_source_connected!(receiver),
     do: assert_sink_playing(receiver, :sink, 10_000)
 
-  defp drain_payloads(pipeline, child, acc \\ []) do
+  defp drain_payloads(pipeline, child) do
+    pipeline |> drain_buffers(child) |> Enum.map(& &1.payload)
+  end
+
+  defp drain_buffers(pipeline, child, acc \\ []) do
     receive do
       {Testing.Pipeline, ^pipeline,
-       {:handle_child_notification, {{:buffer, %Membrane.Buffer{payload: payload}}, ^child}}} ->
-        drain_payloads(pipeline, child, [payload | acc])
+       {:handle_child_notification, {{:buffer, %Membrane.Buffer{} = buffer}, ^child}}} ->
+        drain_buffers(pipeline, child, [buffer | acc])
     after
       0 -> Enum.reverse(acc)
     end

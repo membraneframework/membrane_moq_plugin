@@ -11,7 +11,6 @@ defmodule Membrane.MoQ.FormatChangeTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Source.TrackInfo
   alias Membrane.MoQ.Test.{Concatenator, Relay}
   alias Membrane.Pad
   alias Membrane.Testing
@@ -35,73 +34,88 @@ defmodule Membrane.MoQ.FormatChangeTest do
   #   2. H264  640x360 @ 30fps   <- soft switch: same codec, different params
   #   3. H265 1280x720 @ 25fps   <- switch from H264 to H265
   #
-  # Each format change replaces the published track under a fresh rendition
-  # name, so the Source must report `:track_removed` + `:new_track` and the
-  # receiver re-links a pad per rendition.
-  test "three formats through one Sink pad arrive as three consecutive renditions", %{
-    relay: relay,
-    broadcast: broadcast
-  } do
-    receiver = start_receiver!(relay, broadcast)
-    publisher = start_publisher!(relay, broadcast)
+  # Each format change replaces the published track under a fresh rendition name,
+  # so the Source must report `:track_removed` + `:new_track`
+  # and the receiver re-links a pad per rendition.
+  for container <- [:legacy, :loc] do
+    test "three formats through one Sink pad arrive as three consecutive renditions (#{container})",
+         %{
+           relay: relay,
+           broadcast: broadcast
+         } do
+      receiver = start_receiver!(relay, broadcast)
+      publisher = start_publisher!(relay, broadcast, unquote(container))
 
-    # 1st track
-    assert_pipeline_notified(
-      receiver,
-      :source,
-      {:new_track, %TrackInfo{track: @track, stream_format: %Membrane.H264{}}},
-      15_000
-    )
+      # 1st track
+      assert_pipeline_notified(
+        receiver,
+        :source,
+        {:new_track, {@track, %Membrane.H264{}}},
+        15_000
+      )
 
-    link_track!(receiver, @track)
-    assert_sink_stream_format(receiver, {:sink, @track}, %Membrane.H264{width: 1280, height: 720})
-    assert_sink_buffer(receiver, {:sink, @track}, %Membrane.Buffer{}, 10_000)
+      link_track!(receiver, @track)
 
-    assert_pipeline_notified(receiver, :source, {:track_removed, @track}, 15_000)
-    # 1st track end
+      assert_sink_stream_format(receiver, {:sink, @track}, %Membrane.H264{
+        width: 1280,
+        height: 720
+      })
 
-    # 2nd track
-    assert_pipeline_notified(
-      receiver,
-      :source,
-      {:new_track, %TrackInfo{track: track2, stream_format: %Membrane.H264{}}},
-      15_000
-    )
+      assert_sink_buffer(receiver, {:sink, @track}, %Membrane.Buffer{}, 10_000)
 
-    assert track2 != @track
-    assert_end_of_stream(receiver, {:sink, @track}, :input, 10_000)
+      assert_pipeline_notified(receiver, :source, {:track_removed, @track}, 15_000)
+      # 1st track end
 
-    link_track!(receiver, track2)
-    assert_sink_stream_format(receiver, {:sink, track2}, %Membrane.H264{width: 640, height: 360})
-    assert_sink_buffer(receiver, {:sink, track2}, %Membrane.Buffer{}, 10_000)
+      # 2nd track
+      assert_pipeline_notified(
+        receiver,
+        :source,
+        {:new_track, {track2, %Membrane.H264{}}},
+        15_000
+      )
 
-    assert_pipeline_notified(receiver, :source, {:track_removed, ^track2}, 15_000)
-    # 2nd track end
+      assert track2 != @track
+      assert_end_of_stream(receiver, {:sink, @track}, :input, 10_000)
 
-    # 3rd track
-    assert_pipeline_notified(
-      receiver,
-      :source,
-      {:new_track, %TrackInfo{track: track3, stream_format: %Membrane.H265{}}},
-      15_000
-    )
+      link_track!(receiver, track2)
 
-    assert track3 != track2
-    assert_end_of_stream(receiver, {:sink, ^track2}, :input, 10_000)
+      assert_sink_stream_format(receiver, {:sink, track2}, %Membrane.H264{width: 640, height: 360})
 
-    link_track!(receiver, track3)
-    assert_sink_stream_format(receiver, {:sink, track3}, %Membrane.H265{width: 1280, height: 720})
-    assert_sink_buffer(receiver, {:sink, track3}, %Membrane.Buffer{}, 10_000)
+      assert_sink_buffer(receiver, {:sink, track2}, %Membrane.Buffer{}, 10_000)
 
-    assert_end_of_stream(publisher, :sink, Pad.ref(:input, :video), 20_000)
+      assert_pipeline_notified(receiver, :source, {:track_removed, ^track2}, 15_000)
+      # 2nd track end
 
-    assert_pipeline_notified(receiver, :source, {:track_removed, ^track3}, 15_000)
-    # 3rd track end
+      # 3rd track
+      assert_pipeline_notified(
+        receiver,
+        :source,
+        {:new_track, {track3, %Membrane.H265{}}},
+        15_000
+      )
 
-    assert_end_of_stream(receiver, {:sink, ^track3}, :input, 10_000)
+      assert track3 != track2
+      assert_end_of_stream(receiver, {:sink, ^track2}, :input, 10_000)
+
+      link_track!(receiver, track3)
+
+      assert_sink_stream_format(receiver, {:sink, track3}, %Membrane.H265{
+        width: 1280,
+        height: 720
+      })
+
+      assert_sink_buffer(receiver, {:sink, track3}, %Membrane.Buffer{}, 10_000)
+
+      assert_end_of_stream(publisher, :sink, Pad.ref(:input, :video), 20_000)
+
+      assert_pipeline_notified(receiver, :source, {:track_removed, ^track3}, 15_000)
+      # 3rd track end
+
+      assert_end_of_stream(receiver, {:sink, ^track3}, :input, 10_000)
+    end
   end
 
-  defp start_publisher!(relay, broadcast) do
+  defp start_publisher!(relay, broadcast, container) do
     h264_parser = fn framerate ->
       %Membrane.H264.Parser{
         generate_best_effort_timestamps: %{framerate: framerate},
@@ -128,7 +142,8 @@ defmodule Membrane.MoQ.FormatChangeTest do
         |> child(:sink, %Membrane.MoQ.Sink{
           url: relay.url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?
+          disable_tls_verify?: relay.disable_tls_verify?,
+          container: container
         })
         | Enum.map(inputs, fn {id, path, parser} ->
             child({:file, id}, %Membrane.File.Source{location: path})

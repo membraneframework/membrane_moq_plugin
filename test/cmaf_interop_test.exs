@@ -22,7 +22,6 @@ defmodule Membrane.MoQ.CmafInteropTest do
   require Logger
   require Membrane.Pad
 
-  alias Membrane.MoQ.Source.TrackInfo
   alias Membrane.MoQ.Test.Relay
   alias Membrane.Pad
   alias Membrane.Testing.{Pipeline, Sink}
@@ -69,14 +68,14 @@ defmodule Membrane.MoQ.CmafInteropTest do
       assert_pipeline_notified(
         receiver,
         :source,
-        {:new_track, %TrackInfo{type: :video} = info},
+        {:new_track, {track, %Membrane.H264{}}},
         15_000
       )
 
       Pipeline.execute_actions(receiver,
         spec:
           get_child(:source)
-          |> via_out(Pad.ref(:output, :video), options: [track: info.track, priority: 60])
+          |> via_out(Pad.ref(:output, :video), options: [track: track, priority: 60])
           |> child(:sink, Sink)
       )
 

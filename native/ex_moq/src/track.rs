@@ -7,13 +7,15 @@ use crate::{
     atoms,
     broadcast_producer::BroadcastProducerResource,
     runtime,
-    track_format::{ResolvedConfig, TrackFormat, TrackKind},
+    track_format::{ContainerKind, ResolvedConfig, TrackFormat, TrackKind},
 };
 
-type LegacyProducer = moq_mux::container::Producer<moq_mux::container::legacy::Wire>;
+/// Producer over the runtime-dispatched container enum,
+/// so one resource type covers every wire format the catalog can describe.
+type WireProducer = moq_mux::container::Producer<moq_mux::catalog::hang::Container>;
 
 pub(crate) struct TrackResource {
-    producer: Mutex<LegacyProducer>,
+    producer: Mutex<WireProducer>,
     broadcast_res: ResourceArc<BroadcastProducerResource>,
     name: String,
     // Used to generate new, unique track names if format changes mid-stream.
@@ -21,6 +23,8 @@ pub(crate) struct TrackResource {
     suffix: String,
     kind: TrackKind,
     priority: u8,
+    container: ContainerKind,
+    latency: std::time::Duration,
 }
 
 impl Resource for TrackResource {}
@@ -31,6 +35,8 @@ pub(crate) fn add_track(
     track: String,
     format: TrackFormat,
     priority: u8,
+    container: ContainerKind,
+    latency_ns: u64,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
@@ -45,35 +51,20 @@ pub(crate) fn add_track(
             priority,
         })
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
-    let name = tp.name.clone();
-    let kind = resolved.kind();
 
-    {
-        let mut cp = broadcast_res.catalog.lock().unwrap();
-        let mut guard = cp.lock();
-        match resolved {
-            ResolvedConfig::Video(config) => {
-                guard.video.renditions.insert(name.clone(), config);
-            }
-            ResolvedConfig::Audio(config) => {
-                guard.audio.renditions.insert(name.clone(), config);
-            }
-        }
-    }
+    let suffix = tp.name.clone();
+    let resource = init_track(
+        tp,
+        resolved,
+        broadcast_res,
+        suffix,
+        priority,
+        container,
+        std::time::Duration::from_nanos(latency_ns),
+        None,
+    )?;
 
-    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
-
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(TrackResource {
-            producer: Mutex::new(producer),
-            suffix: name.clone(),
-            broadcast_res,
-            name,
-            kind,
-            priority,
-        }),
-    ))
+    Ok((atoms::ok(), ResourceArc::new(resource)))
 }
 
 /// Replace a live track with one carrying a new format, published on a brand-new moq track.
@@ -86,9 +77,8 @@ pub(crate) fn replace_track(
     let _guard = runtime().handle().enter();
 
     let resolved = format.resolve()?;
-    let kind = resolved.kind();
 
-    if kind != old_track_res.kind {
+    if resolved.kind() != old_track_res.kind {
         return Err(crate::nif_error!(
             "cannot change a track's media kind in place"
         ));
@@ -106,39 +96,22 @@ pub(crate) fn replace_track(
             .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
     };
 
-    let name = tp.name.clone();
-
-    {
-        let mut cp = broadcast_res.catalog.lock().unwrap();
-        let mut guard = cp.lock();
-        match resolved {
-            ResolvedConfig::Video(config) => {
-                guard.video.renditions.remove(&old_track_res.name);
-                guard.video.renditions.insert(name.clone(), config);
-            }
-            ResolvedConfig::Audio(config) => {
-                guard.audio.renditions.remove(&old_track_res.name);
-                guard.audio.renditions.insert(name.clone(), config);
-            }
-        }
-    }
+    // The new rendition keeps the replaced track's container and latency.
+    let resource = init_track(
+        tp,
+        resolved,
+        broadcast_res,
+        suffix,
+        priority,
+        old_track_res.container,
+        old_track_res.latency,
+        Some(&old_track_res.name),
+    )?;
 
     let _ = old_track_res.producer.lock().unwrap().finish();
 
-    let producer = moq_mux::container::Producer::new(tp, moq_mux::container::legacy::Wire);
-
-    Ok((
-        atoms::ok(),
-        ResourceArc::new(TrackResource {
-            producer: Mutex::new(producer),
-            broadcast_res,
-            name: name.clone(),
-            suffix,
-            kind,
-            priority,
-        }),
-        name,
-    ))
+    let name = resource.name.clone();
+    Ok((atoms::ok(), ResourceArc::new(resource), name))
 }
 
 #[rustler::nif]
@@ -184,4 +157,55 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     }
 
     atoms::ok()
+}
+
+fn init_track(
+    tp: moq_net::TrackProducer,
+    mut resolved: ResolvedConfig,
+    broadcast_res: ResourceArc<BroadcastProducerResource>,
+    suffix: String,
+    priority: u8,
+    container: ContainerKind,
+    latency: std::time::Duration,
+    replaces: Option<&str>,
+) -> NifResult<TrackResource> {
+    let catalog_container = container.to_catalog()?;
+    let wire = moq_mux::catalog::hang::Container::try_from(&catalog_container)
+        .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
+    resolved.set_container(catalog_container);
+
+    let name = tp.name.clone();
+    let kind = resolved.kind();
+
+    {
+        let mut cp = broadcast_res.catalog.lock().unwrap();
+        let mut guard = cp.lock();
+        match resolved {
+            ResolvedConfig::Video(config) => {
+                if let Some(old_name) = replaces {
+                    guard.video.renditions.remove(old_name);
+                }
+                guard.video.renditions.insert(name.clone(), config);
+            }
+            ResolvedConfig::Audio(config) => {
+                if let Some(old_name) = replaces {
+                    guard.audio.renditions.remove(old_name);
+                }
+                guard.audio.renditions.insert(name.clone(), config);
+            }
+        }
+    }
+
+    let producer = moq_mux::container::Producer::new(tp, wire).with_latency(latency);
+
+    Ok(TrackResource {
+        producer: Mutex::new(producer),
+        broadcast_res,
+        name,
+        suffix,
+        kind,
+        priority,
+        container,
+        latency,
+    })
 }

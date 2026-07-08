@@ -201,7 +201,7 @@ defmodule ExMoQ.Native do
         when the catalog drops a track
   """
   @spec create_broadcast_consumer(session(), String.t(), pid(), non_neg_integer()) ::
-          {:ok, broadcast_consumer()} | {:error, reason :: String.t()}
+          {:ok, broadcast_consumer()}
   def create_broadcast_consumer(_session, _path, _pid, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 

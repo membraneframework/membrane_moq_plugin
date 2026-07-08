@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 
-use rustler::{Atom, LocalPid, NifResult, Resource, ResourceArc};
+use rustler::{Atom, LocalPid, Resource, ResourceArc};
 
 use hang::moq_net;
 
@@ -52,7 +52,7 @@ struct Ctx<'a> {
     broadcast: &'a moq_net::BroadcastConsumer,
     path: &'a str,
     latency: Duration,
-    pid: &'a LocalPid,
+    pid: LocalPid,
 }
 
 #[rustler::nif]
@@ -61,7 +61,7 @@ pub(crate) fn create_broadcast_consumer(
     path: String,
     pid: LocalPid,
     latency_ns: u64,
-) -> NifResult<(Atom, ResourceArc<BroadcastConsumerResource>)> {
+) -> (Atom, ResourceArc<BroadcastConsumerResource>) {
     let latency = Duration::from_nanos(latency_ns);
 
     // A clone with its own announcement cursor, so each broadcast consumer
@@ -80,13 +80,13 @@ pub(crate) fn create_broadcast_consumer(
         shutdown_rx,
     ));
 
-    Ok((
+    (
         atoms::ok(),
         ResourceArc::new(BroadcastConsumerResource {
             commands: commands_tx,
             shutdown: shutdown_tx,
         }),
-    ))
+    )
 }
 
 #[rustler::nif]
@@ -131,8 +131,7 @@ async fn run_broadcast(
         broadcast = origin.announced_broadcast(path.as_str()) => match broadcast {
             Some(broadcast) => broadcast,
             None => {
-                messages::send_broadcast_closed(
-                    &pid,
+                messages::send_broadcast_closed(pid,
                     &path,
                     format!("broadcast {path:?} was not announced before the session closed"),
                 );
@@ -145,18 +144,18 @@ async fn run_broadcast(
     let mut catalog = match subscribe_catalog(&broadcast) {
         Ok(catalog) => catalog,
         Err(e) => {
-            messages::send_broadcast_closed(&pid, &path, e.to_string());
+            messages::send_broadcast_closed(pid, &path, e.to_string());
             return;
         }
     };
 
-    messages::send_broadcast_ready(&pid, &path);
+    messages::send_broadcast_ready(pid, &path);
 
     let ctx = Ctx {
         broadcast: &broadcast,
         path: &path,
         latency,
-        pid: &pid,
+        pid,
     };
 
     let mut state = ConsumerState {
@@ -184,7 +183,7 @@ async fn run_broadcast(
         }
     };
 
-    messages::send_broadcast_closed(&pid, &path, close_reason);
+    messages::send_broadcast_closed(pid, &path, close_reason);
 }
 
 fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> ConsumerState {
@@ -305,7 +304,7 @@ impl Pump {
             container: rendition.container.clone(),
             token,
             priority,
-            pid: *ctx.pid,
+            pid: ctx.pid,
             latency: ctx.latency,
         }
     }
@@ -319,7 +318,7 @@ impl Pump {
             }
         };
 
-        messages::send_track_ended(&self.pid, self.token, reason);
+        messages::send_track_ended(self.pid, self.token, reason);
     }
 
     async fn pump_track(&self) -> anyhow::Result<()> {
@@ -340,7 +339,7 @@ impl Pump {
         let mut consumer =
             moq_mux::container::Consumer::new(track_consumer, wire).with_latency(self.latency);
 
-        pump_frames(&mut consumer, self.token, &self.pid).await
+        pump_frames(&mut consumer, self.token, self.pid).await
     }
 }
 
@@ -375,7 +374,7 @@ fn catalog_renditions(snapshot: &moq_mux::catalog::hang::Catalog) -> CatalogSnap
 async fn pump_frames(
     consumer: &mut moq_mux::container::Consumer<moq_mux::catalog::hang::Container>,
     token: Token,
-    pid: &LocalPid,
+    pid: LocalPid,
 ) -> anyhow::Result<()> {
     while let Some(frame) = consumer.read().await? {
         let timestamp_ns = frame.timestamp.as_nanos() as u64;

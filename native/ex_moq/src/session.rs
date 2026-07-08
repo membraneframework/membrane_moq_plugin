@@ -39,7 +39,7 @@ pub(crate) fn create_session(
         };
         match session {
             Ok(session) => {
-                messages::send_connected(&pid);
+                messages::send_connected(pid);
 
                 tokio::select! {
                     _ = shutdown_rx.recv() => {} // session closed gracefully by parent
@@ -48,11 +48,11 @@ pub(crate) fn create_session(
                             Ok(()) => "MoQ session closed gracefully".to_string(),
                             Err(e) => e.to_string(),
                         };
-                        messages::send_disconnected(&pid, reason);
+                        messages::send_disconnected(pid, reason);
                     }
                 }
             }
-            Err(e) => messages::send_setup_failed(&pid, e.to_string()),
+            Err(e) => messages::send_setup_failed(pid, e.to_string()),
         }
     });
 

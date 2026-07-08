@@ -178,40 +178,45 @@ defmodule Membrane.MoQ.Sink do
   def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
 
   @impl true
-  def handle_stream_format(pad, fmt, _ctx, %State{producer: producer} = state) do
-    pad_state = Map.fetch!(state.pads, pad)
+  def handle_stream_format(pad, fmt, ctx, %State{producer: producer} = state) do
+    old_stream_format = ctx.pads[pad].stream_format
+    pad_state = state.pads[pad]
 
     track_fmt = TrackFormat.from_stream_format(fmt)
     priority = pad_state.priority || default_priority(track_fmt)
 
-    track_res =
-      pad_state.track_resource
-      |> case do
+    track_resource =
+      case old_stream_format do
+        ^fmt ->
+          pad_state.track_resource
+
         nil ->
-          Native.add_track(
-            producer,
-            pad_state.track,
-            track_fmt,
-            priority,
-            state.container,
-            Membrane.Time.as_nanoseconds(state.latency, :round)
-          )
+          case Native.add_track(
+                 producer,
+                 pad_state.track,
+                 track_fmt,
+                 priority,
+                 state.container,
+                 Membrane.Time.as_nanoseconds(state.latency, :round)
+               ) do
+            {:ok, track_resource} ->
+              track_resource
 
-        existing ->
-          Native.replace_track(existing, track_fmt)
+            {:error, reason} ->
+              raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
+          end
+
+        _other ->
+          case Native.replace_track(pad_state.track_resource, track_fmt) do
+            {:ok, new_track_resource, _new_track_name} ->
+              new_track_resource
+
+            {:error, reason} ->
+              raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
+          end
       end
-      |> case do
-        {:ok, track_res} ->
-          track_res
 
-        {:ok, track_res, _new_track_name} ->
-          track_res
-
-        {:error, reason} ->
-          raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
-      end
-
-    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_res})}
+    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource})}
   end
 
   @impl true

@@ -138,6 +138,14 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
+  def handle_pad_added(pad, _ctx, %{status: :disconnected} = state) do
+    Membrane.Logger.warning(
+      "Pad #{inspect(pad)} added after the source disconnected, sending end_of_stream"
+    )
+
+    {[end_of_stream: pad], state}
+  end
+
   def handle_pad_added(pad, %{pad_options: %{track: track, priority: priority}} = ctx, state) do
     token = state.next_token
 

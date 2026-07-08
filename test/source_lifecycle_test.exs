@@ -85,6 +85,39 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     assert_sink_buffer(subscriber, {:sink, 1}, %Membrane.Buffer{}, 10_000)
   end
 
+  test "a pad added after the source disconnected is immediately end_of_streamed", %{
+    relay: relay,
+    broadcast: broadcast
+  } do
+    publisher = start_publisher!(relay, broadcast)
+    assert_start_of_stream(publisher, :sink, Pad.ref(:input, :video), 10_000)
+
+    # No pads yet, so the disconnect leaves the source alive with nothing to EOS.
+    receiver =
+      Testing.Pipeline.start_link_supervised!(
+        spec:
+          child(:source, %Membrane.MoQ.Source{
+            url: relay.url,
+            broadcast: broadcast,
+            disable_tls_verify?: relay.disable_tls_verify?
+          })
+      )
+
+    assert_pipeline_notified(receiver, :source, {:new_track, {@track, _format}}, 15_000)
+
+    :ok = Membrane.Pipeline.terminate(publisher)
+    assert_pipeline_notified(receiver, :source, {:disconnected, _reason}, 15_000)
+
+    Testing.Pipeline.execute_actions(receiver,
+      spec:
+        get_child(:source)
+        |> via_out(Pad.ref(:output, @track), options: [track: @track])
+        |> child(:late_sink, Testing.Sink)
+    )
+
+    assert_end_of_stream(receiver, :late_sink, :input, 10_000)
+  end
+
   defp start_publisher!(relay, broadcast, opts \\ []) do
     frames = Keyword.get(opts, :frames, 40)
 

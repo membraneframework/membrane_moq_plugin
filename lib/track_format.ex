@@ -99,8 +99,8 @@ defmodule Membrane.MoQ.TrackFormat do
   def media_type(:unrecognized), do: :unknown
 
   @doc """
-  Reconstruct a Membrane stream format from a native track-format term, or `nil`
-  when the codec is not one we translate.
+  Reconstruct a Membrane stream format from a native track-format term,
+  or `RemoteStream.t()` if it is not recognized.
   """
   @spec to_stream_format(Native.track_format()) ::
           H264.t() | H265.t() | AAC.t() | Opus.t() | RemoteStream.t()
@@ -151,7 +151,7 @@ defmodule Membrane.MoQ.TrackFormat do
     %Opus{channels: channels, self_delimiting?: false}
   end
 
-  def to_stream_format(:unrecognized), do: %Membrane.RemoteStream{}
+  def to_stream_format(:unrecognized), do: %Membrane.RemoteStream{type: :packetized}
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float()
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,

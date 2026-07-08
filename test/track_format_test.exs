@@ -112,7 +112,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
 
   describe ":unrecognized" do
     test "maps to a RemoteStream and an :unknown media type" do
-      assert TrackFormat.to_stream_format(:unrecognized) == %RemoteStream{}
+      assert TrackFormat.to_stream_format(:unrecognized) == %RemoteStream{type: :packetized}
       assert TrackFormat.media_type(:unrecognized) == :unknown
     end
   end

@@ -44,7 +44,7 @@ defmodule Membrane.MoQ.FormatChangeTest do
            broadcast: broadcast
          } do
       receiver = start_receiver!(relay, broadcast)
-      publisher = start_publisher!(relay, broadcast, unquote(container))
+      publisher = start_publisher!(relay, broadcast, unquote(container), format_change_inputs())
 
       # 1st track
       assert_pipeline_notified(
@@ -115,25 +115,61 @@ defmodule Membrane.MoQ.FormatChangeTest do
     end
   end
 
-  defp start_publisher!(relay, broadcast, container) do
-    h264_parser = fn framerate ->
-      %Membrane.H264.Parser{
-        generate_best_effort_timestamps: %{framerate: framerate},
-        output_stream_structure: :avc1
-      }
-    end
+  test "an identical stream format re-sent mid-stream keeps the track", %{
+    relay: relay,
+    broadcast: broadcast
+  } do
+    inputs =
+      for id <- [0, 1],
+          do: {id, "#{@fixture_dir}/h264_1280x720_25.h264", h264_parser({25, 1})}
 
-    h265_parser = %Membrane.H265.Parser{
+    receiver = start_receiver!(relay, broadcast)
+    publisher = start_publisher!(relay, broadcast, :legacy, inputs)
+
+    assert_pipeline_notified(
+      receiver,
+      :source,
+      {:new_track, {@track, %Membrane.H264{}}},
+      15_000
+    )
+
+    link_track!(receiver, @track)
+
+    assert_sink_stream_format(receiver, {:sink, @track}, %Membrane.H264{
+      width: 1280,
+      height: 720
+    })
+
+    assert_sink_buffer(receiver, {:sink, @track}, %Membrane.Buffer{}, 10_000)
+
+    assert_end_of_stream(publisher, :sink, Pad.ref(:input, :video), 30_000)
+
+    assert_pipeline_notified(receiver, :source, {:track_removed, @track}, 15_000)
+    assert_end_of_stream(receiver, {:sink, @track}, :input, 10_000)
+
+    refute_pipeline_notified(receiver, :source, {:new_track, _info}, 100)
+  end
+
+  defp h264_parser(framerate),
+    do: %Membrane.H264.Parser{
+      generate_best_effort_timestamps: %{framerate: framerate},
+      output_stream_structure: :avc1
+    }
+
+  defp h265_parser(),
+    do: %Membrane.H265.Parser{
       generate_best_effort_timestamps: %{framerate: {25, 1}},
       output_stream_structure: :hvc1
     }
 
-    inputs = [
-      {0, "#{@fixture_dir}/h264_1280x720_25.h264", h264_parser.({25, 1})},
-      {1, "#{@fixture_dir}/h264_640x360_30.h264", h264_parser.({30, 1})},
-      {2, "#{@fixture_dir}/h265_1280x720_25.h265", h265_parser}
+  defp format_change_inputs(),
+    do: [
+      {0, "#{@fixture_dir}/h264_1280x720_25.h264", h264_parser({25, 1})},
+      {1, "#{@fixture_dir}/h264_640x360_30.h264", h264_parser({30, 1})},
+      {2, "#{@fixture_dir}/h265_1280x720_25.h265", h265_parser()}
     ]
 
+  defp start_publisher!(relay, broadcast, container, inputs) do
     Testing.Pipeline.start_link_supervised!(
       spec: [
         child(:concat, Concatenator)

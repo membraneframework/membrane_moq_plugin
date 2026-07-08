@@ -217,8 +217,8 @@ defmodule ExMoQ.Native do
       advertises the track, before any frame
     * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
       for every received frame
-    * `{:moq_track_ended, token :: integer(), reason :: String.t()}` when the
-      track ends cleanly or errors
+    * `{:moq_track_ended, token :: integer(), reason :: String.t()}`
+      when the track ends cleanly or errors
   """
   @spec subscribe_track(broadcast_consumer(), String.t(), integer(), 0..255) :: :ok
   def subscribe_track(_broadcast_consumer, _track, _token, _priority),

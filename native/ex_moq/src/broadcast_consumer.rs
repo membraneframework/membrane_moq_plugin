@@ -42,7 +42,9 @@ type CatalogSnapshot = HashMap<String, Rendition>;
 struct ConsumerState {
     renditions: CatalogSnapshot,
     pumps: JoinSet<()>,
-    cancels: HashMap<Token, watch::Sender<bool>>,
+    // Cancel handles keyed by token, with the subscribed track name so a
+    // catalog update can end the subscriptions of a changed rendition.
+    cancels: HashMap<Token, (String, watch::Sender<bool>)>,
     pending: HashMap<Token, (String, u8, watch::Receiver<bool>)>,
 }
 
@@ -193,7 +195,7 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
             priority,
         } => {
             let (cancel_tx, cancel_rx) = watch::channel(false);
-            state.cancels.insert(token, cancel_tx);
+            state.cancels.insert(token, (track.clone(), cancel_tx));
             match state.renditions.get(&track) {
                 Some(rendition) => {
                     messages::send_track_format(ctx.pid, token, &rendition.params);
@@ -206,9 +208,9 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
             }
         }
         Command::Unsubscribe { token } => {
-            if let Some(cancel) = state.cancels.remove(&token) {
+            state.cancels.remove(&token).inspect(|(_track, cancel)| {
                 let _ = cancel.send(true);
-            }
+            });
             state.pending.remove(&token);
         }
     }
@@ -221,6 +223,24 @@ fn handle_new_catalog(
     ctx: &Ctx,
 ) -> Result<ConsumerState, String> {
     let new_renditions = update_catalog(ctx, snapshot, &state.renditions)?;
+
+    // Cancel track pumps whose parameters changed in-place
+    // The parent sees the fresh parameters with a new :track_added message,
+    // and should resub to it
+    let old_renditions = &state.renditions;
+    state.cancels.retain(|token, (track, cancel)| {
+        let old = old_renditions.get(track);
+        let changed = old.is_some()
+            && new_renditions
+                .get(track)
+                .is_some_and(|new| Some(new) != old);
+
+        if changed {
+            let _ = cancel.send(true);
+            messages::send_track_ended(ctx.pid, *token, "rendition changed".to_string());
+        }
+        !changed
+    });
 
     // Start pumps for any parked commands the snapshot just resolved.
     state

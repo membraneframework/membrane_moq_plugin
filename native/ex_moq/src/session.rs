@@ -33,7 +33,10 @@ pub(crate) fn create_session(
     let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
 
     runtime().spawn(async move {
-        let session = connect(url, published, consumed, disable_tls_verify).await;
+        let session = tokio::select! {
+            session = connect(url, published, consumed, disable_tls_verify) => session,
+            _ = shutdown_rx.recv() => return,
+        };
         match session {
             Ok(session) => {
                 messages::send_connected(&pid);

@@ -1,10 +1,7 @@
 defmodule Membrane.MoQ.Test.Take do
   @moduledoc """
-  NOTE: This test support module was LLM-generated.
-
-  Test-only filter that forwards the first `count` buffers, then emits
-  `end_of_stream` and drops the rest. Bounds an otherwise long fixture so a
-  real-time-paced publish stays short.
+  Test-only filter that forwards the first `count` buffers,
+  then emits `end_of_stream` and drops the rest.
   """
 
   use Membrane.Filter

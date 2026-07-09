@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinSet;
+use tokio::sync::mpsc;
+use tokio::task::{AbortHandle, JoinSet};
 
 use rustler::{Atom, LocalPid, Resource, ResourceArc};
 
@@ -42,10 +42,10 @@ type CatalogSnapshot = HashMap<String, Rendition>;
 struct ConsumerState {
     renditions: CatalogSnapshot,
     pumps: JoinSet<()>,
-    // Cancel handles keyed by token, with the subscribed track name so a
-    // catalog update can end the subscriptions of a changed rendition.
-    cancels: HashMap<Token, (String, watch::Sender<bool>)>,
-    pending: HashMap<Token, (String, u8, watch::Receiver<bool>)>,
+    // tracks subscriptions with tracks announced and tasks spawned
+    cancels: HashMap<Token, (String, AbortHandle)>,
+    // tracks subscriptions that are yet to be announced in the catalog
+    pending: HashMap<Token, (String, u8)>,
 }
 
 struct Ctx<'a> {
@@ -192,24 +192,27 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
             track,
             token,
             priority,
-        } => {
-            let (cancel_tx, cancel_rx) = watch::channel(false);
-            state.cancels.insert(token, (track.clone(), cancel_tx));
-            match state.renditions.get(&track) {
-                Some(rendition) => {
-                    messages::send_track_format(ctx.pid, token, &rendition.params);
-                    let pump = Pump::new(ctx, track, rendition, token, priority);
-                    state.pumps.spawn(pump.run(cancel_rx));
-                }
-                None => {
-                    state.pending.insert(token, (track, priority, cancel_rx));
-                }
+        } => match state.renditions.get(&track) {
+            // track is already announced
+            Some(rendition) => {
+                messages::send_track_format(ctx.pid, token, &rendition.params);
+                let pump = Pump::new(ctx, track.clone(), rendition, token, priority);
+                let abort_handle = state.pumps.spawn(pump.run());
+                state.cancels.insert(token, (track, abort_handle));
             }
-        }
+            // track is not announced yet
+            None => {
+                state.pending.insert(token, (track, priority));
+            }
+        },
+
         Command::Unsubscribe { token } => {
-            state.cancels.remove(&token).inspect(|(_track, cancel)| {
-                let _ = cancel.send(true);
-            });
+            state
+                .cancels
+                .remove(&token)
+                .inspect(|(_track, abort_handle)| {
+                    abort_handle.abort();
+                });
             state.pending.remove(&token);
         }
     }
@@ -227,7 +230,7 @@ fn handle_new_catalog(
     // The parent sees the fresh parameters with a new :track_added message,
     // and should resub to it
     let old_renditions = &state.renditions;
-    state.cancels.retain(|token, (track, cancel)| {
+    state.cancels.retain(|token, (track, abort_handle)| {
         let old = old_renditions.get(track);
         let changed = old.is_some()
             && new_renditions
@@ -235,21 +238,21 @@ fn handle_new_catalog(
                 .is_some_and(|new| Some(new) != old);
 
         if changed {
-            let _ = cancel.send(true);
+            abort_handle.abort();
             messages::send_track_ended(ctx.pid, *token, "rendition changed".to_string());
         }
         !changed
     });
 
-    // Start pumps for any parked commands the snapshot just resolved.
+    // Start pumps for any pending subscriptions the snapshot just resolved.
     state
         .pending
-        .extract_if(|_, (track, _, _)| new_renditions.contains_key(track.as_str()))
-        .for_each(|(token, (track, priority, cancel_rx))| {
+        .extract_if(|_, (track, _)| new_renditions.contains_key(track.as_str()))
+        .for_each(|(token, (track, priority))| {
             let rendition = &new_renditions[&track];
             messages::send_track_format(ctx.pid, token, &rendition.params);
             let pump = Pump::new(ctx, track, rendition, token, priority);
-            state.pumps.spawn(pump.run(cancel_rx));
+            state.pumps.spawn(pump.run());
         });
 
     state.renditions = new_renditions;
@@ -309,9 +312,8 @@ impl Pump {
         }
     }
 
-    async fn run(self, mut cancel: watch::Receiver<bool>) {
+    async fn run(self) {
         let reason = tokio::select! {
-            _ = cancel.changed() => return,
             result = self.pump_track() => match result {
                 Ok(()) => "track ended".to_string(),
                 Err(e) => format!("track error: {e}"),

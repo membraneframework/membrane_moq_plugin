@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use rustler::{
-    Binary, Encoder, Env, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum, OwnedBinary, Term,
+    Binary, Encoder, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum, OwnedBinary,
+    Term,
 };
 
 /// Wire container selected by the Sink, crossing the NIF boundary as an atom.
@@ -332,7 +333,9 @@ pub(crate) fn encode_format<'a>(env: Env<'a>, params: &TrackParams) -> Term<'a> 
             description,
             codec,
         } => {
-            let description = make_binary(env, description);
+            // __jm__ this might not be the best way to do this
+            let description: Binary =
+                NewBinary::from_iter(env, description.iter().map(|&x| x)).into();
             match codec {
                 VideoCodecParams::H264(codec) => TrackFormat::H264 {
                     params: params.clone(),
@@ -359,10 +362,4 @@ pub(crate) fn encode_format<'a>(env: Env<'a>, params: &TrackParams) -> Term<'a> 
     };
 
     format.encode(env)
-}
-
-pub(crate) fn make_binary<'a>(env: Env<'a>, bytes: &[u8]) -> Binary<'a> {
-    let mut bin = OwnedBinary::new(bytes.len()).expect("binary allocation should succeed");
-    bin.as_mut_slice().copy_from_slice(bytes);
-    bin.release(env)
 }

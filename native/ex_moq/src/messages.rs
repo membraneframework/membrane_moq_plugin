@@ -1,7 +1,7 @@
-use rustler::{Encoder, LocalPid, OwnedEnv};
+use rustler::{Binary, Encoder, LocalPid, NewBinary, OwnedEnv};
 
 use crate::atoms;
-use crate::track_format::{encode_format, make_binary, TrackParams};
+use crate::track_format::{encode_format, TrackParams};
 
 pub(crate) struct PidDead;
 
@@ -76,10 +76,12 @@ pub(crate) fn send_frame(
 ) -> Result<(), PidDead> {
     OwnedEnv::new()
         .send_and_clear(&pid, |env| {
+            let payload_binary: Binary =
+                NewBinary::from_iter(env, payload.iter().map(|&x| x)).into();
             (
                 atoms::moq_frame(),
                 token,
-                make_binary(env, payload),
+                payload_binary,
                 timestamp_ns,
                 keyframe,
             )

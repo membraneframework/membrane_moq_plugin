@@ -89,6 +89,32 @@ defmodule Membrane.MoQ.TrackFormatTest do
       assert dcr == avcc(100, 0, 31)
     end
 
+    test "dimensions omitted from the catalog map to nil" do
+      native =
+        {:h264,
+         %{
+           params: %{width: 0, height: 0, framerate: 30.0},
+           description: avcc(100, 0, 31),
+           codec: %{inline: false, profile: 100, constraints: 0, level: 31}
+         }}
+
+      assert %H264{width: nil, height: nil} = TrackFormat.to_stream_format(native)
+    end
+
+    test "a sub-millihertz framerate maps to nil, never {0, 1000}" do
+      # An advertised fps in (0, 0.0005) must not decode to a 0 numerator:
+      # downstream per-frame-duration math divides by it.
+      native =
+        {:h264,
+         %{
+           params: %{width: 1280, height: 720, framerate: 4.0e-4},
+           description: avcc(100, 0, 31),
+           codec: %{inline: false, profile: 100, constraints: 0, level: 31}
+         }}
+
+      assert %H264{framerate: nil} = TrackFormat.to_stream_format(native)
+    end
+
     test "media_type/1 is :video" do
       assert TrackFormat.media_type({:h264, %{}}) == :video
     end
@@ -116,6 +142,18 @@ defmodule Membrane.MoQ.TrackFormatTest do
 
         assert TrackFormat.to_stream_format(native) == fmt
       end
+    end
+
+    test "dimensions omitted from the catalog map to nil" do
+      native =
+        {:h265,
+         %{
+           params: %{width: 0, height: 0, framerate: 30.0},
+           description: hvcc(),
+           codec: %{in_band: false}
+         }}
+
+      assert %H265{width: nil, height: nil} = TrackFormat.to_stream_format(native)
     end
 
     test "media_type/1 is :video" do

@@ -43,8 +43,9 @@ defmodule Membrane.MoQ.Sink do
         spec: 0..255 | nil,
         default: nil,
         description: """
-        Delivery priority of this pad's track: under congestion.
-        Tracks with a higher value are sent first.
+        Delivery priority of this pad's track.
+        Under congestion, tracks with a higher value are sent first.
+        When nil, default hang defaults are used.
         """
       ]
     ]

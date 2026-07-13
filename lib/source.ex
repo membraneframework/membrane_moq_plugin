@@ -15,9 +15,8 @@ defmodule Membrane.MoQ.Source do
         the pad will start with.
     * `{:track_removed, track :: String.t()}`
         when an advertised track disappears from the catalog (e.g. the publisher ended it).
-    * A track whose codec parameters change mid-broadcast is reported as a
-      `:track_removed` immediately followed by a `:new_track`, so a stale pad can be
-      torn down and re-wired against the new format.
+    * A track whose codec parameters change mid-broadcast is reported as a `:track_removed`,
+        followed by a `:new_track`, so a stale pad can be torn down and re-wired against the new format.
     * `{:disconnected, reason :: String.t()}`
         when the broadcast goes away (the publisher left) or the session drops.
         The source sends `:end_of_stream` to all active pads.

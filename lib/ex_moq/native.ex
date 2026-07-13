@@ -222,6 +222,9 @@ defmodule ExMoQ.Native do
       for every received frame
     * `{:moq_track_ended, token :: integer(), reason :: String.t()}`
       when the track ends cleanly or errors
+    * `{:moq_track_error, token :: integer(), reason :: String.t()}`
+      when the subscription dies on the native side (e.g. its task panics)
+      while the track may still be advertised in the catalog
   """
   @spec subscribe_track(broadcast_consumer(), String.t(), integer(), 0..255) :: :ok
   def subscribe_track(_broadcast_consumer, _track, _token, _priority),

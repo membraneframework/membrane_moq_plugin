@@ -260,6 +260,13 @@ defmodule Membrane.MoQ.Source do
     {actions, state}
   end
 
+  def handle_info({:moq_track_error, token, reason}, ctx, state) do
+    pad = BiMap.get(state.tokens, token)
+    track = if pad != nil, do: ctx.pads[pad].options.track
+
+    raise "MoQ subscription for track #{inspect(track)} failed: #{inspect(reason)}"
+  end
+
   def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
     raise "MoQ subscriber setup failed: #{inspect(reason)}"
   end

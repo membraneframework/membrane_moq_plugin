@@ -11,7 +11,7 @@ use hang::moq_net;
 use crate::messages::{self, Token};
 use crate::session::SessionResource;
 use crate::track_format::{audio_params, video_params, TrackParams};
-use crate::{atoms, runtime};
+use crate::{atoms, lock_ignoring_poison, runtime};
 
 enum Command {
     Subscribe {
@@ -39,14 +39,120 @@ struct Rendition {
 
 type CatalogSnapshot = HashMap<String, Rendition>;
 
+struct PumpGuard(AbortHandle);
+
+impl PumpGuard {
+    fn task_id(&self) -> tokio::task::Id {
+        self.0.id()
+    }
+}
+
+impl Drop for PumpGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct Sub {
+    track: String,
+    priority: u8,
+    /// `None` until the track is announced in the catalog and a pump is spawned.
+    pump: Option<PumpGuard>,
+}
+
+struct Subscriptions {
+    subs: HashMap<Token, Sub>,
+    /// mapping from spawned task to subscription token.
+    /// gracefully terminated tasks remove their entry from here,
+    /// while abnormally terminated tasks don't.
+    by_task: HashMap<tokio::task::Id, Token>,
+    pumps: JoinSet<()>,
+}
+
+impl Subscriptions {
+    fn new() -> Self {
+        Self {
+            subs: HashMap::new(),
+            by_task: HashMap::new(),
+            pumps: JoinSet::new(),
+        }
+    }
+
+    fn insert_pending(&mut self, token: Token, track: String, priority: u8) {
+        self.remove(token);
+        let sub = Sub {
+            track,
+            priority,
+            pump: None,
+        };
+        self.subs.insert(token, sub);
+    }
+
+    fn insert_active(&mut self, token: Token, track: String, priority: u8, pump: Pump) {
+        self.remove(token);
+        let abort_handle = self.pumps.spawn(pump.run());
+        self.by_task.insert(abort_handle.id(), token);
+        let sub = Sub {
+            track,
+            priority,
+            pump: Some(PumpGuard(abort_handle)),
+        };
+        self.subs.insert(token, sub);
+    }
+
+    fn remove(&mut self, token: Token) {
+        self.subs
+            .remove(&token)
+            .and_then(|sub| sub.pump)
+            .inspect(|pump| {
+                self.by_task.remove(&pump.task_id());
+            });
+    }
+
+    /// Routes a finished pump task back to its subscription and forgets both.
+    /// Returns `None` for tasks aborted through `remove`.
+    fn reap(&mut self, id: tokio::task::Id) -> Option<Token> {
+        let token = self.by_task.remove(&id)?;
+        self.subs.remove(&token);
+        Some(token)
+    }
+
+    fn remove_active_where(&mut self, mut pred: impl FnMut(&str) -> bool) -> Vec<Token> {
+        let Self { subs, by_task, .. } = self;
+        subs.extract_if(|_, sub| sub.pump.is_some() && pred(&sub.track))
+            .map(|(token, sub)| {
+                let Some(pump) = sub.pump else { unreachable!() };
+                by_task.remove(&pump.task_id());
+                token
+            })
+            .collect()
+    }
+
+    fn drain_resolved<'r>(
+        &mut self,
+        renditions: &'r CatalogSnapshot,
+    ) -> Vec<(Token, String, u8, &'r Rendition)> {
+        self.subs
+            .extract_if(|_, sub| sub.pump.is_none() && renditions.contains_key(sub.track.as_str()))
+            .map(|(token, sub)| {
+                let rendition = &renditions[&sub.track];
+                (token, sub.track, sub.priority, rendition)
+            })
+            .collect()
+    }
+
+    fn has_pumps(&self) -> bool {
+        !self.pumps.is_empty()
+    }
+
+    async fn join_next(&mut self) -> Option<Result<(tokio::task::Id, ()), JoinError>> {
+        self.pumps.join_next_with_id().await
+    }
+}
+
 struct ConsumerState {
     renditions: CatalogSnapshot,
-    pumps: JoinSet<()>,
-    // tracks subscriptions with tracks announced and tasks spawned
-    cancels: HashMap<Token, (String, AbortHandle)>,
-    // tracks subscriptions that are yet to be announced in the catalog
-    pending: HashMap<Token, (String, u8)>,
-    task_tokens: HashMap<tokio::task::Id, Token>,
+    subs: Subscriptions,
     env: OwnedEnv,
 }
 
@@ -57,6 +163,7 @@ struct Ctx<'a> {
     pid: LocalPid,
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn create_broadcast_consumer(
     session: ResourceArc<SessionResource>,
@@ -68,7 +175,7 @@ pub(crate) fn create_broadcast_consumer(
 
     // A clone with its own announcement cursor, so each broadcast consumer
     // awaits its broadcast independently of any sibling consumers.
-    let origin = session.consume.lock().unwrap().consume();
+    let origin = lock_ignoring_poison(&session.consume).consume();
 
     let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
     let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel::<()>();
@@ -91,6 +198,7 @@ pub(crate) fn create_broadcast_consumer(
     )
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn subscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
@@ -106,6 +214,7 @@ pub(crate) fn subscribe_track(
     atoms::ok()
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn unsubscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
@@ -115,6 +224,7 @@ pub(crate) fn unsubscribe_track(
     atoms::ok()
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
     let _ = consumer.shutdown.send(());
@@ -164,10 +274,7 @@ async fn run_broadcast(
 
     let mut state = ConsumerState {
         renditions: HashMap::new(),
-        pumps: JoinSet::new(),
-        cancels: HashMap::new(),
-        pending: HashMap::new(),
-        task_tokens: HashMap::new(),
+        subs: Subscriptions::new(),
         env,
     };
 
@@ -179,8 +286,8 @@ async fn run_broadcast(
                 None => return,
             },
             _ = shutdown_rx.recv() => return,
-            Some(result) = state.pumps.join_next_with_id(),
-              if !state.pumps.is_empty() => state = handle_pump_join(result, state, ctx.pid),
+            Some(result) = state.subs.join_next(),
+              if state.subs.has_pumps() => state = handle_pump_join(result, state, ctx.pid),
             snapshot = catalog.next() => {
                 state = match handle_new_catalog(snapshot, state, &ctx) {
                     Ok(state) => state,
@@ -204,28 +311,14 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
             // track is already announced
             Some(rendition) => {
                 messages::send_track_format(&mut state.env, ctx.pid, token, &rendition.params);
-                spawn_pump(
-                    Pump::new(ctx, track.clone(), rendition, token, priority),
-                    &mut state.pumps,
-                    &mut state.cancels,
-                    &mut state.task_tokens,
-                )
+                let pump = Pump::new(ctx, track.clone(), rendition, token, priority);
+                state.subs.insert_active(token, track, priority, pump);
             }
             // track is not announced yet
-            None => {
-                state.pending.insert(token, (track, priority));
-            }
+            None => state.subs.insert_pending(token, track, priority),
         },
 
-        Command::Unsubscribe { token } => {
-            state
-                .cancels
-                .remove(&token)
-                .inspect(|(_track, abort_handle)| {
-                    abort_handle.abort();
-                });
-            state.pending.remove(&token);
-        }
+        Command::Unsubscribe { token } => state.subs.remove(token),
     }
     state
 }
@@ -235,24 +328,18 @@ fn handle_pump_join(
     mut state: ConsumerState,
     pid: LocalPid,
 ) -> ConsumerState {
-    let id = match result {
-        Ok((id, ())) => id,
-        Err(ref e) => e.id(),
+    let id = match &result {
+        Ok((id, ())) => *id,
+        Err(e) => e.id(),
     };
 
-    let env = &mut state.env;
-    state.task_tokens.remove(&id).inspect(|token| {
-        state.cancels.remove(token);
-
-        if let Err(e) = result {
-            messages::send_track_ended(
-                env,
-                pid,
-                *token,
-                format!("track task died unexpectedly: {e}").to_owned(),
-            );
-        }
-    });
+    // send a :track_error on pumps that terminated abnormally.
+    // the guard works because:
+    //   - for tasks terminating normally, `result != Err(_)`
+    //   - for tasks removed via `remove`, `state.subs.reap(id) == None`
+    if let Some((token, e)) = state.subs.reap(id).zip(result.err()) {
+        messages::send_track_error(&mut state.env, pid, token, format!("pump task died: {e}"));
+    }
 
     state
 }
@@ -271,36 +358,29 @@ fn handle_new_catalog(
     // The parent sees the fresh parameters with a new :track_added message,
     // and should resub to it
     let old_renditions = &state.renditions;
-    let env = &mut state.env;
-    state.cancels.retain(|token, (track, abort_handle)| {
+    let changed = state.subs.remove_active_where(|track| {
         let old = old_renditions.get(track);
-        let changed = old.is_some()
+        old.is_some()
             && new_renditions
                 .get(track)
-                .is_some_and(|new| Some(new) != old);
-
-        if changed {
-            abort_handle.abort();
-            messages::send_track_ended(env, ctx.pid, *token, "rendition changed".to_string());
-        }
-        !changed
+                .is_some_and(|new| Some(new) != old)
     });
 
+    for token in changed {
+        messages::send_track_ended(
+            &mut state.env,
+            ctx.pid,
+            token,
+            "rendition changed".to_string(),
+        );
+    }
+
     // Start pumps for any pending subscriptions the snapshot just resolved.
-    let env = &mut state.env;
-    state
-        .pending
-        .extract_if(|_, (track, _)| new_renditions.contains_key(track.as_str()))
-        .for_each(|(token, (track, priority))| {
-            let rendition = &new_renditions[&track];
-            messages::send_track_format(env, ctx.pid, token, &rendition.params);
-            spawn_pump(
-                Pump::new(ctx, track.clone(), rendition, token, priority),
-                &mut state.pumps,
-                &mut state.cancels,
-                &mut state.task_tokens,
-            );
-        });
+    for (token, track, priority, rendition) in state.subs.drain_resolved(&new_renditions) {
+        messages::send_track_format(&mut state.env, ctx.pid, token, &rendition.params);
+        let pump = Pump::new(ctx, track.clone(), rendition, token, priority);
+        state.subs.insert_active(token, track, priority, pump);
+    }
 
     state.renditions = new_renditions;
     Ok(state)
@@ -445,17 +525,4 @@ async fn pump_frames(
         .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
     }
     Ok(())
-}
-
-fn spawn_pump(
-    pump: Pump,
-    pumps: &mut JoinSet<()>,
-    cancels: &mut HashMap<Token, (String, AbortHandle)>,
-    task_tokens: &mut HashMap<tokio::task::Id, Token>,
-) {
-    let track = pump.track.clone();
-    let token = pump.token;
-    let abort_handle = pumps.spawn(pump.run());
-    task_tokens.insert(abort_handle.id(), token);
-    cancels.insert(token, (track, abort_handle));
 }

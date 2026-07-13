@@ -220,7 +220,7 @@ fn create_video_config(
     config.description = description;
     config.coded_width = Some(width);
     config.coded_height = Some(height);
-    config.framerate = Some(framerate);
+    config.framerate = (framerate > 0.0).then_some(framerate);
     config.optimize_for_latency = Some(true);
     config
 }

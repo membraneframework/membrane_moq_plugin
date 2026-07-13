@@ -181,7 +181,9 @@ defmodule Membrane.MoQ.TrackFormat do
 
   @spec framerate(float()) :: {pos_integer(), pos_integer()} | nil
   defp framerate(fps) when is_number(fps) and fps > 0 do
-    if fps == Float.floor(fps * 1.0), do: {trunc(fps), 1}, else: {round(fps * 1000), 1000}
+    fps
+    |> Ratio.new()
+    |> then(&{&1.numerator, &1.denominator})
   end
 
   defp framerate(_fps), do: nil

@@ -16,6 +16,7 @@ pub(crate) struct SessionResource {
 
 impl rustler::Resource for SessionResource {}
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn create_session(
     url: String,
@@ -67,6 +68,7 @@ pub(crate) fn create_session(
     ))
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn close_session(session: ResourceArc<SessionResource>) -> Atom {
     let _ = session.shutdown.send(());

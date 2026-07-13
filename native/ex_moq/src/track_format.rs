@@ -21,7 +21,7 @@ impl ContainerKind {
 #[derive(NifStruct, Clone, PartialEq)]
 #[module = "ExMoQ.Native.VideoTrackParams"]
 pub(crate) struct VideoTrackParams {
-    /// Investigate if Rustler could accept Option<std::num::NonZero<T>> for these
+    /// Investigate if Rustler could accept `Option<std::num::NonZero<T>>` for these
     pub(crate) width: Option<u32>,
     pub(crate) height: Option<u32>,
     pub(crate) framerate: Option<f64>,
@@ -321,7 +321,7 @@ pub(crate) fn encode_format<'a>(env: Env<'a>, params: &TrackParams) -> Term<'a> 
             description,
             codec,
         } => {
-            let mut dcr_binary: NewBinary = NewBinary::new(env, description.len()).into();
+            let mut dcr_binary = NewBinary::new(env, description.len());
             dcr_binary.as_mut_slice().copy_from_slice(description);
 
             match codec {

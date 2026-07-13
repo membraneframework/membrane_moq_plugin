@@ -228,14 +228,23 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
 fn handle_pump_join(
     result: Result<(tokio::task::Id, ()), JoinError>,
     mut state: ConsumerState,
+    pid: LocalPid,
 ) -> ConsumerState {
     let id = match result {
         Ok((id, ())) => id,
-        Err(e) => e.id(),
+        Err(ref e) => e.id(),
     };
 
     state.task_tokens.remove(&id).inspect(|token| {
         state.cancels.remove(token);
+
+        if let Err(e) = result {
+            messages::send_track_ended(
+                pid,
+                *token,
+                format!("track task died unexpectedly: {e}").to_owned(),
+            );
+        }
     });
 
     state
@@ -299,11 +308,13 @@ fn update_catalog(
     let new_catalog = catalog_renditions(&snapshot);
 
     let pid_dead = |_| "consumer pid is dead".to_string();
+
     for (name, rendition) in old_catalog {
         if new_catalog.get(name) != Some(rendition) {
             messages::send_track_removed(ctx.pid, ctx.path, name).map_err(pid_dead)?;
         }
     }
+
     for (name, rendition) in &new_catalog {
         if old_catalog.get(name) != Some(rendition) {
             messages::send_track_added(ctx.pid, ctx.path, name, &rendition.params)

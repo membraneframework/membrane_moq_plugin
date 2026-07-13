@@ -139,11 +139,31 @@ defmodule Membrane.MoQ.Test.Relay do
       """
   end
 
-  defp free_port!() do
-    {:ok, socket} = :gen_tcp.listen(0, reuseaddr: true)
-    {:ok, port_number} = :inet.port(socket)
-    :ok = :gen_tcp.close(socket)
-    port_number
+  # The relay binds the same port number twice: QUIC over UDP (`[server]`) and
+  # the plain-HTTP readiness endpoint over TCP (`[web.http]`). Take a UDP port
+  # from the OS and keep it only if the same number is also free on TCP.
+  # The sockets are closed before the relay spawns, so another process could
+  # still grab the port in between; unlikely enough for a test helper.
+  defp free_port!(attempts \\ 10)
+
+  defp free_port!(0) do
+    raise "could not find a port free on both UDP and TCP for the test relay"
+  end
+
+  defp free_port!(attempts) do
+    {:ok, udp_socket} = :gen_udp.open(0, reuseaddr: true)
+    {:ok, port_number} = :inet.port(udp_socket)
+
+    case :gen_tcp.listen(port_number, reuseaddr: true) do
+      {:ok, tcp_socket} ->
+        :ok = :gen_tcp.close(tcp_socket)
+        :ok = :gen_udp.close(udp_socket)
+        port_number
+
+      {:error, _reason} ->
+        :ok = :gen_udp.close(udp_socket)
+        free_port!(attempts - 1)
+    end
   end
 
   defp write_config!(port_number) do

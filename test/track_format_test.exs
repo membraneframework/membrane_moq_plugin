@@ -68,11 +68,11 @@ defmodule Membrane.MoQ.TrackFormatTest do
       end
     end
 
-    test "a missing framerate maps to 0.0 natively and back to nil" do
+    test "a missing framerate maps to nil natively and back to nil" do
       dcr = avcc(100, 0, 31)
       fmt = %H264{width: 640, height: 480, framerate: nil, stream_structure: {:avc1, dcr}}
 
-      assert {:h264, %{params: %{framerate: +0.0}}} = native = TrackFormat.from_stream_format(fmt)
+      assert {:h264, %{params: %{framerate: nil}}} = native = TrackFormat.from_stream_format(fmt)
       assert TrackFormat.to_stream_format(native) == fmt
     end
 

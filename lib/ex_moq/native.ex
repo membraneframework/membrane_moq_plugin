@@ -17,9 +17,9 @@ defmodule ExMoQ.Native do
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
     @type t :: %__MODULE__{
-            width: non_neg_integer(),
-            height: non_neg_integer(),
-            framerate: float()
+            width: non_neg_integer() | nil,
+            height: non_neg_integer() | nil,
+            framerate: float() | nil
           }
     @enforce_keys [:width, :height, :framerate]
     defstruct @enforce_keys

@@ -3,7 +3,6 @@ use rustler::{
     Binary, Encoder, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum, Term,
 };
 
-/// Wire container selected by the Sink, crossing the NIF boundary as an atom.
 #[derive(NifUnitEnum, Clone, Copy, PartialEq)]
 pub(crate) enum ContainerKind {
     Legacy,
@@ -22,9 +21,10 @@ impl ContainerKind {
 #[derive(NifStruct, Clone, PartialEq)]
 #[module = "ExMoQ.Native.VideoTrackParams"]
 pub(crate) struct VideoTrackParams {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) framerate: f64,
+    /// Investigate if Rustler could accept Option<std::num::NonZero<T>> for these
+    pub(crate) width: Option<u32>,
+    pub(crate) height: Option<u32>,
+    pub(crate) framerate: Option<f64>,
 }
 
 #[derive(NifStruct, Clone, PartialEq)]
@@ -211,16 +211,16 @@ fn opus_audio_config(sample_rate: u32, channels: u32) -> hang::catalog::AudioCon
 
 fn create_video_config(
     codec: hang::catalog::VideoCodec,
-    width: u32,
-    height: u32,
-    framerate: f64,
+    width: Option<u32>,
+    height: Option<u32>,
+    framerate: Option<f64>,
     description: Option<Bytes>,
 ) -> hang::catalog::VideoConfig {
     let mut config = hang::catalog::VideoConfig::new(codec);
     config.description = description;
-    config.coded_width = Some(width);
-    config.coded_height = Some(height);
-    config.framerate = (framerate > 0.0).then_some(framerate);
+    config.coded_width = width;
+    config.coded_height = height;
+    config.framerate = framerate;
     config.optimize_for_latency = Some(true);
     config
 }
@@ -249,7 +249,8 @@ pub(crate) enum AudioCodecParams {
 pub(crate) enum TrackParams {
     Video {
         params: VideoTrackParams,
-        /// Decoder configuration record (avcC/hvcC); empty when carried in-band.
+        /// Decoder configuration record (avcC/hvcC).
+        /// empty when carried in-band.
         description: Vec<u8>,
         codec: VideoCodecParams,
     },
@@ -257,13 +258,9 @@ pub(crate) enum TrackParams {
         params: AudioTrackParams,
         codec: AudioCodecParams,
     },
-    /// A track whose codec the source does not translate to a Membrane format.
     Unrecognized,
 }
 
-/// Codec parameters of a catalog video config, or [`TrackParams::Unrecognized`]
-/// for a codec the source does not translate. Inverse of [`h264_video_config`]
-/// / [`h265_video_config`].
 pub(crate) fn video_params(config: &hang::catalog::VideoConfig) -> TrackParams {
     let codec = match &config.codec {
         hang::catalog::VideoCodec::H264(h) => VideoCodecParams::H264(H264Codec {
@@ -284,14 +281,11 @@ pub(crate) fn video_params(config: &hang::catalog::VideoConfig) -> TrackParams {
         _ => return TrackParams::Unrecognized,
     };
 
-    // `VideoTrackParams` carries concrete values; the catalog leaves these
-    // optional, so coerce a missing dimension/framerate to 0 (the Elixir side
-    // treats a 0 framerate as "unknown").
     TrackParams::Video {
         params: VideoTrackParams {
-            width: config.coded_width.unwrap_or(0),
-            height: config.coded_height.unwrap_or(0),
-            framerate: config.framerate.unwrap_or(0.0),
+            width: config.coded_width,
+            height: config.coded_height,
+            framerate: config.framerate,
         },
         description: config
             .description
@@ -302,9 +296,6 @@ pub(crate) fn video_params(config: &hang::catalog::VideoConfig) -> TrackParams {
     }
 }
 
-/// Codec parameters of a catalog audio config, or [`TrackParams::Unrecognized`]
-/// for a codec the source does not translate. Inverse of [`aac_audio_config`] /
-/// [`opus_audio_config`].
 pub(crate) fn audio_params(config: &hang::catalog::AudioConfig) -> TrackParams {
     let codec = match &config.codec {
         hang::catalog::AudioCodec::AAC(aac) => AudioCodecParams::Aac(AacCodec {
@@ -323,8 +314,6 @@ pub(crate) fn audio_params(config: &hang::catalog::AudioConfig) -> TrackParams {
     }
 }
 
-/// Build the shared [`TrackFormat`] term from owned params. This is the inverse
-/// of the Sink's decode, so both directions speak the identical shape.
 pub(crate) fn encode_format<'a>(env: Env<'a>, params: &TrackParams) -> Term<'a> {
     let format = match params {
         TrackParams::Video {

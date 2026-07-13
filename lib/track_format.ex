@@ -173,11 +173,11 @@ defmodule Membrane.MoQ.TrackFormat do
 
   defp h264_dcr(dcr, _codec), do: dcr
 
-  @spec framerate_to_float({integer(), integer()} | nil) :: float()
+  @spec framerate_to_float({integer(), integer()} | nil) :: float() | nil
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,
     do: num / den
 
-  defp framerate_to_float(nil), do: 0.0
+  defp framerate_to_float(nil), do: nil
 
   @spec framerate(float()) :: {pos_integer(), pos_integer()} | nil
   defp framerate(fps) when is_number(fps) and fps > 0 do

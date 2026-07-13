@@ -234,7 +234,7 @@ fn handle_pump_join(
         Err(e) => e.id(),
     };
 
-    state.task_tokens.get(&id).inspect(|token| {
+    state.task_tokens.remove(&id).inspect(|token| {
         state.cancels.remove(token);
     });
 

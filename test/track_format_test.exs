@@ -101,7 +101,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
       assert %H264{width: nil, height: nil} = TrackFormat.to_stream_format(native)
     end
 
-    test "a sub-millihertz framerate maps to nil, never {0, 1000}" do
+    test "a sub-millihertz framerate maps to nil" do
       # An advertised fps in (0, 0.0005) must not decode to a 0 numerator:
       # downstream per-frame-duration math divides by it.
       native =

@@ -230,7 +230,7 @@ defmodule Membrane.MoQ.Sink do
     case Native.send_frame(
            pad_state.track_resource,
            buffer.pts,
-           keyframe?(buffer),
+           TrackFormat.keyframe?(buffer),
            buffer.payload
          ) do
       :ok ->
@@ -278,9 +278,4 @@ defmodule Membrane.MoQ.Sink do
       :video -> 60
     end
   end
-
-  @spec keyframe?(Membrane.Buffer.t()) :: boolean()
-  defp keyframe?(%Membrane.Buffer{metadata: %{h264: %{key_frame?: kf}}}), do: kf
-  defp keyframe?(%Membrane.Buffer{metadata: %{h265: %{key_frame?: kf}}}), do: kf
-  defp keyframe?(%Membrane.Buffer{}), do: true
 end

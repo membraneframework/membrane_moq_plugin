@@ -153,6 +153,16 @@ defmodule Membrane.MoQ.TrackFormat do
 
   def to_stream_format(:unrecognized), do: %Membrane.RemoteStream{type: :packetized}
 
+  @spec keyframe?(Membrane.Buffer.t()) :: boolean()
+  def keyframe?(%Membrane.Buffer{metadata: %{h264: %{key_frame?: kf}}}), do: kf
+  def keyframe?(%Membrane.Buffer{metadata: %{h265: %{key_frame?: kf}}}), do: kf
+  def keyframe?(%Membrane.Buffer{}), do: true
+
+  @spec buffer_metadata(boolean(), Membrane.StreamFormat.t()) :: Membrane.Buffer.metadata()
+  def buffer_metadata(keyframe?, %H264{}), do: %{h264: %{key_frame?: keyframe?}}
+  def buffer_metadata(keyframe?, %H265{}), do: %{h265: %{key_frame?: keyframe?}}
+  def buffer_metadata(_keyframe?, _audio_format), do: %{}
+
   @spec h264_dcr(binary(), map()) :: binary()
   # hang allows an in-band (avc3) rendition to omit the catalog description.
   # Membrane's avc3 still requires an avcC, so synthesise one from the codec fields.

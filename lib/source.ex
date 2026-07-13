@@ -240,7 +240,7 @@ defmodule Membrane.MoQ.Source do
           buffer = %Membrane.Buffer{
             payload: payload,
             pts: Membrane.Time.nanoseconds(timestamp_ns),
-            metadata: %{keyframe?: keyframe?}
+            metadata: TrackFormat.buffer_metadata(keyframe?, ctx.pads[pad].stream_format)
           }
 
           [buffer: {pad, buffer}]

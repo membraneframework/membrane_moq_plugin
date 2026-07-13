@@ -90,12 +90,6 @@ defmodule Membrane.MoQ.Sink do
   defmodule State do
     @moduledoc false
 
-    @type pad_state :: %{
-            track: String.t(),
-            priority: 0..255 | nil,
-            track_resource: Native.track() | nil
-          }
-
     @type t :: %__MODULE__{
             url: String.t(),
             container: Native.container(),
@@ -104,7 +98,7 @@ defmodule Membrane.MoQ.Sink do
             session: Native.session() | nil,
             broadcast: String.t(),
             producer: Native.broadcast_producer() | nil,
-            pads: %{Membrane.Pad.ref() => pad_state()}
+            tracks: %{Membrane.Pad.ref() => Native.track()}
           }
 
     @enforce_keys [:url, :broadcast, :container, :latency, :disable_tls_verify?]
@@ -112,7 +106,7 @@ defmodule Membrane.MoQ.Sink do
                 [
                   :session,
                   :producer,
-                  pads: %{}
+                  tracks: %{}
                 ]
   end
 
@@ -167,23 +161,16 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_pad_added(pad, %{pad_options: %{track: track, priority: priority}} = _ctx, state) do
-    pad_state = %{
-      track: track,
-      priority: priority,
-      track_resource: nil
-    }
-
-    {[], put_in(state.pads[pad], pad_state)}
-  end
-
-  @impl true
-  def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
-
-  @impl true
   def handle_stream_format(pad, fmt, ctx, %State{producer: producer} = state) do
-    old_stream_format = ctx.pads[pad].stream_format
-    pad_state = state.pads[pad]
+    %{
+      stream_format: old_stream_format,
+      options: %{
+        priority: priority,
+        track: track_name
+      }
+    } = ctx.pads[pad]
+
+    track_resource = state.tracks[pad]
 
     track_fmt = TrackFormat.from_stream_format(fmt)
 
@@ -191,48 +178,50 @@ defmodule Membrane.MoQ.Sink do
       raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
     end
 
-    state = case old_stream_format do
-      ^fmt ->
-        state
+    state =
+      case old_stream_format do
+        ^fmt ->
+          state
 
-      nil ->
-        priority = pad_state.priority || default_priority(track_fmt)
+        nil ->
+          priority = priority || default_priority(track_fmt)
 
-        case Native.add_track(
-               producer,
-               pad_state.track,
-               track_fmt,
-               priority,
-               state.container,
-               Membrane.Time.as_nanoseconds(state.latency, :round)
-             ) do
-          {:ok, track_resource} ->
-            put_in(state.pads[pad], %{pad_state | track_resource: track_resource})
+          case Native.add_track(
+                 producer,
+                 track_name,
+                 track_fmt,
+                 priority,
+                 state.container,
+                 Membrane.Time.as_nanoseconds(state.latency, :round)
+               ) do
+            {:ok, track_resource} ->
+              put_in(state.tracks[pad], track_resource)
 
-          {:error, reason} ->
-            fail.(reason)
-        end
+            {:error, reason} ->
+              fail.(reason)
+          end
 
-      _other ->
-        case Native.update_track(pad_state.track_resource, track_fmt) do
-          :ok ->  state
-          {:error, reason} -> fail.(reason)
-        end
-    end
+        _other ->
+          case Native.update_track(track_resource, track_fmt) do
+            :ok -> state
+            {:error, reason} -> fail.(reason)
+          end
+      end
 
     {[], state}
   end
 
   @impl true
-  def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, state) do
-    pad_state = Map.fetch!(state.pads, pad)
+  def handle_buffer(pad, %Membrane.Buffer{} = buffer, ctx, state) do
+    track_resource = state.tracks[pad]
+    track_name = ctx.pads[pad].options.track
 
     if buffer.pts == nil or buffer.pts < 0 do
       raise "Buffer PTS must be a non-negative integer, received: #{inspect(buffer.pts)}"
     end
 
     case Native.send_frame(
-           pad_state.track_resource,
+           track_resource,
            buffer.pts,
            TrackFormat.keyframe?(buffer),
            buffer.payload
@@ -247,11 +236,14 @@ defmodule Membrane.MoQ.Sink do
         """)
 
       {:error, reason} ->
-        raise "Failed to send frame to track #{inspect(pad_state.track)}: #{reason}"
+        raise "Failed to send frame to track #{inspect(track_name)}: #{reason}"
     end
 
     {[], state}
   end
+
+  @impl true
+  def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
 
   @impl true
   def handle_end_of_stream(pad, _ctx, state) do
@@ -261,16 +253,13 @@ defmodule Membrane.MoQ.Sink do
 
   @spec close_pad(Membrane.Pad.ref(), State.t()) :: State.t()
   defp close_pad(pad, state) do
-    case Map.pop(state.pads, pad) do
-      {%{track_resource: track_resource}, pads} ->
-        if not is_nil(track_resource) do
-          :ok = Native.remove_track(track_resource)
-        end
-
-        %{state | pads: pads}
-
+    case Map.pop(state.tracks, pad) do
       {nil, _pads} ->
         state
+
+      {track_resource, tracks} ->
+        :ok = Native.remove_track(track_resource)
+        %{state | tracks: tracks}
     end
   end
 

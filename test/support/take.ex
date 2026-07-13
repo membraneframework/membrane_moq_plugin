@@ -15,19 +15,23 @@ defmodule Membrane.MoQ.Test.Take do
               ]
 
   @impl true
-  def handle_init(_ctx, opts), do: {[], %{remaining: opts.count, done: false}}
+  def handle_init(_ctx, opts), do: {[], %{remaining: opts.count}}
 
   @impl true
-  def handle_buffer(:input, _buffer, _ctx, %{done: true} = state), do: {[], state}
+  def handle_buffer(:input, _buffer, %{pads: %{output: %{end_of_stream?: true}}} = _ctx, state) do
+    {[], state}
+  end
 
   def handle_buffer(:input, buffer, _ctx, state) do
     case state.remaining - 1 do
-      0 -> {[buffer: {:output, buffer}, end_of_stream: :output], %{state | done: true}}
+      0 -> {[buffer: {:output, buffer}, end_of_stream: :output], state}
       remaining -> {[buffer: {:output, buffer}], %{state | remaining: remaining}}
     end
   end
 
   @impl true
-  def handle_end_of_stream(:input, _ctx, %{done: true} = state), do: {[], state}
+  def handle_end_of_stream(:input, %{pads: %{output: %{end_of_stream?: true}}} = _ctx, state),
+    do: {[], state}
+
   def handle_end_of_stream(:input, _ctx, state), do: {[end_of_stream: :output], state}
 end

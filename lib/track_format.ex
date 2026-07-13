@@ -113,8 +113,8 @@ defmodule Membrane.MoQ.TrackFormat do
          }}
       ) do
     %H264{
-      width: width,
-      height: height,
+      width: if(width > 0, do: width, else: nil),
+      height: if(height > 0, do: height, else: nil),
       framerate: framerate(framerate),
       stream_structure: {if(inline, do: :avc3, else: :avc1), h264_dcr(dcr, codec)}
     }
@@ -129,8 +129,8 @@ defmodule Membrane.MoQ.TrackFormat do
          }}
       ) do
     %H265{
-      width: width,
-      height: height,
+      width: if(width > 0, do: width, else: nil),
+      height: if(height > 0, do: height, else: nil),
       framerate: framerate(framerate),
       stream_structure: {if(in_band, do: :hev1, else: :hvc1), dcr}
     }

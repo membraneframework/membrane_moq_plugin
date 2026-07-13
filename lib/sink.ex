@@ -190,6 +190,10 @@ defmodule Membrane.MoQ.Sink do
     track_fmt = TrackFormat.from_stream_format(fmt)
     priority = pad_state.priority || default_priority(track_fmt)
 
+    fail = fn reason ->
+      raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
+    end
+
     {track_resource, track_name} =
       case old_stream_format do
         ^fmt ->
@@ -208,7 +212,7 @@ defmodule Membrane.MoQ.Sink do
               {track_resource, pad_state.track}
 
             {:error, reason} ->
-              raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
+              fail.(reason)
           end
 
         _other ->
@@ -217,11 +221,14 @@ defmodule Membrane.MoQ.Sink do
               {new_track_resource, new_track_name}
 
             {:error, reason} ->
-              raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
+              fail.(reason)
           end
       end
 
-    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource, track: track_name})}
+    new_state =
+      put_in(state.pads[pad], %{pad_state | track_resource: track_resource, track: track_name})
+
+    {[], new_state}
   end
 
   @impl true

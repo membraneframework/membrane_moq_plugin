@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinError, JoinSet};
 
-use rustler::{Atom, LocalPid, Resource, ResourceArc};
+use rustler::{Atom, LocalPid, OwnedEnv, Resource, ResourceArc};
 
 use hang::moq_net;
 
@@ -47,6 +47,7 @@ struct ConsumerState {
     // tracks subscriptions that are yet to be announced in the catalog
     pending: HashMap<Token, (String, u8)>,
     task_tokens: HashMap<tokio::task::Id, Token>,
+    env: OwnedEnv,
 }
 
 struct Ctx<'a> {
@@ -128,11 +129,13 @@ async fn run_broadcast(
     mut commands_rx: mpsc::UnboundedReceiver<Command>,
     mut shutdown_rx: mpsc::UnboundedReceiver<()>,
 ) {
+    let mut env = OwnedEnv::new();
+
     let broadcast = tokio::select! {
         broadcast = origin.announced_broadcast(path.as_str()) => match broadcast {
             Some(broadcast) => broadcast,
             None => {
-                messages::send_broadcast_closed(pid,
+                messages::send_broadcast_closed(&mut env, pid,
                     &path,
                     format!("broadcast {path:?} was not announced before the session closed"),
                 );
@@ -145,12 +148,12 @@ async fn run_broadcast(
     let mut catalog = match subscribe_catalog(&broadcast) {
         Ok(catalog) => catalog,
         Err(e) => {
-            messages::send_broadcast_closed(pid, &path, e.to_string());
+            messages::send_broadcast_closed(&mut env, pid, &path, e.to_string());
             return;
         }
     };
 
-    messages::send_broadcast_ready(pid, &path);
+    messages::send_broadcast_ready(&mut env, pid, &path);
 
     let ctx = Ctx {
         broadcast: &broadcast,
@@ -165,9 +168,10 @@ async fn run_broadcast(
         cancels: HashMap::new(),
         pending: HashMap::new(),
         task_tokens: HashMap::new(),
+        env,
     };
 
-    let close_reason = loop {
+    loop {
         tokio::select! {
             command = commands_rx.recv() => match command {
                 Some(command) => state = handle_command(command, state, &ctx),
@@ -180,13 +184,14 @@ async fn run_broadcast(
             snapshot = catalog.next() => {
                 state = match handle_new_catalog(snapshot, state, &ctx) {
                     Ok(state) => state,
-                    Err(reason) => break reason,
+                    Err((mut env, reason)) => {
+                        messages::send_broadcast_closed(&mut env, pid, &path, reason);
+                        return;
+                    }
                 };
             }
         }
-    };
-
-    messages::send_broadcast_closed(pid, &path, close_reason);
+    }
 }
 
 fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> ConsumerState {
@@ -198,7 +203,7 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
         } => match state.renditions.get(&track) {
             // track is already announced
             Some(rendition) => {
-                messages::send_track_format(ctx.pid, token, &rendition.params);
+                messages::send_track_format(&mut state.env, ctx.pid, token, &rendition.params);
                 spawn_pump(
                     Pump::new(ctx, track.clone(), rendition, token, priority),
                     &mut state.pumps,
@@ -235,11 +240,13 @@ fn handle_pump_join(
         Err(ref e) => e.id(),
     };
 
+    let env = &mut state.env;
     state.task_tokens.remove(&id).inspect(|token| {
         state.cancels.remove(token);
 
         if let Err(e) = result {
             messages::send_track_ended(
+                env,
                 pid,
                 *token,
                 format!("track task died unexpectedly: {e}").to_owned(),
@@ -254,13 +261,17 @@ fn handle_new_catalog(
     snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
     mut state: ConsumerState,
     ctx: &Ctx,
-) -> Result<ConsumerState, String> {
-    let new_renditions = update_catalog(ctx, snapshot, &state.renditions)?;
+) -> Result<ConsumerState, (OwnedEnv, String)> {
+    let new_renditions = match update_catalog(ctx, snapshot, &state.renditions, &mut state.env) {
+        Ok(new_renditions) => new_renditions,
+        Err(e) => return Err((state.env, e)),
+    };
 
     // Cancel track pumps whose parameters changed in-place
     // The parent sees the fresh parameters with a new :track_added message,
     // and should resub to it
     let old_renditions = &state.renditions;
+    let env = &mut state.env;
     state.cancels.retain(|token, (track, abort_handle)| {
         let old = old_renditions.get(track);
         let changed = old.is_some()
@@ -270,18 +281,19 @@ fn handle_new_catalog(
 
         if changed {
             abort_handle.abort();
-            messages::send_track_ended(ctx.pid, *token, "rendition changed".to_string());
+            messages::send_track_ended(env, ctx.pid, *token, "rendition changed".to_string());
         }
         !changed
     });
 
     // Start pumps for any pending subscriptions the snapshot just resolved.
+    let env = &mut state.env;
     state
         .pending
         .extract_if(|_, (track, _)| new_renditions.contains_key(track.as_str()))
         .for_each(|(token, (track, priority))| {
             let rendition = &new_renditions[&track];
-            messages::send_track_format(ctx.pid, token, &rendition.params);
+            messages::send_track_format(env, ctx.pid, token, &rendition.params);
             spawn_pump(
                 Pump::new(ctx, track.clone(), rendition, token, priority),
                 &mut state.pumps,
@@ -298,6 +310,7 @@ fn update_catalog(
     ctx: &Ctx,
     snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
     old_catalog: &CatalogSnapshot,
+    env: &mut OwnedEnv,
 ) -> Result<CatalogSnapshot, String> {
     let snapshot = match snapshot {
         Ok(Some(snapshot)) => snapshot,
@@ -311,13 +324,13 @@ fn update_catalog(
 
     for (name, rendition) in old_catalog {
         if new_catalog.get(name) != Some(rendition) {
-            messages::send_track_removed(ctx.pid, ctx.path, name).map_err(pid_dead)?;
+            messages::send_track_removed(env, ctx.pid, ctx.path, name).map_err(pid_dead)?;
         }
     }
 
     for (name, rendition) in &new_catalog {
         if old_catalog.get(name) != Some(rendition) {
-            messages::send_track_added(ctx.pid, ctx.path, name, &rendition.params)
+            messages::send_track_added(env, ctx.pid, ctx.path, name, &rendition.params)
                 .map_err(pid_dead)?;
         }
     }
@@ -334,6 +347,7 @@ struct Pump {
     priority: u8,
     pid: LocalPid,
     latency: Duration,
+    env: OwnedEnv,
 }
 
 impl Pump {
@@ -346,10 +360,11 @@ impl Pump {
             priority,
             pid: ctx.pid,
             latency: ctx.latency,
+            env: OwnedEnv::new(),
         }
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         let reason = tokio::select! {
             result = self.pump_track() => match result {
                 Ok(()) => "track ended".to_string(),
@@ -357,10 +372,10 @@ impl Pump {
             }
         };
 
-        messages::send_track_ended(self.pid, self.token, reason);
+        messages::send_track_ended(&mut self.env, self.pid, self.token, reason);
     }
 
-    async fn pump_track(&self) -> anyhow::Result<()> {
+    async fn pump_track(&mut self) -> anyhow::Result<()> {
         let track = &self.track;
 
         let wire = moq_mux::catalog::hang::Container::try_from(&self.container)
@@ -378,7 +393,7 @@ impl Pump {
         let mut consumer =
             moq_mux::container::Consumer::new(track_consumer, wire).with_latency(self.latency);
 
-        pump_frames(&mut consumer, self.token, self.pid).await
+        pump_frames(&mut consumer, self.token, self.pid, &mut self.env).await
     }
 }
 
@@ -414,12 +429,20 @@ async fn pump_frames(
     consumer: &mut moq_mux::container::Consumer<moq_mux::catalog::hang::Container>,
     token: Token,
     pid: LocalPid,
+    env: &mut OwnedEnv,
 ) -> anyhow::Result<()> {
     while let Some(frame) = consumer.read().await? {
         let timestamp_ns = frame.timestamp.as_nanos() as u64;
 
-        messages::send_frame(pid, token, &frame.payload, timestamp_ns, frame.keyframe)
-            .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
+        messages::send_frame(
+            env,
+            pid,
+            token,
+            &frame.payload,
+            timestamp_ns,
+            frame.keyframe,
+        )
+        .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
     }
     Ok(())
 }

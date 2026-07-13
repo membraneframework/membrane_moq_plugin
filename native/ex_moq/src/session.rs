@@ -1,7 +1,7 @@
 use hang::moq_net;
 
 use moq_native::ClientConfig;
-use rustler::{Atom, LocalPid, NifResult, ResourceArc};
+use rustler::{Atom, LocalPid, NifResult, OwnedEnv, ResourceArc};
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 use url::Url;
@@ -37,9 +37,10 @@ pub(crate) fn create_session(
             session = connect(url, published, consumed, disable_tls_verify) => session,
             _ = shutdown_rx.recv() => return,
         };
+        let mut env = OwnedEnv::new();
         match session {
             Ok(session) => {
-                messages::send_connected(pid);
+                messages::send_connected(&mut env, pid);
 
                 tokio::select! {
                     _ = shutdown_rx.recv() => {} // session closed gracefully by parent
@@ -48,11 +49,11 @@ pub(crate) fn create_session(
                             Ok(()) => "MoQ session closed gracefully".to_string(),
                             Err(e) => e.to_string(),
                         };
-                        messages::send_disconnected(pid, reason);
+                        messages::send_disconnected(&mut env, pid, reason);
                     }
                 }
             }
-            Err(e) => messages::send_setup_failed(pid, e.to_string()),
+            Err(e) => messages::send_setup_failed(&mut env, pid, e.to_string()),
         }
     });
 

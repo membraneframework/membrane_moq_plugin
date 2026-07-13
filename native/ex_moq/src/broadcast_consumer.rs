@@ -242,16 +242,16 @@ async fn run_broadcast(
     let mut env = OwnedEnv::new();
 
     let broadcast = tokio::select! {
-        broadcast = origin.announced_broadcast(path.as_str()) => match broadcast {
-            Some(broadcast) => broadcast,
-            None => {
-                messages::send_broadcast_closed(&mut env, pid,
-                    &path,
-                    format!("broadcast {path:?} was not announced before the session closed"),
-                );
-                return;
-            }
-        },
+        broadcast = origin.announced_broadcast(path.as_str()) =>
+          if let Some(broadcast) = broadcast {
+            broadcast
+          } else {
+            messages::send_broadcast_closed(&mut env, pid,
+                &path,
+                format!("broadcast {path:?} was not announced before the session closed"),
+            );
+            return;
+          },
         _ = shutdown_rx.recv() => return,
     };
 

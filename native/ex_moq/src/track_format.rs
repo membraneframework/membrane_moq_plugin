@@ -10,7 +10,7 @@ pub(crate) enum ContainerKind {
 }
 
 impl ContainerKind {
-    pub(crate) fn to_catalog(self) -> hang::catalog::Container {
+    pub(crate) const fn to_catalog(self) -> hang::catalog::Container {
         match self {
             Self::Legacy => hang::catalog::Container::Legacy,
             Self::Loc => hang::catalog::Container::Loc,
@@ -95,7 +95,7 @@ pub(crate) enum ResolvedConfig {
 }
 
 impl ResolvedConfig {
-    pub(crate) fn kind(&self) -> TrackKind {
+    pub(crate) const fn kind(&self) -> TrackKind {
         match self {
             ResolvedConfig::Video(_) => TrackKind::Video,
             ResolvedConfig::Audio(_) => TrackKind::Audio,
@@ -104,8 +104,8 @@ impl ResolvedConfig {
 
     pub(crate) fn set_container(&mut self, container: hang::catalog::Container) {
         match self {
-            ResolvedConfig::Video(config) => config.container = container,
-            ResolvedConfig::Audio(config) => config.container = container,
+            Self::Video(config) => config.container = container,
+            Self::Audio(config) => config.container = container,
         }
     }
 }
@@ -296,7 +296,7 @@ pub(crate) fn video_params(config: &hang::catalog::VideoConfig) -> TrackParams {
     }
 }
 
-pub(crate) fn audio_params(config: &hang::catalog::AudioConfig) -> TrackParams {
+pub(crate) const fn audio_params(config: &hang::catalog::AudioConfig) -> TrackParams {
     let codec = match &config.codec {
         hang::catalog::AudioCodec::AAC(aac) => AudioCodecParams::Aac(AacCodec {
             profile: aac.profile,

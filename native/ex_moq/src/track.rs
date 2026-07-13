@@ -182,7 +182,8 @@ pub(crate) fn send_frame(
     };
 
     let _guard = runtime().handle().enter();
-    match lock_ignoring_poison(&track_res.producer).write(frame) {
+    let result = lock_ignoring_poison(&track_res.producer).write(frame);
+    match result {
         Ok(()) => Ok(atoms::ok()),
         Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {
             Ok(atoms::missing_keyframe())

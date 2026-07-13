@@ -89,6 +89,9 @@ defmodule ExMoQ.Native do
 
   @doc """
   Tears down the session. Idempotent.
+
+  Only the session's network task is stopped.
+  Don't reuse a closed session.
   """
   @spec close_session(session()) :: :ok
   def close_session(_session),

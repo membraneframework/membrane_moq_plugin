@@ -5,8 +5,8 @@ defmodule Membrane.MoQ.Sink do
   Connects to a MoQ relay server and publishes audio and video tracks
   to a single, configured broadcast.
 
-  Pads can be added or removed at any time during the pipeline lifecycle. The
-  catalog is republished on every track add/remove.
+  Pads can be added or removed at any time during the pipeline lifecycle.
+  The catalog is republished on every track add/remove and mid-stream format change.
 
   Frames are encapsulated in the wire container selected with the `container` option
   and optionally batched with `latency`.
@@ -37,10 +37,8 @@ defmodule Membrane.MoQ.Sink do
       track: [
         spec: String.t(),
         description: """
-        Track name for this pad's stream, see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology.
-        This will be the track name advertised by the hang/MSF catalog unless the stream format changes mid-stream.
-        On a mid-stream format change, the current track is removed,
-        and a new track is added with a different track name to avoid races with the catalog track.
+        Track name for this pad's stream,
+        see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology.
         """
       ],
       priority: [
@@ -188,47 +186,41 @@ defmodule Membrane.MoQ.Sink do
     pad_state = state.pads[pad]
 
     track_fmt = TrackFormat.from_stream_format(fmt)
-    priority = pad_state.priority || default_priority(track_fmt)
 
     fail = fn reason ->
       raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
     end
 
-    {track_resource, track_name} =
-      case old_stream_format do
-        ^fmt ->
-          {pad_state.track_resource, pad_state.track}
+    state = case old_stream_format do
+      ^fmt ->
+        state
 
-        nil ->
-          case Native.add_track(
-                 producer,
-                 pad_state.track,
-                 track_fmt,
-                 priority,
-                 state.container,
-                 Membrane.Time.as_nanoseconds(state.latency, :round)
-               ) do
-            {:ok, track_resource} ->
-              {track_resource, pad_state.track}
+      nil ->
+        priority = pad_state.priority || default_priority(track_fmt)
 
-            {:error, reason} ->
-              fail.(reason)
-          end
+        case Native.add_track(
+               producer,
+               pad_state.track,
+               track_fmt,
+               priority,
+               state.container,
+               Membrane.Time.as_nanoseconds(state.latency, :round)
+             ) do
+          {:ok, track_resource} ->
+            put_in(state.pads[pad], %{pad_state | track_resource: track_resource})
 
-        _other ->
-          case Native.replace_track(pad_state.track_resource, track_fmt) do
-            {:ok, new_track_resource, new_track_name} ->
-              {new_track_resource, new_track_name}
+          {:error, reason} ->
+            fail.(reason)
+        end
 
-            {:error, reason} ->
-              fail.(reason)
-          end
-      end
+      _other ->
+        case Native.update_track(pad_state.track_resource, track_fmt) do
+          :ok ->  state
+          {:error, reason} -> fail.(reason)
+        end
+    end
 
-    new_state =
-      put_in(state.pads[pad], %{pad_state | track_resource: track_resource, track: track_name})
-
-    {[], new_state}
+    {[], state}
   end
 
   @impl true

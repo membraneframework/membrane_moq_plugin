@@ -150,14 +150,15 @@ defmodule ExMoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Replaces a live track with one carrying `format`, published on a brand-new moq track
-  that keeps the replaced track's priority, container and latency.
+  Swaps a live track's format in place.
+  The catalog rendition is replaced under the same track name
+  and the underlying moq track keeps flowing,
+  so consumers observe the change through a catalog update.
 
-  Returns the new track resource along with the name of the newly generated moq track.
+  The track's media kind (audio/video) cannot change.
   """
-  @spec replace_track(track(), track_format()) ::
-          {:ok, track(), name :: String.t()} | {:error, reason :: String.t()}
-  def replace_track(_old_track_res, _format),
+  @spec update_track(track(), track_format()) :: :ok | {:error, reason :: String.t()}
+  def update_track(_track_res, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

@@ -1,12 +1,12 @@
 use hang::moq_net;
 
 use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use crate::{
     atoms,
-    broadcast_producer::BroadcastProducerResource,
-    runtime,
+    broadcast_producer::{BroadcastProducerResource, ProducerInner},
+    lock_ignoring_poison, runtime,
     track_format::{ContainerKind, ResolvedConfig, TrackFormat, TrackKind},
 };
 
@@ -36,6 +36,44 @@ struct TrackSettings {
 
 impl Resource for TrackResource {}
 
+impl TrackResource {
+    fn teardown(&self) {
+        let mut inner = lock_ignoring_poison(&self.broadcast_res.inner);
+
+        let _ = lock_ignoring_poison(&self.producer).finish();
+
+        let owns_name = inner
+            .tracks
+            .get(&self.name)
+            .is_some_and(|weak| Weak::ptr_eq(weak, &Arc::downgrade(&self.producer)));
+
+        if !owns_name {
+            return;
+        }
+
+        inner.tracks.remove(&self.name);
+        let _ = inner.broadcast.remove_track(&self.name);
+
+        let mut guard = inner.catalog.lock();
+        match self.kind {
+            TrackKind::Video => {
+                guard.video.renditions.remove(&self.name);
+            }
+            TrackKind::Audio => {
+                guard.audio.renditions.remove(&self.name);
+            }
+        }
+    }
+}
+
+impl Drop for TrackResource {
+    fn drop(&mut self) {
+        let _guard = runtime().handle().enter();
+        self.teardown();
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn add_track(
     broadcast_res: ResourceArc<BroadcastProducerResource>,
@@ -49,10 +87,10 @@ pub(crate) fn add_track(
 
     let resolved = format.resolve()?;
 
-    let tp = broadcast_res
+    let mut inner = lock_ignoring_poison(&broadcast_res.inner);
+
+    let tp = inner
         .broadcast
-        .lock()
-        .unwrap()
         .create_track(moq_net::Track {
             name: track,
             priority,
@@ -65,13 +103,21 @@ pub(crate) fn add_track(
         container,
         latency: std::time::Duration::from_nanos(latency_ns),
     };
-    let resource = init_track(tp, resolved, broadcast_res, settings, None)?;
+    let resource = init_track(
+        tp,
+        resolved,
+        &mut inner,
+        broadcast_res.clone(),
+        settings,
+        None,
+    )?;
 
     Ok((atoms::ok(), ResourceArc::new(resource)))
 }
 
 /// Replace a live track with one carrying a new format, published on a brand-new moq track.
 /// Returns a new track resource through which all subsequent frames must be sent.
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn replace_track(
     old_track_res: ResourceArc<TrackResource>,
@@ -91,31 +137,33 @@ pub(crate) fn replace_track(
     // The new rendition keeps the replaced track's settings.
     let settings = old_track_res.settings.clone();
 
-    let tp = {
-        let mut broadcast = broadcast_res.broadcast.lock().unwrap();
-        let name = broadcast.unique_name(&settings.suffix);
-        broadcast
-            .create_track(moq_net::Track {
-                name,
-                priority: settings.priority,
-            })
-            .map_err(|e| crate::nif_error!("create_track failed: {e}"))?
-    };
+    let mut inner = lock_ignoring_poison(&broadcast_res.inner);
+
+    let name = inner.broadcast.unique_name(&settings.suffix);
+    let tp = inner
+        .broadcast
+        .create_track(moq_net::Track {
+            name,
+            priority: settings.priority,
+        })
+        .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
 
     let resource = init_track(
         tp,
         resolved,
-        broadcast_res,
+        &mut inner,
+        broadcast_res.clone(),
         settings,
         Some(&old_track_res.name),
     )?;
 
-    let _ = old_track_res.producer.lock().unwrap().finish();
+    let _ = lock_ignoring_poison(&old_track_res.producer).finish();
 
     let name = resource.name.clone();
     Ok((atoms::ok(), ResourceArc::new(resource), name))
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn send_frame(
     track_res: ResourceArc<TrackResource>,
@@ -133,7 +181,7 @@ pub(crate) fn send_frame(
     };
 
     let _guard = runtime().handle().enter();
-    match track_res.producer.lock().unwrap().write(frame) {
+    match lock_ignoring_poison(&track_res.producer).write(frame) {
         Ok(()) => Ok(atoms::ok()),
         Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {
             Ok(atoms::missing_keyframe())
@@ -142,42 +190,18 @@ pub(crate) fn send_frame(
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     let _guard = runtime().handle().enter();
-
-    track_res
-        .broadcast_res
-        .tracks
-        .lock()
-        .unwrap()
-        .remove(&track_res.name);
-    let _ = track_res
-        .broadcast_res
-        .broadcast
-        .lock()
-        .unwrap()
-        .remove_track(&track_res.name);
-
-    let _ = track_res.producer.lock().unwrap().finish();
-
-    let mut cp = track_res.broadcast_res.catalog.lock().unwrap();
-    let mut guard = cp.lock();
-    match track_res.kind {
-        TrackKind::Video => {
-            guard.video.renditions.remove(&track_res.name);
-        }
-        TrackKind::Audio => {
-            guard.audio.renditions.remove(&track_res.name);
-        }
-    }
-
+    track_res.teardown();
     atoms::ok()
 }
 
 fn init_track(
     tp: moq_net::TrackProducer,
     mut resolved: ResolvedConfig,
+    inner: &mut ProducerInner,
     broadcast_res: ResourceArc<BroadcastProducerResource>,
     settings: TrackSettings,
     replaces: Option<&str>,
@@ -191,8 +215,7 @@ fn init_track(
     let kind = resolved.kind();
 
     {
-        let mut cp = broadcast_res.catalog.lock().unwrap();
-        let mut guard = cp.lock();
+        let mut guard = inner.catalog.lock();
         match resolved {
             ResolvedConfig::Video(config) => {
                 if let Some(old_name) = replaces {
@@ -213,13 +236,10 @@ fn init_track(
         moq_mux::container::Producer::new(tp, wire).with_latency(settings.latency),
     ));
 
-    {
-        let mut tracks = broadcast_res.tracks.lock().unwrap();
-        if let Some(old_name) = replaces {
-            tracks.remove(old_name);
-        }
-        tracks.insert(name.clone(), Arc::downgrade(&producer));
+    if let Some(old_name) = replaces {
+        inner.tracks.remove(old_name);
     }
+    inner.tracks.insert(name.clone(), Arc::downgrade(&producer));
 
     Ok(TrackResource {
         producer,

@@ -4,16 +4,21 @@ use rustler::{Atom, NifResult, Resource, ResourceArc};
 use std::collections::HashMap;
 use std::sync::{Mutex, Weak};
 
-use crate::{atoms, runtime, session::SessionResource, track::WireProducer};
+use crate::{atoms, lock_ignoring_poison, runtime, session::SessionResource, track::WireProducer};
+
+pub(crate) struct ProducerInner {
+    pub(crate) broadcast: moq_net::BroadcastProducer,
+    pub(crate) catalog: moq_mux::catalog::Producer,
+    pub(crate) tracks: HashMap<String, Weak<Mutex<WireProducer>>>,
+}
 
 pub(crate) struct BroadcastProducerResource {
-    pub(crate) broadcast: Mutex<moq_net::BroadcastProducer>,
-    pub(crate) catalog: Mutex<moq_mux::catalog::Producer>,
-    pub(crate) tracks: Mutex<HashMap<String, Weak<Mutex<WireProducer>>>>,
+    pub(crate) inner: Mutex<ProducerInner>,
 }
 
 impl Resource for BroadcastProducerResource {}
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn create_broadcast_producer(
     session: ResourceArc<SessionResource>,
@@ -32,32 +37,31 @@ pub(crate) fn create_broadcast_producer(
     Ok((
         atoms::ok(),
         ResourceArc::new(BroadcastProducerResource {
-            broadcast: Mutex::new(bp),
-            catalog: Mutex::new(catalog),
-            tracks: Mutex::new(HashMap::new()),
+            inner: Mutex::new(ProducerInner {
+                broadcast: bp,
+                catalog,
+                tracks: HashMap::new(),
+            }),
         }),
     ))
 }
 
+#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) -> Atom {
     let _guard = runtime().handle().enter();
 
-    producer
+    let mut inner = lock_ignoring_poison(&producer.inner);
+
+    inner
         .tracks
-        .lock()
-        .unwrap()
         .values()
         .filter_map(Weak::upgrade)
         .for_each(|track| {
-            let _ = track.lock().unwrap().finish();
+            let _ = lock_ignoring_poison(&track).finish();
         });
 
-    let _ = producer.catalog.lock().unwrap().finish();
-    let _ = producer
-        .broadcast
-        .lock()
-        .unwrap()
-        .abort(moq_net::Error::Cancel);
+    let _ = inner.catalog.finish();
+    let _ = inner.broadcast.abort(moq_net::Error::Cancel);
     atoms::ok()
 }

@@ -76,12 +76,13 @@ pub(crate) fn send_frame(
 ) -> Result<(), PidDead> {
     OwnedEnv::new()
         .send_and_clear(&pid, |env| {
-            let payload_binary: Binary =
-                NewBinary::from_iter(env, payload.iter().map(|&x| x)).into();
+            let mut payload_binary = NewBinary::new(env, payload.len());
+            payload_binary.as_mut_slice().copy_from_slice(payload);
+
             (
                 atoms::moq_frame(),
                 token,
-                payload_binary,
+                Into::<Binary>::into(payload_binary),
                 timestamp_ns,
                 keyframe,
             )

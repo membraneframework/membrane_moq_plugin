@@ -176,7 +176,7 @@ async fn run_broadcast(
             },
             _ = shutdown_rx.recv() => return,
             Some(result) = state.pumps.join_next_with_id(),
-              if !state.pumps.is_empty() => state = handle_pump_join(result, state),
+              if !state.pumps.is_empty() => state = handle_pump_join(result, state, ctx.pid),
             snapshot = catalog.next() => {
                 state = match handle_new_catalog(snapshot, state, &ctx) {
                     Ok(state) => state,
@@ -429,7 +429,7 @@ fn spawn_pump(
     pumps: &mut JoinSet<()>,
     cancels: &mut HashMap<Token, (String, AbortHandle)>,
     task_tokens: &mut HashMap<tokio::task::Id, Token>,
-) -> () {
+) {
     let track = pump.track.clone();
     let token = pump.token;
     let abort_handle = pumps.spawn(pump.run());

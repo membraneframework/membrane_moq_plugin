@@ -332,18 +332,18 @@ pub(crate) fn encode_format<'a>(env: Env<'a>, params: &TrackParams) -> Term<'a> 
             description,
             codec,
         } => {
-            // __jm__ this might not be the best way to do this
-            let description: Binary =
-                NewBinary::from_iter(env, description.iter().map(|&x| x)).into();
+            let mut dcr_binary: NewBinary = NewBinary::new(env, description.len()).into();
+            dcr_binary.as_mut_slice().copy_from_slice(description);
+
             match codec {
                 VideoCodecParams::H264(codec) => TrackFormat::H264 {
                     params: params.clone(),
-                    description,
+                    description: dcr_binary.into(),
                     codec: codec.clone(),
                 },
                 VideoCodecParams::H265(codec) => TrackFormat::H265 {
                     params: params.clone(),
-                    description,
+                    description: dcr_binary.into(),
                     codec: codec.clone(),
                 },
             }

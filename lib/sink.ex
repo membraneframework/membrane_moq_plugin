@@ -186,10 +186,10 @@ defmodule Membrane.MoQ.Sink do
     track_fmt = TrackFormat.from_stream_format(fmt)
     priority = pad_state.priority || default_priority(track_fmt)
 
-    track_resource =
+    {track_resource, track_name} =
       case old_stream_format do
         ^fmt ->
-          pad_state.track_resource
+          {pad_state.track_resource, pad_state.track}
 
         nil ->
           case Native.add_track(
@@ -201,7 +201,7 @@ defmodule Membrane.MoQ.Sink do
                  Membrane.Time.as_nanoseconds(state.latency, :round)
                ) do
             {:ok, track_resource} ->
-              track_resource
+              {track_resource, pad_state.track}
 
             {:error, reason} ->
               raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
@@ -209,15 +209,15 @@ defmodule Membrane.MoQ.Sink do
 
         _other ->
           case Native.replace_track(pad_state.track_resource, track_fmt) do
-            {:ok, new_track_resource, _new_track_name} ->
-              new_track_resource
+            {:ok, new_track_resource, new_track_name} ->
+              {new_track_resource, new_track_name}
 
             {:error, reason} ->
               raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
           end
       end
 
-    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource})}
+    {[], put_in(state.pads[pad], %{pad_state | track_resource: track_resource, track: track_name})}
   end
 
   @impl true

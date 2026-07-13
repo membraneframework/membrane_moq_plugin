@@ -3,7 +3,7 @@ defmodule ExMoQ.NativeTest do
   Membrane-agnostic tests of the raw `ExMoQ.Native` API against a real relay.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias ExMoQ.Native
   alias Membrane.MoQ.Test.Relay

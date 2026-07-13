@@ -4,7 +4,7 @@ defmodule Membrane.MoQ.FormatChangeTest do
   observed through MoQ.Source. Covers `ExMoQ.Native.replace_track/2`.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions

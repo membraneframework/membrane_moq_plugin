@@ -3,7 +3,7 @@ defmodule Membrane.MoQ.IntegrationTest do
   End-to-end tests that exercise `Membrane.MoQ.Sink` and `Membrane.MoQ.Source` against a real MoQ relay.
   """
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions

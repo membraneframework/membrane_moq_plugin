@@ -1,7 +1,7 @@
 defmodule Membrane.MoQ.SourceLifecycleTest do
   @moduledoc "Source lifecycle scenarios against a real relay"
 
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions

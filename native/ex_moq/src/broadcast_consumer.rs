@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::task::{AbortHandle, JoinError, JoinSet};
 
 use rustler::{Atom, LocalPid, Resource, ResourceArc};
 
@@ -46,6 +46,7 @@ struct ConsumerState {
     cancels: HashMap<Token, (String, AbortHandle)>,
     // tracks subscriptions that are yet to be announced in the catalog
     pending: HashMap<Token, (String, u8)>,
+    task_tokens: HashMap<tokio::task::Id, Token>,
 }
 
 struct Ctx<'a> {
@@ -163,6 +164,7 @@ async fn run_broadcast(
         pumps: JoinSet::new(),
         cancels: HashMap::new(),
         pending: HashMap::new(),
+        task_tokens: HashMap::new(),
     };
 
     let close_reason = loop {
@@ -173,7 +175,8 @@ async fn run_broadcast(
                 None => return,
             },
             _ = shutdown_rx.recv() => return,
-            _ = state.pumps.join_next(), if !state.pumps.is_empty() => {}
+            Some(result) = state.pumps.join_next_with_id(),
+              if !state.pumps.is_empty() => state = handle_pump_join(result, state),
             snapshot = catalog.next() => {
                 state = match handle_new_catalog(snapshot, state, &ctx) {
                     Ok(state) => state,
@@ -196,9 +199,12 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
             // track is already announced
             Some(rendition) => {
                 messages::send_track_format(ctx.pid, token, &rendition.params);
-                let pump = Pump::new(ctx, track.clone(), rendition, token, priority);
-                let abort_handle = state.pumps.spawn(pump.run());
-                state.cancels.insert(token, (track, abort_handle));
+                spawn_pump(
+                    Pump::new(ctx, track.clone(), rendition, token, priority),
+                    &mut state.pumps,
+                    &mut state.cancels,
+                    &mut state.task_tokens,
+                )
             }
             // track is not announced yet
             None => {
@@ -216,6 +222,22 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
             state.pending.remove(&token);
         }
     }
+    state
+}
+
+fn handle_pump_join(
+    result: Result<(tokio::task::Id, ()), JoinError>,
+    mut state: ConsumerState,
+) -> ConsumerState {
+    let id = match result {
+        Ok((id, ())) => id,
+        Err(e) => e.id(),
+    };
+
+    state.task_tokens.get(&id).inspect(|token| {
+        state.cancels.remove(token);
+    });
+
     state
 }
 
@@ -251,8 +273,12 @@ fn handle_new_catalog(
         .for_each(|(token, (track, priority))| {
             let rendition = &new_renditions[&track];
             messages::send_track_format(ctx.pid, token, &rendition.params);
-            let pump = Pump::new(ctx, track, rendition, token, priority);
-            state.pumps.spawn(pump.run());
+            spawn_pump(
+                Pump::new(ctx, track.clone(), rendition, token, priority),
+                &mut state.pumps,
+                &mut state.cancels,
+                &mut state.task_tokens,
+            );
         });
 
     state.renditions = new_renditions;
@@ -385,4 +411,17 @@ async fn pump_frames(
             .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
     }
     Ok(())
+}
+
+fn spawn_pump(
+    pump: Pump,
+    pumps: &mut JoinSet<()>,
+    cancels: &mut HashMap<Token, (String, AbortHandle)>,
+    task_tokens: &mut HashMap<tokio::task::Id, Token>,
+) -> () {
+    let track = pump.track.clone();
+    let token = pump.token;
+    let abort_handle = pumps.spawn(pump.run());
+    task_tokens.insert(abort_handle.id(), token);
+    cancels.insert(token, (track, abort_handle));
 }

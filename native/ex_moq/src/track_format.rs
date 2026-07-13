@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use rustler::{
-    Binary, Encoder, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum, OwnedBinary,
-    Term,
+    Binary, Encoder, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum, Term,
 };
 
 /// Wire container selected by the Sink, crossing the NIF boundary as an atom.

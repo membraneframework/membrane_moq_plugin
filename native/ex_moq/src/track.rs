@@ -152,6 +152,12 @@ pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
         .lock()
         .unwrap()
         .remove(&track_res.name);
+    let _ = track_res
+        .broadcast_res
+        .broadcast
+        .lock()
+        .unwrap()
+        .remove_track(&track_res.name);
 
     let _ = track_res.producer.lock().unwrap().finish();
 

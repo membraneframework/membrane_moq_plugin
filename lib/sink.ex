@@ -236,6 +236,12 @@ defmodule Membrane.MoQ.Sink do
       :ok ->
         :ok
 
+      :missing_keyframe ->
+        Membrane.Logger.debug("""
+        Buffer rejected because it is not a keyframe.
+        Starting a MoQ group requires a keyframe to be sent first.
+        """)
+
       {:error, reason} ->
         raise "Failed to send frame to track #{inspect(pad_state.track)}: #{reason}"
     end

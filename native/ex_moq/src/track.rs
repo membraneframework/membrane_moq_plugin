@@ -133,13 +133,13 @@ pub(crate) fn send_frame(
     };
 
     let _guard = runtime().handle().enter();
-    track_res
-        .producer
-        .lock()
-        .unwrap()
-        .write(frame)
-        .map_err(|e| crate::nif_error!("writing frame failed: {e}"))?;
-    Ok(atoms::ok())
+    match track_res.producer.lock().unwrap().write(frame) {
+        Ok(()) => Ok(atoms::ok()),
+        Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {
+            Ok(atoms::missing_keyframe())
+        }
+        Err(e) => Err(crate::nif_error!("writing frame failed: {e}")),
+    }
 }
 
 #[rustler::nif]

@@ -23,6 +23,7 @@ pub(crate) mod atoms {
     rustler::atoms! {
         ok,
         error,
+        missing_keyframe,
         moq_connected,
         moq_setup_failed,
         moq_disconnected,

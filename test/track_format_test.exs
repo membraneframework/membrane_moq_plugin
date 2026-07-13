@@ -89,16 +89,19 @@ defmodule Membrane.MoQ.TrackFormatTest do
       assert dcr == avcc(100, 0, 31)
     end
 
-    test "dimensions omitted from the catalog map to nil" do
-      native =
-        {:h264,
-         %{
-           params: %{width: 0, height: 0, framerate: 30.0},
-           description: avcc(100, 0, 31),
-           codec: %{inline: false, profile: 100, constraints: 0, level: 31}
-         }}
+    # The NIF decodes absent dimensions as nil; a remote catalog may still say 0.
+    for absent <- [nil, 0] do
+      test "dimensions absent from the catalog as #{inspect(absent)} map to nil" do
+        native =
+          {:h264,
+           %{
+             params: %{width: unquote(absent), height: unquote(absent), framerate: 30.0},
+             description: avcc(100, 0, 31),
+             codec: %{inline: false, profile: 100, constraints: 0, level: 31}
+           }}
 
-      assert %H264{width: nil, height: nil} = TrackFormat.to_stream_format(native)
+        assert %H264{width: nil, height: nil} = TrackFormat.to_stream_format(native)
+      end
     end
 
     test "small fps values map to positive numerator/denominator pairs" do
@@ -147,7 +150,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
       native =
         {:h265,
          %{
-           params: %{width: 0, height: 0, framerate: 30.0},
+           params: %{width: nil, height: nil, framerate: 30.0},
            description: hvcc(),
            codec: %{in_band: false}
          }}

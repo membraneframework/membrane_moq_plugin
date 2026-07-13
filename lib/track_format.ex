@@ -113,8 +113,8 @@ defmodule Membrane.MoQ.TrackFormat do
          }}
       ) do
     %H264{
-      width: if(width > 0, do: width, else: nil),
-      height: if(height > 0, do: height, else: nil),
+      width: dimension(width),
+      height: dimension(height),
       framerate: framerate(framerate),
       stream_structure: {if(inline, do: :avc3, else: :avc1), h264_dcr(dcr, codec)}
     }
@@ -129,8 +129,8 @@ defmodule Membrane.MoQ.TrackFormat do
          }}
       ) do
     %H265{
-      width: if(width > 0, do: width, else: nil),
-      height: if(height > 0, do: height, else: nil),
+      width: dimension(width),
+      height: dimension(height),
       framerate: framerate(framerate),
       stream_structure: {if(in_band, do: :hev1, else: :hvc1), dcr}
     }
@@ -178,6 +178,10 @@ defmodule Membrane.MoQ.TrackFormat do
     do: num / den
 
   defp framerate_to_float(nil), do: nil
+
+  @spec dimension(non_neg_integer() | nil) :: pos_integer() | nil
+  defp dimension(size) when is_integer(size) and size > 0, do: size
+  defp dimension(_absent), do: nil
 
   @spec framerate(float()) :: {pos_integer(), pos_integer()} | nil
   defp framerate(fps) when is_number(fps) and fps > 0 do

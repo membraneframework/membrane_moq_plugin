@@ -1,11 +1,14 @@
 use hang::moq_net;
 
 use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
-use std::sync::{Arc, Mutex, Weak};
+use std::{
+    panic::AssertUnwindSafe,
+    sync::{Arc, Mutex, Weak},
+};
 
 use crate::{
     atoms,
-    broadcast_producer::BroadcastProducerResource,
+    broadcast_producer::{BroadcastProducerResource, ProducerInner},
     lock_ignoring_poison, runtime,
     track_format::{ContainerKind, ResolvedConfig, TrackFormat, TrackKind},
 };
@@ -56,8 +59,10 @@ impl TrackResource {
 
 impl Drop for TrackResource {
     fn drop(&mut self) {
-        let _guard = runtime().handle().enter();
-        self.teardown();
+        let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = runtime().handle().enter();
+            self.teardown();
+        }));
     }
 }
 

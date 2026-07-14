@@ -36,6 +36,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
     assert_sink_stream_format(receiver, :sink, %Membrane.H264{}, 15_000)
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
+
+    :ok = Membrane.Pipeline.terminate(publisher)
+    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "a parser wired directly onto the pad decodes from the pad's stream format alone", %{
@@ -43,7 +46,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     broadcast: broadcast
   } do
     subscriber = start_subscriber!(relay, broadcast)
-    start_publisher!(relay, broadcast)
+    publisher = start_publisher!(relay, broadcast)
 
     assert_pipeline_notified(
       subscriber,
@@ -64,6 +67,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     for _i <- 1..20 do
       assert_sink_buffer(subscriber, {:sink, 0}, %Membrane.Buffer{}, 10_000)
     end
+
+    :ok = Membrane.Pipeline.terminate(publisher)
+    :ok = Membrane.Pipeline.terminate(subscriber)
   end
 
   test "the parent resubscribes after a broadcast drop and receives the second publish", %{
@@ -80,9 +86,12 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     :ok = Membrane.Pipeline.terminate(publisher)
     assert_pipeline_notified(subscriber, {:source, 0}, {:disconnected, _reason}, 10_000)
 
-    start_publisher!(relay, broadcast)
+    second_publisher = start_publisher!(relay, broadcast)
     assert_pipeline_notified(subscriber, {:source, 1}, {:new_track, {_track, _format}}, 15_000)
     assert_sink_buffer(subscriber, {:sink, 1}, %Membrane.Buffer{}, 10_000)
+
+    :ok = Membrane.Pipeline.terminate(second_publisher)
+    :ok = Membrane.Pipeline.terminate(subscriber)
   end
 
   test "a pad added after the source disconnected is immediately end_of_streamed", %{

@@ -17,6 +17,7 @@ defmodule Membrane.MoQ.IntegrationTest do
   @moduletag :integration
 
   @track "video"
+  @audio_track "audio"
 
   setup_all do
     [relay: Relay.ensure!()]
@@ -69,6 +70,9 @@ defmodule Membrane.MoQ.IntegrationTest do
     received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "LOC frames round-trip unchanged with keyframe flags intact", %{
@@ -95,6 +99,9 @@ defmodule Membrane.MoQ.IntegrationTest do
     # so the published flags must survive the round-trip 1:1.
     assert Enum.map(received_buffers, & &1.metadata.h264.key_frame?) ==
              Enum.map(expected_buffers, & &1.metadata.h264.key_frame?)
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "frames buffered with the latency option all arrive, unchanged and in order", %{
@@ -119,6 +126,197 @@ defmodule Membrane.MoQ.IntegrationTest do
     received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
+  test "AAC frames round-trip unchanged through the Sink and Source", %{
+    broadcast: broadcast,
+    relay: relay
+  } do
+    receiver = start_receiver!(relay, broadcast, @audio_track)
+    sender = start_audio_sender!(relay, broadcast)
+    await_source_connected!(receiver)
+
+    assert_sink_stream_format(
+      receiver,
+      :sink,
+      %Membrane.AAC{profile: :LC, sample_rate: 44_100, channels: 2},
+      10_000
+    )
+
+    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
+    expected_payloads = drain_payloads(sender, :expected_sink)
+    assert expected_payloads != []
+
+    assert_end_of_stream(receiver, :sink, :input, 30_000)
+    assert drain_payloads(receiver, :sink) == expected_payloads
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
+  test "Opus frames round-trip unchanged through the Sink and Source", %{
+    broadcast: broadcast,
+    relay: relay
+  } do
+    # The plugin treats audio payloads as opaque, so synthetic 20 ms frames
+    # exercise the catalog and transport without an Opus encoder.
+    buffers =
+      for i <- 0..49 do
+        %Membrane.Buffer{payload: <<i, 255 - i>>, pts: Membrane.Time.milliseconds(20 * i)}
+      end
+
+    receiver = start_receiver!(relay, broadcast, @audio_track)
+
+    sender =
+      Testing.Pipeline.start_link_supervised!(
+        spec:
+          child(:audio_source, %Testing.Source{
+            stream_format: %Membrane.Opus{channels: 2, self_delimiting?: false},
+            output: Testing.Source.output_from_buffers(buffers)
+          })
+          |> child(:realtimer, Membrane.Realtimer)
+          |> via_in(Pad.ref(:input, :audio), options: [track: @audio_track])
+          |> child(:moq_sink, %Membrane.MoQ.Sink{
+            url: relay.url,
+            broadcast: broadcast,
+            disable_tls_verify?: relay.disable_tls_verify?
+          })
+      )
+
+    await_source_connected!(receiver)
+
+    assert_sink_stream_format(receiver, :sink, %Membrane.Opus{channels: 2}, 10_000)
+
+    assert_end_of_stream(sender, :moq_sink, Pad.ref(:input, :audio), 30_000)
+
+    assert_end_of_stream(receiver, :sink, :input, 30_000)
+    assert drain_payloads(receiver, :sink) == Enum.map(buffers, & &1.payload)
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
+  test "a two-pad A/V broadcast through one Sink is consumed by a two-pad Source", %{
+    broadcast: broadcast,
+    relay: relay
+  } do
+    receiver =
+      Testing.Pipeline.start_link_supervised!(
+        spec: [
+          child(:source, %Membrane.MoQ.Source{
+            url: relay.url,
+            broadcast: broadcast,
+            disable_tls_verify?: relay.disable_tls_verify?
+          })
+          |> via_out(Pad.ref(:output, :video), options: [track: @track])
+          |> child(:video_sink, Testing.Sink),
+          get_child(:source)
+          |> via_out(Pad.ref(:output, :audio), options: [track: @audio_track])
+          |> child(:audio_sink, Testing.Sink)
+        ]
+      )
+
+    sink = %Membrane.MoQ.Sink{
+      url: relay.url,
+      broadcast: broadcast,
+      disable_tls_verify?: relay.disable_tls_verify?
+    }
+
+    sender =
+      Testing.Pipeline.start_link_supervised!(
+        spec: [
+          child(:video_source, %Membrane.File.Source{location: "test/fixtures/bbb_with_aud.h264"})
+          |> child(:video_parser, %Membrane.H264.Parser{
+            output_stream_structure: :avc1,
+            generate_best_effort_timestamps: %{framerate: {30, 1}}
+          })
+          |> child(:video_take, %Take{count: 30})
+          |> child(:video_tee, Membrane.Tee)
+          |> child(:video_realtimer, Membrane.Realtimer)
+          |> via_in(Pad.ref(:input, :video), options: [track: @track])
+          |> child(:moq_sink, sink),
+          child(:audio_source, %Membrane.File.Source{location: "test/fixtures/bbb.aac"})
+          |> child(:audio_parser, %Membrane.AAC.Parser{out_encapsulation: :none})
+          |> child(:audio_take, %Take{count: 43})
+          |> child(:audio_tee, Membrane.Tee)
+          |> child(:audio_realtimer, Membrane.Realtimer)
+          |> via_in(Pad.ref(:input, :audio), options: [track: @audio_track])
+          |> get_child(:moq_sink),
+          get_child(:video_tee) |> child(:expected_video, Testing.Sink),
+          get_child(:audio_tee) |> child(:expected_audio, Testing.Sink)
+        ]
+      )
+
+    assert_sink_playing(receiver, :video_sink, 10_000)
+    assert_sink_playing(receiver, :audio_sink, 10_000)
+
+    assert_sink_stream_format(receiver, :video_sink, %Membrane.H264{}, 10_000)
+    assert_sink_stream_format(receiver, :audio_sink, %Membrane.AAC{}, 10_000)
+
+    assert_end_of_stream(sender, :expected_video, :input, 30_000)
+    assert_end_of_stream(sender, :expected_audio, :input, 30_000)
+    expected_video = drain_payloads(sender, :expected_video)
+    expected_audio = drain_payloads(sender, :expected_audio)
+    assert expected_video != []
+    assert expected_audio != []
+
+    assert_end_of_stream(receiver, :video_sink, :input, 30_000)
+    assert_end_of_stream(receiver, :audio_sink, :input, 30_000)
+
+    assert drain_payloads(receiver, :video_sink) == expected_video
+    assert drain_payloads(receiver, :audio_sink) == expected_audio
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
+  test "removing a Sink pad mid-stream makes the Source report :track_removed and end the pad",
+       %{broadcast: broadcast, relay: relay} do
+    # An endless paced stream guarantees the pad removal happens mid-stream —
+    # a finite fixture could end naturally first, which also produces
+    # :track_removed + EOS and would mask a broken removal path.
+    endless_opus =
+      {0,
+       fn i, size ->
+         buffers =
+           for n <- i..(i + size - 1) do
+             %Membrane.Buffer{payload: <<n::32>>, pts: Membrane.Time.milliseconds(20 * n)}
+           end
+
+         {[buffer: {:output, buffers}], i + size}
+       end}
+
+    receiver = start_receiver!(relay, broadcast, @audio_track)
+
+    sender =
+      Testing.Pipeline.start_link_supervised!(
+        spec:
+          child(:audio_source, %Testing.Source{
+            stream_format: %Membrane.Opus{channels: 2, self_delimiting?: false},
+            output: endless_opus
+          })
+          |> child(:realtimer, Membrane.Realtimer)
+          |> via_in(Pad.ref(:input, :audio), options: [track: @audio_track])
+          |> child(:moq_sink, %Membrane.MoQ.Sink{
+            url: relay.url,
+            broadcast: broadcast,
+            disable_tls_verify?: relay.disable_tls_verify?
+          })
+      )
+
+    await_source_connected!(receiver)
+    assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
+
+    Testing.Pipeline.execute_actions(sender, remove_children: [:audio_source, :realtimer])
+
+    assert_pipeline_notified(receiver, :source, {:track_removed, @audio_track}, 10_000)
+    assert_end_of_stream(receiver, :sink, :input, 10_000)
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "Source emits end_of_stream when the publisher disconnects after publishing a frame", %{
@@ -133,6 +331,8 @@ defmodule Membrane.MoQ.IntegrationTest do
     :ok = Membrane.Pipeline.terminate(sender)
 
     assert_end_of_stream(receiver, :sink, :input, 10_000)
+
+    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "Sink closes a pad that ended before its stream format without crashing", %{
@@ -166,6 +366,8 @@ defmodule Membrane.MoQ.IntegrationTest do
     refute_receive {:DOWN, ^ref, :process, ^pipeline,
                     {:membrane_child_crash, :moq_sink, _reason}},
                    5_000
+
+    :ok = Membrane.Pipeline.terminate(pipeline)
   end
 
   test "Removing a pad and relinking one with the same track name doesn't crash the sink", %{
@@ -295,9 +497,13 @@ defmodule Membrane.MoQ.IntegrationTest do
              Enum.map(expected_buffers, & &1.payload)
 
     assert Enum.map(received_buffers, & &1.metadata.h264.key_frame?) == expected_key_frames
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(relay_pipeline)
+    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
-  defp start_receiver!(relay, broadcast) do
+  defp start_receiver!(relay, broadcast, track \\ @track) do
     Testing.Pipeline.start_link_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
@@ -305,8 +511,28 @@ defmodule Membrane.MoQ.IntegrationTest do
           broadcast: broadcast,
           disable_tls_verify?: relay.disable_tls_verify?
         })
-        |> via_out(Pad.ref(:output, :video), options: [track: @track])
+        |> via_out(Pad.ref(:output, track), options: [track: track])
         |> child(:sink, Testing.Sink)
+    )
+  end
+
+  defp start_audio_sender!(relay, broadcast) do
+    Testing.Pipeline.start_link_supervised!(
+      spec: [
+        child(:file_source, %Membrane.File.Source{location: "test/fixtures/bbb.aac"})
+        |> child(:parser, %Membrane.AAC.Parser{out_encapsulation: :none})
+        |> child(:take, %Take{count: 43})
+        |> child(:tee, Membrane.Tee)
+        |> child(:realtimer, Membrane.Realtimer)
+        |> via_in(Pad.ref(:input, :audio), options: [track: @audio_track])
+        |> child(:moq_sink, %Membrane.MoQ.Sink{
+          url: relay.url,
+          broadcast: broadcast,
+          disable_tls_verify?: relay.disable_tls_verify?
+        }),
+        get_child(:tee)
+        |> child(:expected_sink, Testing.Sink)
+      ]
     )
   end
 

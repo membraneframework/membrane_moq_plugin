@@ -3,59 +3,68 @@ use hang::moq_net;
 use rustler::{Atom, Binary, NifResult, Resource, ResourceArc};
 use std::{
     panic::AssertUnwindSafe,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex},
 };
 
 use crate::{
     atoms,
-    broadcast_producer::{BroadcastProducerResource, ProducerInner},
+    broadcast_producer::BroadcastProducerResource,
     lock_ignoring_poison, runtime,
-    track_format::{ContainerKind, ResolvedConfig, TrackFormat, TrackKind},
+    track_format::{ContainerKind, ResolvedConfig, TrackFormat},
 };
 
 /// Producer over the runtime-dispatched container enum,
 /// so one resource type covers every wire format the catalog can describe.
 pub(crate) type WireProducer = moq_mux::container::Producer<moq_mux::catalog::hang::Container>;
 
-pub(crate) struct TrackResource {
+enum Rendition {
+    Video(moq_mux::catalog::VideoTrack),
+    Audio(moq_mux::catalog::AudioTrack),
+}
+
+struct KindMismatch;
+
+impl Rendition {
+    fn set(&mut self, config: ResolvedConfig) -> Result<(), KindMismatch> {
+        match (self, config) {
+            (Self::Video(handle), ResolvedConfig::Video(config)) => handle.set(config),
+            (Self::Audio(handle), ResolvedConfig::Audio(config)) => handle.set(config),
+            (_, _) => return Err(KindMismatch),
+        }
+        Ok(())
+    }
+}
+
+struct LiveTrack {
     producer: Arc<Mutex<WireProducer>>,
-    broadcast_res: ResourceArc<BroadcastProducerResource>,
+    rendition: Rendition,
+    broadcast: moq_net::BroadcastProducer,
+}
+
+pub(crate) struct TrackResource {
+    live: Mutex<Option<LiveTrack>>,
     name: String,
-    kind: TrackKind,
     container: ContainerKind,
 }
 
 impl Resource for TrackResource {}
 
 impl TrackResource {
-    fn owns_name(&self, inner: &ProducerInner) -> bool {
-        inner
-            .tracks
-            .get(&self.name)
-            .is_some_and(|weak| Weak::ptr_eq(weak, &Arc::downgrade(&self.producer)))
-    }
-
     fn teardown(&self) {
-        let mut inner = lock_ignoring_poison(&self.broadcast_res.inner);
-
-        let _ = lock_ignoring_poison(&self.producer).finish();
-
-        if !self.owns_name(&inner) {
+        let Some(live) = lock_ignoring_poison(&self.live).take() else {
             return;
-        }
+        };
 
-        inner.tracks.remove(&self.name);
-        let _ = inner.broadcast.remove_track(&self.name);
+        let LiveTrack {
+            producer,
+            rendition,
+            mut broadcast,
+        } = live;
 
-        let mut guard = inner.catalog.lock();
-        match self.kind {
-            TrackKind::Video => {
-                guard.video.renditions.remove(&self.name);
-            }
-            TrackKind::Audio => {
-                guard.audio.renditions.remove(&self.name);
-            }
-        }
+        let _ = lock_ignoring_poison(&producer).finish();
+        let _ = broadcast.remove_track(&self.name);
+        // Retires the catalog rendition.
+        drop(rendition);
     }
 }
 
@@ -98,35 +107,39 @@ pub(crate) fn add_track(
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
 
     let name = tp.name.clone();
-    let kind = resolved.kind();
 
-    {
-        let mut guard = inner.catalog.lock();
-        match resolved {
-            ResolvedConfig::Video(config) => {
-                guard.video.renditions.insert(name.clone(), config);
-            }
-            ResolvedConfig::Audio(config) => {
-                guard.audio.renditions.insert(name.clone(), config);
-            }
+    let rendition = match resolved {
+        ResolvedConfig::Video(config) => {
+            let mut handle = inner.catalog.video_track(&name);
+            handle.set(config);
+            Rendition::Video(handle)
         }
-    }
+        ResolvedConfig::Audio(config) => {
+            let mut handle = inner.catalog.audio_track(&name);
+            handle.set(config);
+            Rendition::Audio(handle)
+        }
+    };
 
     let latency = std::time::Duration::from_nanos(latency_ns);
     let producer = Arc::new(Mutex::new(
-        moq_mux::container::Producer::new(tp, wire).with_latency(latency),
+        inner.catalog.media_producer(tp, wire).with_latency(latency),
     ));
 
-    inner.tracks.insert(name.clone(), Arc::downgrade(&producer));
+    inner.tracks.retain(|weak| weak.strong_count() > 0);
+    inner.tracks.push(Arc::downgrade(&producer));
+    let broadcast = inner.broadcast.clone();
     drop(inner);
 
     Ok((
         atoms::ok(),
         ResourceArc::new(TrackResource {
-            producer,
-            broadcast_res,
+            live: Mutex::new(Some(LiveTrack {
+                producer,
+                rendition,
+                broadcast,
+            })),
             name,
-            kind,
             container,
         }),
     ))
@@ -141,40 +154,22 @@ pub(crate) fn update_track(
     let _guard = runtime().handle().enter();
 
     let mut resolved = format.resolve()?;
-
-    if resolved.kind() != track_res.kind {
-        return Err(crate::nif_error!(
-            "track {:?}: cannot change a track's media kind in place",
-            track_res.name
-        ));
-    }
-
     resolved.set_container(track_res.container.to_catalog());
 
-    let mut inner = lock_ignoring_poison(&track_res.broadcast_res.inner);
-
-    if !track_res.owns_name(&inner) {
+    let mut live = lock_ignoring_poison(&track_res.live);
+    let Some(live) = live.as_mut() else {
         return Err(crate::nif_error!(
-            "track {:?} was removed or replaced; a stale resource cannot update the catalog",
+            "track {:?} was removed; a stale resource cannot update the catalog",
             track_res.name
         ));
-    }
+    };
 
-    let mut guard = inner.catalog.lock();
-    match resolved {
-        ResolvedConfig::Video(config) => {
-            guard
-                .video
-                .renditions
-                .insert(track_res.name.clone(), config);
-        }
-        ResolvedConfig::Audio(config) => {
-            guard
-                .audio
-                .renditions
-                .insert(track_res.name.clone(), config);
-        }
-    }
+    live.rendition.set(resolved).map_err(|_kind_mismatch| {
+        crate::nif_error!(
+            "track {:?}: cannot change a track's media kind in place",
+            track_res.name
+        )
+    })?;
 
     Ok(atoms::ok())
 }
@@ -197,7 +192,13 @@ pub(crate) fn send_frame(
     };
 
     let _guard = runtime().handle().enter();
-    let result = lock_ignoring_poison(&track_res.producer).write(frame);
+
+    let live = lock_ignoring_poison(&track_res.live);
+    let Some(live) = live.as_ref() else {
+        return Err(crate::nif_error!("track {:?} was removed", track_res.name));
+    };
+
+    let result = lock_ignoring_poison(&live.producer).write(frame);
     match result {
         Ok(()) => Ok(atoms::ok()),
         Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {

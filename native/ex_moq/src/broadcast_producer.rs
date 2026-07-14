@@ -1,7 +1,6 @@
 use hang::moq_net;
 
 use rustler::{Atom, NifResult, Resource, ResourceArc};
-use std::collections::HashMap;
 use std::sync::{Mutex, Weak};
 
 use crate::{atoms, lock_ignoring_poison, runtime, session::SessionResource, track::WireProducer};
@@ -9,7 +8,9 @@ use crate::{atoms, lock_ignoring_poison, runtime, session::SessionResource, trac
 pub(crate) struct ProducerInner {
     pub(crate) broadcast: moq_net::BroadcastProducer,
     pub(crate) catalog: moq_mux::catalog::Producer,
-    pub(crate) tracks: HashMap<String, Weak<Mutex<WireProducer>>>,
+    /// Weak handles to the live wire producers, so closing the broadcast can
+    /// finish them without keeping them alive. Compacted on `add_track`.
+    pub(crate) tracks: Vec<Weak<Mutex<WireProducer>>>,
 }
 
 pub(crate) struct BroadcastProducerResource {
@@ -40,7 +41,7 @@ pub(crate) fn create_broadcast_producer(
             inner: Mutex::new(ProducerInner {
                 broadcast: bp,
                 catalog,
-                tracks: HashMap::new(),
+                tracks: Vec::new(),
             }),
         }),
     ))
@@ -55,12 +56,11 @@ pub(crate) fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerRe
 
     inner
         .tracks
-        .values()
-        .filter_map(Weak::upgrade)
+        .drain(..)
+        .filter_map(|weak| weak.upgrade())
         .for_each(|track| {
             let _ = lock_ignoring_poison(&track).finish();
         });
-    inner.tracks.clear();
 
     let _ = inner.catalog.finish();
     let _ = inner.broadcast.abort(moq_net::Error::Cancel);

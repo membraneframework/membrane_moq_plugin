@@ -83,25 +83,12 @@ pub(crate) enum TrackFormat<'a> {
     Unrecognized,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum TrackKind {
-    Video,
-    Audio,
-}
-
 pub(crate) enum ResolvedConfig {
     Video(hang::catalog::VideoConfig),
     Audio(hang::catalog::AudioConfig),
 }
 
 impl ResolvedConfig {
-    pub(crate) const fn kind(&self) -> TrackKind {
-        match self {
-            ResolvedConfig::Video(_) => TrackKind::Video,
-            ResolvedConfig::Audio(_) => TrackKind::Audio,
-        }
-    }
-
     pub(crate) fn set_container(&mut self, container: hang::catalog::Container) {
         match self {
             Self::Video(config) => config.container = container,

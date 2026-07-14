@@ -516,10 +516,10 @@ defmodule Membrane.MoQ.IntegrationTest do
     )
   end
 
-  defp start_audio_sender!(relay, broadcast) do
+  defp start_audio_sender!(relay, broadcast, fixture \\ "test/fixtures/bbb.aac") do
     Testing.Pipeline.start_link_supervised!(
       spec: [
-        child(:file_source, %Membrane.File.Source{location: "test/fixtures/bbb.aac"})
+        child(:file_source, %Membrane.File.Source{location: fixture})
         |> child(:parser, %Membrane.AAC.Parser{out_encapsulation: :none})
         |> child(:take, %Take{count: 43})
         |> child(:tee, Membrane.Tee)

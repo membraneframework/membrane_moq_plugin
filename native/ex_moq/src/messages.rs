@@ -1,7 +1,7 @@
-use rustler::{Binary, Encoder, LocalPid, NewBinary, NifUnitEnum, OwnedEnv};
+use rustler::{Binary, Encoder, LocalPid, NewBinary, OwnedEnv, Term};
 
 use crate::atoms;
-use crate::track_format::{encode_format, TrackParams};
+use crate::track_format::{audio_params, encode_container, encode_format, video_params};
 
 pub(crate) struct PidDead;
 
@@ -31,46 +31,40 @@ pub(crate) fn send_broadcast_closed(env: &mut OwnedEnv, pid: LocalPid, path: &st
     });
 }
 
-pub(crate) fn send_track_added(
+/// Sends the full catalog snapshot as a list of
+/// `{name, {format, container}}` pairs, one per advertised rendition.
+pub(crate) fn send_catalog(
     env: &mut OwnedEnv,
     pid: LocalPid,
     path: &str,
-    name: &str,
-    params: &TrackParams,
+    catalog: &moq_mux::catalog::hang::Catalog,
 ) -> Result<(), PidDead> {
     env.send_and_clear(&pid, |env| {
-        (
-            atoms::moq_track_added(),
-            path,
-            name,
-            encode_format(env, params),
-        )
-            .encode(env)
+        let videos = catalog.video.renditions.iter().map(|(name, config)| {
+            (
+                name,
+                (
+                    encode_format(env, &video_params(config)),
+                    encode_container(env, &config.container),
+                ),
+            )
+                .encode(env)
+        });
+        let audios = catalog.audio.renditions.iter().map(|(name, config)| {
+            (
+                name,
+                (
+                    encode_format(env, &audio_params(config)),
+                    encode_container(env, &config.container),
+                ),
+            )
+                .encode(env)
+        });
+        let renditions: Vec<Term> = videos.chain(audios).collect();
+
+        (atoms::moq_catalog(), path, renditions).encode(env)
     })
     .map_err(|_| PidDead)
-}
-
-pub(crate) fn send_track_removed(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    path: &str,
-    name: &str,
-) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| {
-        (atoms::moq_track_removed(), path, name).encode(env)
-    })
-    .map_err(|_| PidDead)
-}
-
-pub(crate) fn send_track_format(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    token: Token,
-    params: &TrackParams,
-) {
-    let _ = env.send_and_clear(&pid, |env| {
-        (atoms::moq_track_format(), token, encode_format(env, params)).encode(env)
-    });
 }
 
 pub(crate) fn send_frame(
@@ -97,16 +91,8 @@ pub(crate) fn send_frame(
     .map_err(|_| PidDead)
 }
 
-#[derive(NifUnitEnum, Clone, Copy)]
-pub(crate) enum EndReason {
-    Ended,
-    RenditionChanged,
-}
-
-pub(crate) fn send_track_ended(env: &mut OwnedEnv, pid: LocalPid, token: Token, reason: EndReason) {
-    let _ = env.send_and_clear(&pid, |env| {
-        (atoms::moq_track_ended(), token, reason).encode(env)
-    });
+pub(crate) fn send_track_ended(env: &mut OwnedEnv, pid: LocalPid, token: Token) {
+    let _ = env.send_and_clear(&pid, |env| (atoms::moq_track_ended(), token).encode(env));
 }
 
 pub(crate) fn send_track_error(env: &mut OwnedEnv, pid: LocalPid, token: Token, reason: String) {

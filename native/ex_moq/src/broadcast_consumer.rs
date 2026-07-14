@@ -1,18 +1,17 @@
 mod pump;
 mod subscriptions;
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use rustler::{Atom, LocalPid, OwnedEnv, Resource, ResourceArc};
+use rustler::{Atom, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
 
 use hang::moq_net;
 
-use crate::messages::{self, EndReason, Token};
+use crate::messages::{self, Token};
 use crate::session::SessionResource;
-use crate::track_format::{audio_params, video_params, TrackParams};
+use crate::track_format::WireContainer;
 use crate::{atoms, lock_ignoring_poison, runtime};
 
 use pump::Pump;
@@ -21,6 +20,7 @@ use subscriptions::Subscriptions;
 enum Command {
     Subscribe {
         track: String,
+        wire: moq_mux::catalog::hang::Container,
         token: Token,
         priority: u8,
     },
@@ -36,23 +36,8 @@ pub(crate) struct BroadcastConsumerResource {
 
 impl Resource for BroadcastConsumerResource {}
 
-#[derive(Clone, PartialEq)]
-struct Rendition {
-    params: TrackParams,
-    container: hang::catalog::Container,
-}
-
-type CatalogSnapshot = HashMap<String, Rendition>;
-
-struct ConsumerState {
-    renditions: CatalogSnapshot,
-    subs: Subscriptions,
-    env: OwnedEnv,
-}
-
 struct Ctx<'a> {
     broadcast: &'a moq_net::BroadcastConsumer,
-    path: &'a str,
     latency: Duration,
     pid: LocalPid,
 }
@@ -97,15 +82,21 @@ pub(crate) fn create_broadcast_consumer(
 pub(crate) fn subscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
     track: String,
+    container: WireContainer,
     token: Token,
     priority: u8,
-) -> Atom {
+) -> NifResult<Atom> {
+    let wire = container
+        .resolve()
+        .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
+
     let _ = consumer.commands.send(Command::Subscribe {
         track,
+        wire,
         token,
         priority,
     });
-    atoms::ok()
+    Ok(atoms::ok())
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -161,142 +152,45 @@ async fn run_broadcast(
 
     let ctx = Ctx {
         broadcast: &broadcast,
-        path: &path,
         latency,
         pid,
     };
 
-    let mut state = ConsumerState {
-        renditions: HashMap::new(),
-        subs: Subscriptions::new(),
-        env,
-    };
+    let mut subs = Subscriptions::new();
 
     loop {
         tokio::select! {
             command = commands_rx.recv() => match command {
-                Some(command) => state = handle_command(command, state, &ctx),
+                Some(Command::Subscribe { track, wire, token, priority }) => {
+                    let pump = Pump::new(&ctx, track, wire, token, priority);
+                    subs.insert(token, pump);
+                }
+                Some(Command::Unsubscribe { token }) => subs.remove(token),
                 // The resource was dropped without a close; treat as shutdown.
                 None => return,
             },
             _ = shutdown_rx.recv() => return,
-            Some((token, outcome)) = state.subs.join_next(),
-              if state.subs.has_pumps() => state = handle_pump_join(token, outcome, state, ctx.pid),
+            Some((token, outcome)) = subs.join_next(),
+              if subs.has_pumps() => match outcome {
+                Ok(()) => messages::send_track_ended(&mut env, pid, token),
+                Err(e) => messages::send_track_error(&mut env, pid, token, e.to_string()),
+            },
             snapshot = catalog.next() => {
-                state = match handle_new_catalog(snapshot, state, &ctx) {
-                    Ok(state) => state,
-                    Err((mut env, reason)) => {
-                        messages::send_broadcast_closed(&mut env, pid, &path, reason);
-                        return;
+                let close_reason = match snapshot {
+                    Ok(Some(snapshot)) => {
+                        match messages::send_catalog(&mut env, pid, &path, &snapshot) {
+                            Ok(()) => continue,
+                            Err(messages::PidDead) => "consumer pid is dead".to_string(),
+                        }
                     }
+                    Ok(None) => "broadcast ended".to_string(),
+                    Err(e) => format!("catalog error: {e}"),
                 };
+                messages::send_broadcast_closed(&mut env, pid, &path, close_reason);
+                return;
             }
         }
     }
-}
-
-fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> ConsumerState {
-    match command {
-        Command::Subscribe {
-            track,
-            token,
-            priority,
-        } => match state.renditions.get(&track) {
-            // track is already announced
-            Some(rendition) => {
-                messages::send_track_format(&mut state.env, ctx.pid, token, &rendition.params);
-                let pump = Pump::new(ctx, track.clone(), rendition, token, priority);
-                state.subs.insert_active(token, track, priority, pump);
-            }
-            // track is not announced yet
-            None => state.subs.insert_pending(token, track, priority),
-        },
-
-        Command::Unsubscribe { token } => state.subs.remove(token),
-    }
-    state
-}
-
-fn handle_pump_join(
-    token: Token,
-    outcome: anyhow::Result<()>,
-    mut state: ConsumerState,
-    pid: LocalPid,
-) -> ConsumerState {
-    match outcome {
-        Ok(()) => messages::send_track_ended(&mut state.env, pid, token, EndReason::Ended),
-        Err(e) => messages::send_track_error(&mut state.env, pid, token, e.to_string()),
-    }
-    state
-}
-
-fn handle_new_catalog(
-    snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
-    mut state: ConsumerState,
-    ctx: &Ctx,
-) -> Result<ConsumerState, (OwnedEnv, String)> {
-    let new_renditions = match update_catalog(ctx, snapshot, &state.renditions, &mut state.env) {
-        Ok(new_renditions) => new_renditions,
-        Err(e) => return Err((state.env, e)),
-    };
-
-    // Cancel track pumps whose parameters changed in-place
-    // The parent sees the fresh parameters with a new :track_added message,
-    // and should resub to it
-    let old_renditions = &state.renditions;
-    let changed = state.subs.remove_active_where(|track| {
-        let old = old_renditions.get(track);
-        old.is_some()
-            && new_renditions
-                .get(track)
-                .is_some_and(|new| Some(new) != old)
-    });
-
-    for token in changed {
-        messages::send_track_ended(&mut state.env, ctx.pid, token, EndReason::RenditionChanged);
-    }
-
-    // Start pumps for any pending subscriptions the snapshot just resolved.
-    for (token, track, priority, rendition) in state.subs.drain_resolved(&new_renditions) {
-        messages::send_track_format(&mut state.env, ctx.pid, token, &rendition.params);
-        let pump = Pump::new(ctx, track.clone(), rendition, token, priority);
-        state.subs.insert_active(token, track, priority, pump);
-    }
-
-    state.renditions = new_renditions;
-    Ok(state)
-}
-
-fn update_catalog(
-    ctx: &Ctx,
-    snapshot: Result<Option<moq_mux::catalog::hang::Catalog<()>>, moq_mux::Error>,
-    old_catalog: &CatalogSnapshot,
-    env: &mut OwnedEnv,
-) -> Result<CatalogSnapshot, String> {
-    let snapshot = match snapshot {
-        Ok(Some(snapshot)) => snapshot,
-        Ok(None) => return Err("broadcast ended".to_string()),
-        Err(e) => return Err(format!("catalog error: {e}")),
-    };
-
-    let new_catalog = catalog_renditions(&snapshot);
-
-    let pid_dead = |_| "consumer pid is dead".to_string();
-
-    for (name, rendition) in old_catalog {
-        if new_catalog.get(name) != Some(rendition) {
-            messages::send_track_removed(env, ctx.pid, ctx.path, name).map_err(pid_dead)?;
-        }
-    }
-
-    for (name, rendition) in &new_catalog {
-        if old_catalog.get(name) != Some(rendition) {
-            messages::send_track_added(env, ctx.pid, ctx.path, name, &rendition.params)
-                .map_err(pid_dead)?;
-        }
-    }
-
-    Ok(new_catalog)
 }
 
 fn subscribe_catalog(
@@ -306,23 +200,4 @@ fn subscribe_catalog(
         .subscribe_track(&hang::Catalog::default_track())
         .map_err(|e| anyhow::anyhow!("subscribe_track(catalog) failed: {e}"))?;
     Ok(moq_mux::catalog::hang::Consumer::<()>::new(catalog_track))
-}
-
-fn catalog_renditions(snapshot: &moq_mux::catalog::hang::Catalog) -> CatalogSnapshot {
-    let mut renditions = HashMap::new();
-    for (name, config) in &snapshot.video.renditions {
-        let rendition = Rendition {
-            params: video_params(config),
-            container: config.container.clone(),
-        };
-        renditions.insert(name.clone(), rendition);
-    }
-    for (name, config) in &snapshot.audio.renditions {
-        let rendition = Rendition {
-            params: audio_params(config),
-            container: config.container.clone(),
-        };
-        renditions.insert(name.clone(), rendition);
-    }
-    renditions
 }

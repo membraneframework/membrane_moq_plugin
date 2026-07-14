@@ -27,6 +27,7 @@ defmodule Membrane.MoQ.Source do
   require Membrane.{H264, H265}
 
   alias ExMoQ.Native
+  alias Membrane.MoQ.Source.Tracks
   alias Membrane.MoQ.TrackFormat
 
   def_output_pad :output,
@@ -98,8 +99,7 @@ defmodule Membrane.MoQ.Source do
             latency: Membrane.Time.t(),
             session: Native.session() | nil,
             consumer: Native.broadcast_consumer() | nil,
-            next_token: integer(),
-            tokens: BiMap.t(),
+            tracks: Tracks.t(),
             status: :connecting | :ready | :disconnect_pending | :disconnected
           }
 
@@ -108,22 +108,21 @@ defmodule Membrane.MoQ.Source do
                 [
                   :session,
                   :consumer,
-                  next_token: 0,
-                  tokens: BiMap.new(),
+                  tracks: %Tracks{},
                   status: :connecting
                 ]
   end
 
   @impl true
-  def handle_init(_ctx, opts) do
-    {[],
-     %State{
-       url: opts.url,
-       broadcast: opts.broadcast,
-       disable_tls_verify?: opts.disable_tls_verify?,
-       latency: opts.latency
-     }}
-  end
+  def handle_init(_ctx, opts),
+    do:
+      {[],
+       %State{
+         url: opts.url,
+         broadcast: opts.broadcast,
+         disable_tls_verify?: opts.disable_tls_verify?,
+         latency: opts.latency
+       }}
 
   @impl true
   def handle_setup(ctx, %State{} = state) do
@@ -145,50 +144,23 @@ defmodule Membrane.MoQ.Source do
     {[end_of_stream: pad], state}
   end
 
-  def handle_pad_added(pad, %{pad_options: %{track: track, priority: priority}} = ctx, state) do
-    token = state.next_token
+  @impl true
+  def handle_pad_added(pad, ctx, state) do
+    {token, tracks} = Tracks.add_pad(state.tracks, pad)
+    state = %{state | tracks: tracks}
 
-    state = %{
-      state
-      | next_token: token + 1,
-        tokens: BiMap.put(state.tokens, token, pad)
-    }
-
-    if ctx.playback == :playing do
-      start_pad(track, priority, token, state)
+    case ctx.playback do
+      :playing -> subscribe_pad(token, pad, ctx, state)
+      :stopped -> {[], state}
     end
-
-    {[], state}
   end
 
   @impl true
-  def handle_playing(ctx, %{status: :disconnect_pending} = state) do
-    {eos_all(ctx.pads), %{state | status: :disconnected}}
-  end
-
-  def handle_playing(ctx, state) do
-    Enum.each(state.tokens, fn {token, pad} ->
-      options = ctx.pads[pad].options
-      start_pad(options.track, options.priority, token, state)
-    end)
-
-    {[], state}
-  end
+  def handle_playing(ctx, %{status: :disconnect_pending} = state),
+    do: {eos_all(ctx.pads), %{state | status: :disconnected}}
 
   @impl true
-  def handle_pad_removed(pad, _ctx, state) do
-    case BiMap.get_key(state.tokens, pad) do
-      nil ->
-        {[], state}
-
-      token ->
-        if state.consumer != nil do
-          Native.unsubscribe_track(state.consumer, token)
-        end
-
-        {[], %{state | tokens: BiMap.delete_value(state.tokens, pad)}}
-    end
-  end
+  def handle_playing(ctx, state), do: subscribe_ready(ctx, state)
 
   @impl true
   def handle_info(:moq_connected, ctx, state) do
@@ -207,28 +179,42 @@ defmodule Membrane.MoQ.Source do
     {[], %{state | consumer: consumer}}
   end
 
-  def handle_info({:moq_broadcast_ready, _path}, _ctx, state) do
-    {[setup: :complete], %{state | status: :ready}}
+  @impl true
+  def handle_info({:moq_broadcast_ready, _path}, _ctx, state),
+    do: {[setup: :complete], %{state | status: :ready}}
+
+  @impl true
+  def handle_info({:moq_catalog, _path, renditions}, ctx, state) do
+    {diff, tracks} =
+      Tracks.apply_snapshot(state.tracks, renditions, fn pad -> ctx.pads[pad].options.track end)
+
+    track_removed =
+      Stream.concat(diff.removed, diff.changed)
+      |> Stream.map(fn name -> {:notify_parent, {:track_removed, name}} end)
+
+    new_track =
+      Stream.concat(diff.changed, diff.added)
+      |> Stream.map(fn name ->
+        {format, _container} = Tracks.rendition(tracks, name)
+        {:notify_parent, {:new_track, {name, TrackFormat.to_stream_format(format)}}}
+      end)
+
+    notifications = Enum.concat(track_removed, new_track)
+
+    state = %{state | tracks: tracks}
+
+    case ctx.playback do
+      :stopped ->
+        {notifications, state}
+
+      :playing ->
+        eos_actions = end_subscriptions(diff.ended, ctx, state)
+        {subscribe_actions, state} = subscribe_ready(ctx, state)
+        {notifications ++ eos_actions ++ subscribe_actions, state}
+    end
   end
 
-  def handle_info({:moq_track_added, _path, name, format}, _ctx, state) do
-    {[notify_parent: {:new_track, {name, TrackFormat.to_stream_format(format)}}], state}
-  end
-
-  def handle_info({:moq_track_removed, _path, name}, _ctx, state) do
-    {[notify_parent: {:track_removed, name}], state}
-  end
-
-  def handle_info({:moq_track_format, token, format}, ctx, state) do
-    actions =
-      case active_pad(ctx, state, token) do
-        nil -> []
-        pad -> [stream_format: {pad, TrackFormat.to_stream_format(format)}]
-      end
-
-    {actions, state}
-  end
-
+  @impl true
   def handle_info({:moq_frame, token, payload, timestamp_ns, keyframe?}, ctx, state) do
     actions =
       case active_pad(ctx, state, token) do
@@ -248,8 +234,9 @@ defmodule Membrane.MoQ.Source do
     {actions, state}
   end
 
-  def handle_info({:moq_track_ended, token, reason}, ctx, state) do
-    Membrane.Logger.debug("MoQ track ended: #{inspect(reason)}")
+  @impl true
+  def handle_info({:moq_track_ended, token}, ctx, state) do
+    state = %{state | tracks: Tracks.deactivate(state.tracks, token)}
 
     actions =
       case active_pad(ctx, state, token) do
@@ -260,8 +247,11 @@ defmodule Membrane.MoQ.Source do
     {actions, state}
   end
 
+  @impl true
   def handle_info({:moq_track_error, token, reason}, ctx, state) do
     # NOTE: should we bubble this up as a parent notif?
+    state = %{state | tracks: Tracks.deactivate(state.tracks, token)}
+
     case active_pad(ctx, state, token) do
       nil ->
         {[], state}
@@ -278,28 +268,42 @@ defmodule Membrane.MoQ.Source do
     end
   end
 
-  def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
-    raise "MoQ subscriber setup failed: #{inspect(reason)}"
-  end
+  @impl true
+  def handle_info({:moq_setup_failed, reason}, _ctx, _state),
+    do: raise("MoQ subscriber setup failed: #{inspect(reason)}")
 
-  def handle_info({:moq_disconnected, reason}, ctx, state) do
-    handle_closed(reason, ctx, state)
-  end
+  @impl true
+  def handle_info({:moq_disconnected, reason}, ctx, state), do: handle_closed(reason, ctx, state)
 
-  def handle_info({:moq_broadcast_closed, _path, reason}, ctx, state) do
-    handle_closed(reason, ctx, state)
-  end
+  @impl true
+  def handle_info({:moq_broadcast_closed, _path, reason}, ctx, state),
+    do: handle_closed(reason, ctx, state)
 
+  @impl true
   def handle_info(msg, _ctx, state) do
     Membrane.Logger.warning("Unknown message: #{inspect(msg)}")
     {[], state}
   end
 
+  @impl true
+  def handle_pad_removed(pad, _ctx, state) do
+    case Tracks.remove_pad(state.tracks, pad) do
+      {nil, _tracks} ->
+        {[], state}
+
+      {token, tracks} ->
+        if state.consumer != nil do
+          Native.unsubscribe_track(state.consumer, token)
+        end
+
+        {[], %{state | tracks: tracks}}
+    end
+  end
+
   @spec handle_closed(String.t(), map(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
-  defp handle_closed(reason, _ctx, %{status: :connecting}) do
-    raise "MoQ subscriber setup failed: #{inspect(reason)}"
-  end
+  defp handle_closed(reason, _ctx, %{status: :connecting}),
+    do: raise("MoQ subscriber setup failed: #{inspect(reason)}")
 
   defp handle_closed(_reason, _ctx, %{status: status} = state)
        when status in [:disconnect_pending, :disconnected],
@@ -316,25 +320,63 @@ defmodule Membrane.MoQ.Source do
     end
   end
 
-  @spec start_pad(String.t(), 0..255, integer(), State.t()) :: :ok
-  defp start_pad(track, priority, token, state) do
-    Native.subscribe_track(state.consumer, track, token, priority)
+  @spec end_subscriptions([{Tracks.token(), Membrane.Pad.ref()}], map(), State.t()) ::
+          [Membrane.Element.Action.t()]
+  defp end_subscriptions(ended, ctx, state) do
+    Enum.each(ended, fn {token, _pad} -> Native.unsubscribe_track(state.consumer, token) end)
+
+    for {_token, pad} <- ended, not ctx.pads[pad].end_of_stream?, do: {:end_of_stream, pad}
+  end
+
+  # Subscribes every waiting pad whose track the catalog advertises.
+  # Pads whose track is absent stay parked until a later catalog update.
+  @spec subscribe_ready(map(), State.t()) :: {[Membrane.Element.Action.t()], State.t()}
+  defp subscribe_ready(ctx, state),
+    do:
+      Enum.flat_map_reduce(Tracks.waiting(state.tracks), state, fn {token, pad}, state ->
+        subscribe_pad(token, pad, ctx, state)
+      end)
+
+  @spec subscribe_pad(Tracks.token(), Membrane.Pad.ref(), map(), State.t()) ::
+          {[Membrane.Element.Action.t()], State.t()}
+  defp subscribe_pad(token, pad, ctx, state) do
+    %{options: %{track: track, priority: priority}, end_of_stream?: eos?} = ctx.pads[pad]
+
+    with false <- eos?,
+         {format, container} <- Tracks.rendition(state.tracks, track),
+         :ok <- Native.subscribe_track(state.consumer, track, container, token, priority) do
+      {[stream_format: {pad, TrackFormat.to_stream_format(format)}],
+       %{state | tracks: Tracks.activate(state.tracks, token)}}
+    else
+      true ->
+        {[], state}
+
+      nil ->
+        # track not advertised yet; parked until a catalog update resolves it
+        {[], state}
+
+      {:error, reason} ->
+        Membrane.Logger.warning("""
+        Cannot subscribe to track #{inspect(track)}, sending EOS.
+        reason: #{inspect(reason)}
+        """)
+
+        {[end_of_stream: pad], state}
+    end
   end
 
   @spec eos_all(%{Membrane.Pad.ref() => map()}) :: [Membrane.Element.Action.t()]
   defp eos_all(pads) do
-    for {pad, %{end_of_stream?: false}} <- pads do
-      {:end_of_stream, pad}
-    end
+    for {pad, %{end_of_stream?: false}} <- pads, do: {:end_of_stream, pad}
   end
 
-  @spec active_pad(map(), State.t(), integer()) :: Membrane.Pad.ref() | nil
+  @spec active_pad(map(), State.t(), Tracks.token()) :: Membrane.Pad.ref() | nil
   defp active_pad(ctx, state, token) do
-    with {:ok, pad} <- BiMap.fetch(state.tokens, token),
+    with pad when pad != nil <- Tracks.pad_for(state.tracks, token),
          %{end_of_stream?: false} <- ctx.pads[pad] do
       pad
     else
-      _error -> nil
+      _absent_or_ended -> nil
     end
   end
 end

@@ -6,13 +6,13 @@ use hang::moq_net;
 
 use crate::messages::{self, Token};
 
-use super::{Ctx, Rendition};
+use super::Ctx;
 
 /// Everything one track subscription needs to pump its frames to Elixir.
 pub(super) struct Pump {
     broadcast: moq_net::BroadcastConsumer,
     track: String,
-    container: hang::catalog::Container,
+    wire: moq_mux::catalog::hang::Container,
     token: Token,
     priority: u8,
     pid: LocalPid,
@@ -24,14 +24,14 @@ impl Pump {
     pub(super) fn new(
         ctx: &Ctx,
         track: String,
-        rendition: &Rendition,
+        wire: moq_mux::catalog::hang::Container,
         token: Token,
         priority: u8,
     ) -> Self {
         Self {
             broadcast: ctx.broadcast.clone(),
             track,
-            container: rendition.container.clone(),
+            wire,
             token,
             priority,
             pid: ctx.pid,
@@ -43,9 +43,6 @@ impl Pump {
     pub(super) async fn run(mut self) -> anyhow::Result<()> {
         let track = &self.track;
 
-        let wire = moq_mux::catalog::hang::Container::try_from(&self.container)
-            .map_err(|e| anyhow::anyhow!("unsupported container on track {track}: {e}"))?;
-
         let track_ref = moq_net::Track {
             name: track.clone(),
             priority: self.priority,
@@ -56,7 +53,7 @@ impl Pump {
             .map_err(|e| anyhow::anyhow!("subscribe_track({track}) failed: {e}"))?;
 
         let mut consumer =
-            moq_mux::container::Consumer::new(track_consumer, wire).with_latency(self.latency);
+            moq_mux::container::Consumer::new(track_consumer, self.wire).with_latency(self.latency);
 
         pump_frames(&mut consumer, self.token, self.pid, &mut self.env).await
     }

@@ -9,10 +9,16 @@ defmodule ExMoQ.Native do
   @type broadcast_producer :: reference()
   @type broadcast_consumer :: reference()
 
-  @typedoc """
-  Wire container a published track's frames are encapsulated in.
-  """
+  @typedoc "Wire container a published track's frames are encapsulated in."
   @type container :: :legacy | :loc
+
+  @typedoc """
+  Wire container of a consumed track's frames,
+  as advertised in the broadcast's catalog.
+  """
+  @type wire_container :: :legacy | :loc | {:cmaf, %{init: binary()}}
+
+  @type rendition :: {track_format(), wire_container()}
 
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
@@ -197,7 +203,7 @@ defmodule ExMoQ.Native do
 
   Multiple broadcast consumers may share one session.
   Each one independently waits for its broadcast to be announced.
-  Subscribe to individual tracks with `subscribe_track/4`.
+  Subscribe to individual tracks with `subscribe_track/5`.
 
   `latency_ns` is how long each track buffers received frames before emitting
   them, in nanoseconds, trading delay for resilience to jitter and reordering.
@@ -207,10 +213,14 @@ defmodule ExMoQ.Native do
         once the broadcast is announced and its catalog is subscribed
     * `{:moq_broadcast_closed, path :: String.t(), reason :: String.t()}`
         when the broadcast ends, errors, or the session closes underneath it
-    * `{:moq_track_added, path :: String.t(), name :: String.t(), format :: track_format()}`
-        when the catalog advertises a track
-    * `{:moq_track_removed, path :: String.t(), name :: String.t()}`
-        when the catalog drops a track
+    * `{:moq_catalog, path :: String.t(),
+          renditions :: [{name :: String.t(), rendition()}]}`
+        with the full catalog snapshot, once the broadcast is announced
+        and again on every catalog update.
+        Diffing consecutive snapshots is the caller's job:
+        a rendition replaced in place arrives as a changed entry
+        under the same name, and the wire track of a live subscription keeps flowing.
+        Unsubscribing on such a change is also the caller's call to make.
   """
   @spec create_broadcast_consumer(session(), String.t(), pid(), non_neg_integer()) ::
           {:ok, broadcast_consumer()}
@@ -220,24 +230,29 @@ defmodule ExMoQ.Native do
   @doc """
   Subscribes to `track` within the broadcast consumed by the given consumer.
 
+  `container` selects the parser for the track's frames:
+  echo the value advertised for the track in the `:moq_catalog` message.
+  An unusable container is rejected synchronously with `{:error, reason}`.
+
   `token` is a caller-chosen opaque integer echoed back in this track's messages
   so the caller can route them to the originating subscription.
   Keep tokens unique across all broadcast consumers reporting to the same pid.
 
+  The subscription is immediate:
+  a track the broadcast does not carry fails asynchronously with `:moq_track_error`.
+  Waiting until the catalog advertises a track is the caller's job (watch `:moq_catalog`).
+
   Sends to the consumer's `pid`:
-    * `{:moq_track_format, token :: integer(), format :: track_format()}` once the catalog
-      advertises the track, before any frame
     * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
       for every received frame
-    * `{:moq_track_ended, token :: integer(), reason :: :ended | :rendition_changed}`
-      when the wire track finishes (`:ended`),
-      or the catalog replaces the track's rendition in place (`:rendition_changed`).
+    * `{:moq_track_ended, token :: integer()}` when the wire track finishes
     * `{:moq_track_error, token :: integer(), reason :: String.t()}`
       when the subscription fails on the native side
       while the track may still be advertised in the catalog
   """
-  @spec subscribe_track(broadcast_consumer(), String.t(), integer(), 0..255) :: :ok
-  def subscribe_track(_broadcast_consumer, _track, _token, _priority),
+  @spec subscribe_track(broadcast_consumer(), String.t(), wire_container(), integer(), 0..255) ::
+          :ok | {:error, reason :: String.t()}
+  def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

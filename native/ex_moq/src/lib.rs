@@ -28,11 +28,9 @@ pub(crate) mod atoms {
         moq_setup_failed,
         moq_disconnected,
         moq_frame,
-        moq_track_format,
+        moq_catalog,
         moq_track_ended,
         moq_track_error,
-        moq_track_added,
-        moq_track_removed,
         moq_broadcast_ready,
         moq_broadcast_closed,
     }

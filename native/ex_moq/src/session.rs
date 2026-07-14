@@ -35,8 +35,9 @@ pub(crate) fn create_session(
 
     runtime().spawn(async move {
         let session = tokio::select! {
-            session = connect(url, published, consumed, disable_tls_verify) => session,
+            biased;
             _ = shutdown_rx.recv() => return,
+            session = connect(url, published, consumed, disable_tls_verify) => session,
         };
         let mut env = OwnedEnv::new();
         match session {
@@ -44,6 +45,7 @@ pub(crate) fn create_session(
                 messages::send_connected(&mut env, pid);
 
                 tokio::select! {
+                    biased;
                     _ = shutdown_rx.recv() => {} // session closed gracefully by parent
                     result = session.closed() => {
                         let reason = match result {

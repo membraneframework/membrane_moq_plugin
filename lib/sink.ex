@@ -161,51 +161,14 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_stream_format(pad, fmt, ctx, %State{producer: producer} = state) do
-    %{
-      stream_format: old_stream_format,
-      options: %{
-        priority: priority,
-        track: track_name
-      }
-    } = ctx.pads[pad]
+  def handle_stream_format(pad, fmt, ctx, state) do
+    %{stream_format: old_format, options: options} = ctx.pads[pad]
 
-    track_resource = state.tracks[pad]
-
-    track_fmt = TrackFormat.from_stream_format(fmt)
-
-    state =
-      case old_stream_format do
-        ^fmt ->
-          state
-
-        nil ->
-          priority = priority || default_priority(track_fmt)
-
-          with {:ok, track_resource} <-
-                 Native.add_track(
-                   producer,
-                   track_name,
-                   track_fmt,
-                   priority,
-                   state.container,
-                   Membrane.Time.as_nanoseconds(state.latency, :round)
-                 ) do
-            put_in(state.tracks[pad], track_resource)
-          end
-
-        _other ->
-          with :ok <- Native.update_track(track_resource, track_fmt) do
-            state
-          end
-      end
-      |> case do
-        {:error, reason} ->
-          raise "Failed to update stream format of pad #{inspect(pad)}, reason: #{inspect(reason)}"
-
-        state ->
-          state
-      end
+    state = case old_format do
+      ^fmt ->  state
+      nil ->  add_track(pad, fmt, options, state)
+      _changed ->  update_track(pad, fmt, state)
+    end
 
     {[], state}
   end
@@ -248,6 +211,40 @@ defmodule Membrane.MoQ.Sink do
   def handle_end_of_stream(pad, _ctx, state) do
     state = close_pad(pad, state)
     {[], state}
+  end
+
+  @spec add_track(Membrane.Pad.ref(), Membrane.StreamFormat.t(), map(), State.t()) :: State.t()
+  defp add_track(pad, fmt, %{track: track, priority: priority}, state) do
+    track_fmt = TrackFormat.from_stream_format(fmt)
+
+    result =
+      Native.add_track(
+        state.producer,
+        track,
+        track_fmt,
+        priority || default_priority(track_fmt),
+        state.container,
+        Membrane.Time.as_nanoseconds(state.latency, :round)
+      )
+
+    case result do
+      {:ok, track_resource} ->
+        put_in(state.tracks[pad], track_resource)
+
+      {:error, reason} ->
+        raise "Failed to add track #{inspect(track)} for pad #{inspect(pad)}, reason: #{inspect(reason)}"
+    end
+  end
+
+  @spec update_track(Membrane.Pad.ref(), Membrane.StreamFormat.t(), State.t()) :: State.t()
+  defp update_track(pad, fmt, state) do
+    case Native.update_track(state.tracks[pad], TrackFormat.from_stream_format(fmt)) do
+      :ok ->
+        state
+
+      {:error, reason} ->
+        raise "Failed to update stream format of pad #{inspect(pad)}, reason: #{inspect(reason)}"
+    end
   end
 
   @spec close_pad(Membrane.Pad.ref(), State.t()) :: State.t()

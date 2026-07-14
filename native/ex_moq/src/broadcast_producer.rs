@@ -60,6 +60,7 @@ pub(crate) fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerRe
         .for_each(|track| {
             let _ = lock_ignoring_poison(&track).finish();
         });
+    inner.tracks.clear();
 
     let _ = inner.catalog.finish();
     let _ = inner.broadcast.abort(moq_net::Error::Cancel);

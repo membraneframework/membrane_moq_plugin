@@ -79,7 +79,8 @@ defmodule ExMoQ.Native do
   create broadcast producers and consumers immediately.
   The QUIC handshake completes asynchronously:
   - `:moq_connected` is sent to `pid` once the session is up.
-  - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the connection fails.
+  - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the
+    connection fails, e.g. due to timeout.
   - `{:moq_disconnected, reason :: String.t()}` is sent if the session terminates unexpectedly.
   """
   @spec create_session(String.t(), pid(), boolean()) ::
@@ -169,10 +170,14 @@ defmodule ExMoQ.Native do
   `keyframe?` must be `true` for IDR frames on video tracks (triggers a new MoQ group).
   For audio tracks pass `true` for every frame.
 
-  Returns `:ok`, or `{:error, reason}` if the write fails (e.g. track closed).
+  Returns:
+     * `:ok` when the write succeeds
+     * `:missing_keyframe` when the write failed because
+       a MoQ group hasn't opened yet and the frame is not a keyframe.
+     * `{:error, reason}` when the write failed for another reason (e.g. track closed).
   """
   @spec send_frame(track(), non_neg_integer(), boolean(), binary()) ::
-          :ok | {:error, reason :: String.t()}
+          :ok | :missing_keyframe | {:error, reason :: String.t()}
   def send_frame(_track_res, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 

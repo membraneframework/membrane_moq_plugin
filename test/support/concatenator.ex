@@ -32,12 +32,8 @@ defmodule Membrane.MoQ.Test.Concatenator do
   def handle_init(_ctx, _opts) do
     {[],
      %{
+       # Remaining inputs in play order; the head is the active input.
        order: [],
-       active: nil,
-       # Latest stream format seen per input. Formats aren't demand-gated, so an
-       # inactive input's format can arrive early; we stash it and forward it when
-       # that input becomes active.
-       formats: %{},
        # Added to every input PTS so the output clock never jumps back at a switch.
        offset: 0,
        last_pts: 0,
@@ -53,32 +49,30 @@ defmodule Membrane.MoQ.Test.Concatenator do
 
   @impl true
   def handle_playing(_ctx, state) do
-    order = Enum.sort_by(state.order, fn Pad.ref(:input, id) -> id end)
-    [active | _rest] = order
+    [active | _rest] = order = Enum.sort_by(state.order, fn Pad.ref(:input, id) -> id end)
 
     Membrane.Logger.info("Concatenator starting with input #{inspect(active)}")
-    {[], %{state | order: order, active: active}}
+    {[], %{state | order: order}}
   end
 
   # Relay downstream demand to the active input only; inactive inputs stay idle.
   @impl true
-  def handle_demand(:output, size, :buffers, _ctx, %{active: active} = state) do
+  def handle_demand(:output, size, :buffers, _ctx, %{order: [active | _]} = state) do
     {[demand: {active, size}], state}
   end
 
   @impl true
-  def handle_stream_format(pad, format, _ctx, state) do
-    state = put_in(state.formats[pad], format)
-
-    if pad == state.active do
-      {[stream_format: {:output, format}], state}
-    else
-      {[], state}
-    end
+  def handle_stream_format(pad, format, _ctx, %{order: [pad | _]} = state) do
+    {[stream_format: {:output, format}], state}
   end
 
   @impl true
-  def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, %{active: pad} = state) do
+  def handle_stream_format(_pad, _format, _ctx, state) do
+    {[], state}
+  end
+
+  @impl true
+  def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, %{order: [pad | _]} = state) do
     pts = buffer.pts + state.offset
     delta = pts - state.last_pts
     frame_dur = if delta > 0, do: delta, else: state.frame_dur
@@ -89,30 +83,28 @@ defmodule Membrane.MoQ.Test.Concatenator do
   end
 
   @impl true
-  def handle_end_of_stream(pad, _ctx, %{active: pad} = state) do
-    case next_pad(state.order, pad) do
-      nil ->
+  def handle_end_of_stream(pad, ctx, %{order: [pad | rest]} = state) do
+    case Enum.drop_while(rest, &ctx.pads[&1].end_of_stream?) do
+      [] ->
         Membrane.Logger.info("Concatenator: last input #{inspect(pad)} done, forwarding EOS")
         {[end_of_stream: :output], state}
 
-      next ->
+      [next | _] = order ->
         Membrane.Logger.info("Concatenator: switching #{inspect(pad)} -> #{inspect(next)}")
-        state = %{state | active: next, offset: state.last_pts + state.frame_dur}
+        state = %{state | order: order, offset: state.last_pts + state.frame_dur}
 
-        # If the next input's format already arrived (it isn't demand-gated),
-        # forward it now so it precedes the buffers; otherwise it'll be forwarded
-        # live when it arrives. Then re-issue demand, relayed to the new input.
         format_action =
-          case Map.fetch(state.formats, next) do
-            {:ok, format} -> [stream_format: {:output, format}]
-            :error -> []
+          case ctx.pads[next].stream_format do
+            nil -> []
+            format -> [stream_format: {:output, format}]
           end
 
         {format_action ++ [redemand: :output], state}
     end
   end
 
-  defp next_pad(order, pad) do
-    order |> Enum.drop_while(&(&1 != pad)) |> Enum.drop(1) |> List.first()
+  @impl true
+  def handle_end_of_stream(_pad, _ctx, state) do
+    {[], state}
   end
 end

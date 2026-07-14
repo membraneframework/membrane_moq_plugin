@@ -28,17 +28,19 @@ pub(crate) struct TrackResource {
 impl Resource for TrackResource {}
 
 impl TrackResource {
+    fn owns_name(&self, inner: &ProducerInner) -> bool {
+        inner
+            .tracks
+            .get(&self.name)
+            .is_some_and(|weak| Weak::ptr_eq(weak, &Arc::downgrade(&self.producer)))
+    }
+
     fn teardown(&self) {
         let mut inner = lock_ignoring_poison(&self.broadcast_res.inner);
 
         let _ = lock_ignoring_poison(&self.producer).finish();
 
-        let owns_name = inner
-            .tracks
-            .get(&self.name)
-            .is_some_and(|weak| Weak::ptr_eq(weak, &Arc::downgrade(&self.producer)));
-
-        if !owns_name {
+        if !self.owns_name(&inner) {
             return;
         }
 
@@ -149,6 +151,13 @@ pub(crate) fn update_track(
     resolved.set_container(track_res.container.to_catalog());
 
     let mut inner = lock_ignoring_poison(&track_res.broadcast_res.inner);
+
+    if !track_res.owns_name(&inner) {
+        return Err(crate::nif_error!(
+            "track {:?} was removed or replaced; a stale resource cannot update the catalog",
+            track_res.name
+        ));
+    }
 
     let mut guard = inner.catalog.lock();
     match resolved {

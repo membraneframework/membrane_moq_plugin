@@ -174,10 +174,6 @@ defmodule Membrane.MoQ.Sink do
 
     track_fmt = TrackFormat.from_stream_format(fmt)
 
-    fail = fn reason ->
-      raise "Failed to update pad's stream format, reason: #{inspect(reason)}"
-    end
-
     state =
       case old_stream_format do
         ^fmt ->
@@ -197,15 +193,22 @@ defmodule Membrane.MoQ.Sink do
             {:ok, track_resource} ->
               put_in(state.tracks[pad], track_resource)
 
-            {:error, reason} ->
-              fail.(reason)
+            error ->
+              error
           end
 
         _other ->
           case Native.update_track(track_resource, track_fmt) do
             :ok -> state
-            {:error, reason} -> fail.(reason)
+            error -> error
           end
+      end
+      |> case do
+        {:error, reason} ->
+          raise "Failed to update stream format of pad #{inspect(pad)}, reason: #{inspect(reason)}"
+
+        state ->
+          state
       end
 
     {[], state}

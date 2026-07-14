@@ -1,4 +1,4 @@
-use rustler::{Binary, Encoder, LocalPid, NewBinary, OwnedEnv};
+use rustler::{Binary, Encoder, LocalPid, NewBinary, NifUnitEnum, OwnedEnv};
 
 use crate::atoms;
 use crate::track_format::{encode_format, TrackParams};
@@ -97,14 +97,18 @@ pub(crate) fn send_frame(
     .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_track_ended(env: &mut OwnedEnv, pid: LocalPid, token: Token, reason: String) {
+#[derive(NifUnitEnum, Clone, Copy)]
+pub(crate) enum EndReason {
+    Ended,
+    RenditionChanged,
+}
+
+pub(crate) fn send_track_ended(env: &mut OwnedEnv, pid: LocalPid, token: Token, reason: EndReason) {
     let _ = env.send_and_clear(&pid, |env| {
         (atoms::moq_track_ended(), token, reason).encode(env)
     });
 }
 
-/// Unlike `:moq_track_ended`, this signals a subscription that died on our side
-/// while its track may well still be advertised in the catalog.
 pub(crate) fn send_track_error(env: &mut OwnedEnv, pid: LocalPid, token: Token, reason: String) {
     let _ = env.send_and_clear(&pid, |env| {
         (atoms::moq_track_error(), token, reason).encode(env)

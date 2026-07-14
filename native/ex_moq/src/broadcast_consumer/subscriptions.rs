@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tokio::task::{AbortHandle, JoinError, JoinSet};
+use tokio::task::{AbortHandle, JoinSet};
 
 use crate::messages::Token;
 
@@ -31,10 +31,8 @@ struct Sub {
 pub(super) struct Subscriptions {
     subs: HashMap<Token, Sub>,
     /// mapping from spawned task to subscription token.
-    /// gracefully terminated tasks remove their entry from here,
-    /// while abnormally terminated tasks don't.
     by_task: HashMap<tokio::task::Id, Token>,
-    pumps: JoinSet<()>,
+    pumps: JoinSet<anyhow::Result<()>>,
 }
 
 impl Subscriptions {
@@ -79,7 +77,7 @@ impl Subscriptions {
 
     /// Routes a finished pump task back to its subscription and forgets both.
     /// Returns `None` for tasks aborted through `remove`.
-    pub(super) fn reap(&mut self, id: tokio::task::Id) -> Option<Token> {
+    fn reap(&mut self, id: tokio::task::Id) -> Option<Token> {
         let token = self.by_task.remove(&id)?;
         self.subs.remove(&token);
         Some(token)
@@ -113,7 +111,20 @@ impl Subscriptions {
         !self.pumps.is_empty()
     }
 
-    pub(super) async fn join_next(&mut self) -> Option<Result<(tokio::task::Id, ()), JoinError>> {
-        self.pumps.join_next_with_id().await
+    /// Waits for the next pump task to finish
+    /// and routes it back to its subscription, forgetting both.
+    /// Tasks whose subscription was already removed are skipped.
+    /// `None` means no tasks are left.
+    pub(super) async fn join_next(&mut self) -> Option<(Token, anyhow::Result<()>)> {
+        loop {
+            let (id, outcome) = match self.pumps.join_next_with_id().await? {
+                Ok((id, outcome)) => (id, outcome),
+                Err(e) => (e.id(), Err(anyhow::anyhow!("pump task died: {e}"))),
+            };
+
+            if let Some(token) = self.reap(id) {
+                return Some((token, outcome));
+            }
+        }
     }
 }

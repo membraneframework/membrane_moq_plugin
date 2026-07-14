@@ -5,13 +5,12 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use tokio::task::JoinError;
 
 use rustler::{Atom, LocalPid, OwnedEnv, Resource, ResourceArc};
 
 use hang::moq_net;
 
-use crate::messages::{self, Token};
+use crate::messages::{self, EndReason, Token};
 use crate::session::SessionResource;
 use crate::track_format::{audio_params, video_params, TrackParams};
 use crate::{atoms, lock_ignoring_poison, runtime};
@@ -181,8 +180,8 @@ async fn run_broadcast(
                 None => return,
             },
             _ = shutdown_rx.recv() => return,
-            Some(result) = state.subs.join_next(),
-              if state.subs.has_pumps() => state = handle_pump_join(result, state, ctx.pid),
+            Some((token, outcome)) = state.subs.join_next(),
+              if state.subs.has_pumps() => state = handle_pump_join(token, outcome, state, ctx.pid),
             snapshot = catalog.next() => {
                 state = match handle_new_catalog(snapshot, state, &ctx) {
                     Ok(state) => state,
@@ -219,23 +218,15 @@ fn handle_command(command: Command, mut state: ConsumerState, ctx: &Ctx) -> Cons
 }
 
 fn handle_pump_join(
-    result: Result<(tokio::task::Id, ()), JoinError>,
+    token: Token,
+    outcome: anyhow::Result<()>,
     mut state: ConsumerState,
     pid: LocalPid,
 ) -> ConsumerState {
-    let id = match &result {
-        Ok((id, ())) => *id,
-        Err(e) => e.id(),
-    };
-
-    // send a :track_error on pumps that terminated abnormally.
-    // the guard works because:
-    //   - for tasks terminating normally, `result != Err(_)`
-    //   - for tasks removed via `remove`, `state.subs.reap(id) == None`
-    if let Some((token, e)) = state.subs.reap(id).zip(result.err()) {
-        messages::send_track_error(&mut state.env, pid, token, format!("pump task died: {e}"));
+    match outcome {
+        Ok(()) => messages::send_track_ended(&mut state.env, pid, token, EndReason::Ended),
+        Err(e) => messages::send_track_error(&mut state.env, pid, token, e.to_string()),
     }
-
     state
 }
 
@@ -262,12 +253,7 @@ fn handle_new_catalog(
     });
 
     for token in changed {
-        messages::send_track_ended(
-            &mut state.env,
-            ctx.pid,
-            token,
-            "rendition changed".to_string(),
-        );
+        messages::send_track_ended(&mut state.env, ctx.pid, token, EndReason::RenditionChanged);
     }
 
     // Start pumps for any pending subscriptions the snapshot just resolved.

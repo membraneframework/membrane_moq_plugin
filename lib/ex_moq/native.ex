@@ -229,10 +229,11 @@ defmodule ExMoQ.Native do
       advertises the track, before any frame
     * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
       for every received frame
-    * `{:moq_track_ended, token :: integer(), reason :: String.t()}`
-      when the track ends cleanly or errors
+    * `{:moq_track_ended, token :: integer(), reason :: :ended | :rendition_changed}`
+      when the wire track finishes (`:ended`),
+      or the catalog replaces the track's rendition in place (`:rendition_changed`).
     * `{:moq_track_error, token :: integer(), reason :: String.t()}`
-      when the subscription dies on the native side (e.g. its task panics)
+      when the subscription fails on the native side
       while the track may still be advertised in the catalog
   """
   @spec subscribe_track(broadcast_consumer(), String.t(), integer(), 0..255) :: :ok

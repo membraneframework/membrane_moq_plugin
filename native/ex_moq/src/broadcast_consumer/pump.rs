@@ -40,18 +40,7 @@ impl Pump {
         }
     }
 
-    pub(super) async fn run(mut self) {
-        let reason = tokio::select! {
-            result = self.pump_track() => match result {
-                Ok(()) => "track ended".to_string(),
-                Err(e) => format!("track error: {e}"),
-            }
-        };
-
-        messages::send_track_ended(&mut self.env, self.pid, self.token, reason);
-    }
-
-    async fn pump_track(&mut self) -> anyhow::Result<()> {
+    pub(super) async fn run(mut self) -> anyhow::Result<()> {
         let track = &self.track;
 
         let wire = moq_mux::catalog::hang::Container::try_from(&self.container)

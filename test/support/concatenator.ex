@@ -57,12 +57,12 @@ defmodule Membrane.MoQ.Test.Concatenator do
 
   # Relay downstream demand to the active input only; inactive inputs stay idle.
   @impl true
-  def handle_demand(:output, size, :buffers, _ctx, %{order: [active | _]} = state) do
+  def handle_demand(:output, size, :buffers, _ctx, %{order: [active | _rest]} = state) do
     {[demand: {active, size}], state}
   end
 
   @impl true
-  def handle_stream_format(pad, format, _ctx, %{order: [pad | _]} = state) do
+  def handle_stream_format(pad, format, _ctx, %{order: [pad | _rest]} = state) do
     {[stream_format: {:output, format}], state}
   end
 
@@ -72,7 +72,7 @@ defmodule Membrane.MoQ.Test.Concatenator do
   end
 
   @impl true
-  def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, %{order: [pad | _]} = state) do
+  def handle_buffer(pad, %Membrane.Buffer{} = buffer, _ctx, %{order: [pad | _rest]} = state) do
     pts = buffer.pts + state.offset
     delta = pts - state.last_pts
     frame_dur = if delta > 0, do: delta, else: state.frame_dur
@@ -89,7 +89,7 @@ defmodule Membrane.MoQ.Test.Concatenator do
         Membrane.Logger.info("Concatenator: last input #{inspect(pad)} done, forwarding EOS")
         {[end_of_stream: :output], state}
 
-      [next | _] = order ->
+      [next | _rest] = order ->
         Membrane.Logger.info("Concatenator: switching #{inspect(pad)} -> #{inspect(next)}")
         state = %{state | order: order, offset: state.last_pts + state.frame_dur}
 

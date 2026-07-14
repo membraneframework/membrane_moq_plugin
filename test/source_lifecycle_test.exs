@@ -116,6 +116,54 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     )
 
     assert_end_of_stream(receiver, :late_sink, :input, 10_000)
+
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
+  # These two inject the message the native layer sends when a pump task
+  # panics; the first pad's subscription deterministically gets token 0.
+  test ":moq_track_error for a live subscription sends EOS without killing the source", %{
+    relay: relay,
+    broadcast: broadcast
+  } do
+    publisher = start_publisher!(relay, broadcast)
+
+    receiver = start_receiver!(relay, broadcast)
+    ref = Process.monitor(receiver)
+
+    assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 15_000)
+
+    source_pid = Testing.Pipeline.get_child_pid!(receiver, :source)
+    send(source_pid, {:moq_track_error, 0, "injected pump panic"})
+
+    # The failed subscription's pad gets EOS, and the source stays alive.
+    assert_end_of_stream(receiver, :sink, :input, 10_000)
+    refute_receive {:DOWN, ^ref, :process, ^receiver, _reason}, 500
+
+    :ok = Membrane.Pipeline.terminate(publisher)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
+  test ":moq_track_error for an unknown token is dropped without killing the source", %{
+    relay: relay,
+    broadcast: broadcast
+  } do
+    publisher = start_publisher!(relay, broadcast)
+
+    receiver = start_unlinked_receiver!(relay, broadcast)
+    ref = Process.monitor(receiver)
+
+    assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 15_000)
+
+    source_pid = Testing.Pipeline.get_child_pid!(receiver, :source)
+    send(source_pid, {:moq_track_error, 999, "stale subscription"})
+
+    refute_receive {:DOWN, ^ref, :process, ^receiver, _reason}, 500
+    # The source keeps delivering after ignoring the stale message.
+    assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
+
+    :ok = Membrane.Pipeline.terminate(publisher)
+    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   defp start_publisher!(relay, broadcast, opts \\ []) do
@@ -141,6 +189,22 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
   defp start_receiver!(relay, broadcast) do
     Testing.Pipeline.start_link_supervised!(
+      spec:
+        child(:source, %Membrane.MoQ.Source{
+          url: relay.url,
+          broadcast: broadcast,
+          disable_tls_verify?: relay.disable_tls_verify?,
+          latency: Membrane.Time.milliseconds(200)
+        })
+        |> via_out(Pad.ref(:output, :video), options: [track: @track])
+        |> child(:sink, Testing.Sink)
+    )
+  end
+
+  # Like start_receiver!, but not linked to the test process, so an expected
+  # element crash can be observed via a monitor instead of killing the test.
+  defp start_unlinked_receiver!(relay, broadcast) do
+    Testing.Pipeline.start_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
           url: relay.url,

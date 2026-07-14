@@ -261,10 +261,21 @@ defmodule Membrane.MoQ.Source do
   end
 
   def handle_info({:moq_track_error, token, reason}, ctx, state) do
-    pad = BiMap.get(state.tokens, token)
-    track = if pad != nil, do: ctx.pads[pad].options.track
+    # NOTE: should we bubble this up as a parent notif?
+    case active_pad(ctx, state, token) do
+      nil ->
+        {[], state}
 
-    raise "MoQ subscription for track #{inspect(track)} failed: #{inspect(reason)}"
+      pad ->
+        track = ctx.pads[pad].options.track
+
+        Membrane.Logger.warning("""
+        MoQ subscription for track #{inspect(track)} failed, sending EOS.
+        reason: #{inspect(reason)}
+        """)
+
+        {[end_of_stream: pad], state}
+    end
   end
 
   def handle_info({:moq_setup_failed, reason}, _ctx, _state) do

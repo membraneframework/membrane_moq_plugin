@@ -1,8 +1,11 @@
+mod pump;
+mod subscriptions;
+
 use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use tokio::task::{AbortHandle, JoinError, JoinSet};
+use tokio::task::JoinError;
 
 use rustler::{Atom, LocalPid, OwnedEnv, Resource, ResourceArc};
 
@@ -12,6 +15,9 @@ use crate::messages::{self, Token};
 use crate::session::SessionResource;
 use crate::track_format::{audio_params, video_params, TrackParams};
 use crate::{atoms, lock_ignoring_poison, runtime};
+
+use pump::Pump;
+use subscriptions::Subscriptions;
 
 enum Command {
     Subscribe {
@@ -38,117 +44,6 @@ struct Rendition {
 }
 
 type CatalogSnapshot = HashMap<String, Rendition>;
-
-struct PumpGuard(AbortHandle);
-
-impl PumpGuard {
-    fn task_id(&self) -> tokio::task::Id {
-        self.0.id()
-    }
-}
-
-impl Drop for PumpGuard {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-struct Sub {
-    track: String,
-    priority: u8,
-    /// `None` until the track is announced in the catalog and a pump is spawned.
-    pump: Option<PumpGuard>,
-}
-
-struct Subscriptions {
-    subs: HashMap<Token, Sub>,
-    /// mapping from spawned task to subscription token.
-    /// gracefully terminated tasks remove their entry from here,
-    /// while abnormally terminated tasks don't.
-    by_task: HashMap<tokio::task::Id, Token>,
-    pumps: JoinSet<()>,
-}
-
-impl Subscriptions {
-    fn new() -> Self {
-        Self {
-            subs: HashMap::new(),
-            by_task: HashMap::new(),
-            pumps: JoinSet::new(),
-        }
-    }
-
-    fn insert_pending(&mut self, token: Token, track: String, priority: u8) {
-        self.remove(token);
-        let sub = Sub {
-            track,
-            priority,
-            pump: None,
-        };
-        self.subs.insert(token, sub);
-    }
-
-    fn insert_active(&mut self, token: Token, track: String, priority: u8, pump: Pump) {
-        self.remove(token);
-        let abort_handle = self.pumps.spawn(pump.run());
-        self.by_task.insert(abort_handle.id(), token);
-        let sub = Sub {
-            track,
-            priority,
-            pump: Some(PumpGuard(abort_handle)),
-        };
-        self.subs.insert(token, sub);
-    }
-
-    fn remove(&mut self, token: Token) {
-        self.subs
-            .remove(&token)
-            .and_then(|sub| sub.pump)
-            .inspect(|pump| {
-                self.by_task.remove(&pump.task_id());
-            });
-    }
-
-    /// Routes a finished pump task back to its subscription and forgets both.
-    /// Returns `None` for tasks aborted through `remove`.
-    fn reap(&mut self, id: tokio::task::Id) -> Option<Token> {
-        let token = self.by_task.remove(&id)?;
-        self.subs.remove(&token);
-        Some(token)
-    }
-
-    fn remove_active_where(&mut self, mut pred: impl FnMut(&str) -> bool) -> Vec<Token> {
-        let Self { subs, by_task, .. } = self;
-        subs.extract_if(|_, sub| sub.pump.is_some() && pred(&sub.track))
-            .map(|(token, sub)| {
-                let Some(pump) = sub.pump else { unreachable!() };
-                by_task.remove(&pump.task_id());
-                token
-            })
-            .collect()
-    }
-
-    fn drain_resolved<'r>(
-        &mut self,
-        renditions: &'r CatalogSnapshot,
-    ) -> Vec<(Token, String, u8, &'r Rendition)> {
-        self.subs
-            .extract_if(|_, sub| sub.pump.is_none() && renditions.contains_key(sub.track.as_str()))
-            .map(|(token, sub)| {
-                let rendition = &renditions[&sub.track];
-                (token, sub.track, sub.priority, rendition)
-            })
-            .collect()
-    }
-
-    fn has_pumps(&self) -> bool {
-        !self.pumps.is_empty()
-    }
-
-    async fn join_next(&mut self) -> Option<Result<(tokio::task::Id, ()), JoinError>> {
-        self.pumps.join_next_with_id().await
-    }
-}
 
 struct ConsumerState {
     renditions: CatalogSnapshot,
@@ -418,65 +313,6 @@ fn update_catalog(
     Ok(new_catalog)
 }
 
-/// Everything one track subscription needs to pump its frames to Elixir.
-struct Pump {
-    broadcast: moq_net::BroadcastConsumer,
-    track: String,
-    container: hang::catalog::Container,
-    token: Token,
-    priority: u8,
-    pid: LocalPid,
-    latency: Duration,
-    env: OwnedEnv,
-}
-
-impl Pump {
-    fn new(ctx: &Ctx, track: String, rendition: &Rendition, token: Token, priority: u8) -> Self {
-        Self {
-            broadcast: ctx.broadcast.clone(),
-            track,
-            container: rendition.container.clone(),
-            token,
-            priority,
-            pid: ctx.pid,
-            latency: ctx.latency,
-            env: OwnedEnv::new(),
-        }
-    }
-
-    async fn run(mut self) {
-        let reason = tokio::select! {
-            result = self.pump_track() => match result {
-                Ok(()) => "track ended".to_string(),
-                Err(e) => format!("track error: {e}"),
-            }
-        };
-
-        messages::send_track_ended(&mut self.env, self.pid, self.token, reason);
-    }
-
-    async fn pump_track(&mut self) -> anyhow::Result<()> {
-        let track = &self.track;
-
-        let wire = moq_mux::catalog::hang::Container::try_from(&self.container)
-            .map_err(|e| anyhow::anyhow!("unsupported container on track {track}: {e}"))?;
-
-        let track_ref = moq_net::Track {
-            name: track.clone(),
-            priority: self.priority,
-        };
-        let track_consumer = self
-            .broadcast
-            .subscribe_track(&track_ref)
-            .map_err(|e| anyhow::anyhow!("subscribe_track({track}) failed: {e}"))?;
-
-        let mut consumer =
-            moq_mux::container::Consumer::new(track_consumer, wire).with_latency(self.latency);
-
-        pump_frames(&mut consumer, self.token, self.pid, &mut self.env).await
-    }
-}
-
 fn subscribe_catalog(
     broadcast: &moq_net::BroadcastConsumer,
 ) -> anyhow::Result<moq_mux::catalog::hang::Consumer<()>> {
@@ -503,26 +339,4 @@ fn catalog_renditions(snapshot: &moq_mux::catalog::hang::Catalog) -> CatalogSnap
         renditions.insert(name.clone(), rendition);
     }
     renditions
-}
-
-async fn pump_frames(
-    consumer: &mut moq_mux::container::Consumer<moq_mux::catalog::hang::Container>,
-    token: Token,
-    pid: LocalPid,
-    env: &mut OwnedEnv,
-) -> anyhow::Result<()> {
-    while let Some(frame) = consumer.read().await? {
-        let timestamp_ns = frame.timestamp.as_nanos() as u64;
-
-        messages::send_frame(
-            env,
-            pid,
-            token,
-            &frame.payload,
-            timestamp_ns,
-            frame.keyframe,
-        )
-        .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
-    }
-    Ok(())
 }

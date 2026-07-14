@@ -144,7 +144,8 @@ pub(crate) fn update_track(
 
     if resolved.kind() != track_res.kind {
         return Err(crate::nif_error!(
-            "cannot change a track's media kind in place"
+            "track {:?}: cannot change a track's media kind in place",
+            track_res.name
         ));
     }
 
@@ -202,7 +203,11 @@ pub(crate) fn send_frame(
         Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {
             Ok(atoms::missing_keyframe())
         }
-        Err(e) => Err(crate::nif_error!("writing frame failed: {e}")),
+        Err(e) => Err(crate::nif_error!(
+            "writing frame for track {0} failed: {1}",
+            track_res.name,
+            e
+        )),
     }
 }
 

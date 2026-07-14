@@ -182,25 +182,21 @@ defmodule Membrane.MoQ.Sink do
         nil ->
           priority = priority || default_priority(track_fmt)
 
-          case Native.add_track(
-                 producer,
-                 track_name,
-                 track_fmt,
-                 priority,
-                 state.container,
-                 Membrane.Time.as_nanoseconds(state.latency, :round)
-               ) do
-            {:ok, track_resource} ->
-              put_in(state.tracks[pad], track_resource)
-
-            error ->
-              error
+          with {:ok, track_resource} <-
+                 Native.add_track(
+                   producer,
+                   track_name,
+                   track_fmt,
+                   priority,
+                   state.container,
+                   Membrane.Time.as_nanoseconds(state.latency, :round)
+                 ) do
+            put_in(state.tracks[pad], track_resource)
           end
 
         _other ->
-          case Native.update_track(track_resource, track_fmt) do
-            :ok -> state
-            error -> error
+          with :ok <- Native.update_track(track_resource, track_fmt) do
+            state
           end
       end
       |> case do

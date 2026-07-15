@@ -164,11 +164,12 @@ defmodule Membrane.MoQ.Sink do
   def handle_stream_format(pad, fmt, ctx, state) do
     %{stream_format: old_format, options: options} = ctx.pads[pad]
 
-    state = case old_format do
-      ^fmt ->  state
-      nil ->  add_track(pad, fmt, options, state)
-      _changed ->  update_track(pad, fmt, state)
-    end
+    state =
+      case old_format do
+        ^fmt -> state
+        nil -> add_track(pad, fmt, options, state)
+        _changed -> update_track(pad, fmt, state)
+      end
 
     {[], state}
   end

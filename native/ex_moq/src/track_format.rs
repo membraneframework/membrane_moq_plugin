@@ -33,19 +33,16 @@ impl WireContainer<'_> {
         Ok(match self {
             Self::Legacy => moq_mux::catalog::hang::Container::Legacy,
             Self::Loc => moq_mux::catalog::hang::Container::Loc,
-            Self::Cmaf { init } => moq_mux::catalog::hang::Container::Cmaf(
-                moq_mux::container::fmp4::Wire::from_init(&Bytes::copy_from_slice(
-                    init.as_slice(),
-                ))?,
-            ),
+            Self::Cmaf { init } => {
+                moq_mux::catalog::hang::Container::Cmaf(moq_mux::container::fmp4::Wire::from_init(
+                    &Bytes::copy_from_slice(init.as_slice()),
+                )?)
+            }
         })
     }
 }
 
-pub(crate) fn encode_container<'a>(
-    env: Env<'a>,
-    container: &hang::catalog::Container,
-) -> Term<'a> {
+pub(crate) fn encode_container<'a>(env: Env<'a>, container: &hang::catalog::Container) -> Term<'a> {
     let container = match container {
         hang::catalog::Container::Legacy => WireContainer::Legacy,
         hang::catalog::Container::Loc => WireContainer::Loc,
@@ -231,11 +228,24 @@ fn h265_video_config(
 
 fn aac_audio_config(profile: u8, sample_rate: u32, channels: u32) -> hang::catalog::AudioConfig {
     let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
-    create_audio_config(codec, sample_rate, channels)
+    let mut config = hang::catalog::AudioConfig::new(codec, sample_rate, channels);
+
+    // WebCodecs-convention decoders treat a description-less mp4a.40.x rendition as ADTS;
+    // we publish raw AAC frames, so the AudioSpecificConfig must ride in the catalog.
+    config.description = Some(
+        moq_mux::codec::aac::Config {
+            profile,
+            sample_rate,
+            channel_count: channels,
+        }
+        .encode(),
+    );
+
+    config
 }
 
 fn opus_audio_config(sample_rate: u32, channels: u32) -> hang::catalog::AudioConfig {
-    create_audio_config(hang::catalog::AudioCodec::Opus, sample_rate, channels)
+    hang::catalog::AudioConfig::new(hang::catalog::AudioCodec::Opus, sample_rate, channels)
 }
 
 fn create_video_config(
@@ -252,14 +262,6 @@ fn create_video_config(
     config.framerate = framerate;
     config.optimize_for_latency = Some(true);
     config
-}
-
-fn create_audio_config(
-    codec: hang::catalog::AudioCodec,
-    sample_rate: u32,
-    channel_count: u32,
-) -> hang::catalog::AudioConfig {
-    hang::catalog::AudioConfig::new(codec, sample_rate, channel_count)
 }
 
 #[derive(Clone, PartialEq)]

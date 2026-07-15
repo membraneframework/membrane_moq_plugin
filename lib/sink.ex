@@ -5,8 +5,10 @@ defmodule Membrane.MoQ.Sink do
   Connects to a MoQ relay server and publishes audio and video tracks
   to a single, configured broadcast.
 
+  Tracks are advertised in both the hang and the IETF MSF catalog,
+  so hang-native and MSF-based consumers can subscribe alike.
   Pads can be added or removed at any time during the pipeline lifecycle.
-  The catalog is republished on every track add/remove and mid-stream format change.
+  The catalogs are republished on every track add/remove and mid-stream format change.
 
   Frames are encapsulated in the wire container selected with the `container` option
   and optionally batched with `latency`.

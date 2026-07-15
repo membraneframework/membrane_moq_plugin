@@ -13,8 +13,12 @@ The MoQ session, catalog and wire handling are implemented natively
 on top of the [moq](https://github.com/moq-dev/moq) Rust stack
 (`moq-native`, `moq-mux`, `hang`), bound via Rustler NIFs.
 
-Broadcasts use the [hang](https://doc.moq.dev/concept/layer/hang.html) catalog,
-so they interoperate with the `moq` CLI, moq-gst and the JS `@moq/hang` player.
+Published broadcasts advertise both the
+[hang](https://doc.moq.dev/concept/layer/hang.html) catalog and the IETF
+[MSF](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) catalog, so they
+interoperate with the `moq` CLI, moq-gst and the JS `@moq/hang` player as well
+as MSF-based consumers. Subscribing picks the catalog from the broadcast
+name's suffix (`.msf` → MSF, otherwise hang).
 
 Publishing encapsulates frames in the `:legacy` or `:loc` wire container.
 Consuming selects each track's container from the catalog automatically.

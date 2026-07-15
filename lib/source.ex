@@ -68,7 +68,9 @@ defmodule Membrane.MoQ.Source do
                 spec: String.t(),
                 description: """
                 Broadcast path to subscribe to,
-                see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology
+                see `Broadcast` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology.
+                A `.msf` suffix pulls track info from the MSF catalog,
+                and the default fallback is hang.
                 """
               ],
               disable_tls_verify?: [

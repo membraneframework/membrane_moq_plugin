@@ -1,4 +1,3 @@
-TODO: make this a livebook when separating to ex_moq
 # Rust bindings for MoQ publishing/subscribing
 
 ## Conceptual model
@@ -30,7 +29,8 @@ format =
      codec: %Native.H264Codec{inline: false, profile: 100, constraints: 0, level: 31}
    }}
 
-{:ok, video_track} = Native.add_track(broadcast, "my_video_track", format, _priority = 60)
+{:ok, video_track} =
+  Native.add_track(broadcast, "my_video_track", format, _priority = 60, :legacy, _latency_ns = 0)
 
 IO.puts("MoQ setup successful, you can start streaming frames to PID #{inspect(self())}")
 
@@ -58,7 +58,32 @@ end
 
 {:ok, consumer} = Native.create_broadcast_consumer(session, "my_broadcast", self(), latency_ns)
 
-Native.subscribe_track(consumer, "my_video_track", token, _priority = 60)
+{format, container} =
+  receive do
+    {:moq_catalog, "my_broadcast", renditions} ->
+      {"my_video_track", rendition} = List.keyfind!(renditions, "my_video_track", 0)
+      rendition
+  after
+    10_000 -> raise "broadcast was not announced"
+  end
 
-# TODO: add receiving snippet example here
+# `token` is any integer you choose; it tags this subscription's messages.
+:ok = Native.subscribe_track(consumer, "my_video_track", container, _token = 1, _priority = 60)
+
+Stream.repeatedly(fn ->
+  receive do
+    {:moq_frame, 1, payload, timestamp_ns, keyframe?} ->
+      handle_frame(payload, timestamp_ns, keyframe?)
+
+    {:moq_track_ended, 1} ->
+      IO.puts("track finished")
+
+    {:moq_track_error, 1, reason} ->
+      raise "subscription failed: #{reason}"
+
+    {:moq_broadcast_closed, "my_broadcast", reason} ->
+      raise "broadcast closed: #{reason}"
+  end
+end)
+|> Stream.run()
 ```

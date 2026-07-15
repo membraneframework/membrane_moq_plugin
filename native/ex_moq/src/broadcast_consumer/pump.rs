@@ -55,28 +55,20 @@ impl Pump {
         let mut consumer =
             moq_mux::container::Consumer::new(track_consumer, self.wire).with_latency(self.latency);
 
-        pump_frames(&mut consumer, self.token, self.pid, &mut self.env).await
-    }
-}
+        while let Some(frame) = consumer.read().await? {
+            let timestamp_ns = frame.timestamp.as_nanos() as u64;
 
-async fn pump_frames(
-    consumer: &mut moq_mux::container::Consumer<moq_mux::catalog::hang::Container>,
-    token: Token,
-    pid: LocalPid,
-    env: &mut OwnedEnv,
-) -> anyhow::Result<()> {
-    while let Some(frame) = consumer.read().await? {
-        let timestamp_ns = frame.timestamp.as_nanos() as u64;
+            messages::send_frame(
+                &mut self.env,
+                self.pid,
+                self.token,
+                &frame.payload,
+                timestamp_ns,
+                frame.keyframe,
+            )
+            .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
+        }
 
-        messages::send_frame(
-            env,
-            pid,
-            token,
-            &frame.payload,
-            timestamp_ns,
-            frame.keyframe,
-        )
-        .map_err(|_| anyhow::anyhow!("consumer pid is dead"))?;
+        Ok(())
     }
-    Ok(())
 }

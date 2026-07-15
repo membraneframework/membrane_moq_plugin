@@ -22,7 +22,7 @@ defmodule ExMoQ.Native do
   Wire container of a consumed track's frames,
   as advertised in the broadcast's catalog.
   """
-  @type wire_container :: :legacy | :loc | {:cmaf, %{init: binary()}}
+  @type wire_container :: :legacy | :loc | :unrecognized
 
   @type rendition :: {track_format(), wire_container()}
 

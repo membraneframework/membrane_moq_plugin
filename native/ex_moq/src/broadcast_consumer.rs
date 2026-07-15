@@ -84,9 +84,9 @@ pub(crate) fn subscribe_track(
     token: Token,
     priority: u8,
 ) -> NifResult<Atom> {
-    let wire = container
-        .resolve()
-        .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
+    let wire = container.resolve().ok_or_else(|| {
+        crate::nif_error!("cannot subscribe to a track with an unrecognized wire container")
+    })?;
 
     let _ = consumer.commands.send(Command::Subscribe {
         track,

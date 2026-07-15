@@ -20,25 +20,21 @@ impl ContainerKind {
 
 /// A consumed rendition's wire container as it crosses the NIF boundary,
 /// so a subscription can echo the catalog's choice back.
-#[derive(NifTaggedEnum)]
-pub(crate) enum WireContainer<'a> {
+#[derive(NifUnitEnum, Clone, Copy, PartialEq)]
+pub(crate) enum WireContainer {
     Legacy,
     Loc,
-    Cmaf { init: Binary<'a> },
+    Unrecognized,
 }
 
-impl WireContainer<'_> {
+impl WireContainer {
     /// Build the runtime-dispatched container the frame parser needs.
-    pub(crate) fn resolve(&self) -> Result<moq_mux::catalog::hang::Container, moq_mux::Error> {
-        Ok(match self {
-            Self::Legacy => moq_mux::catalog::hang::Container::Legacy,
-            Self::Loc => moq_mux::catalog::hang::Container::Loc,
-            Self::Cmaf { init } => {
-                moq_mux::catalog::hang::Container::Cmaf(moq_mux::container::fmp4::Wire::from_init(
-                    &Bytes::copy_from_slice(init.as_slice()),
-                )?)
-            }
-        })
+    pub(crate) const fn resolve(self) -> Option<moq_mux::catalog::hang::Container> {
+        match self {
+            Self::Legacy => Some(moq_mux::catalog::hang::Container::Legacy),
+            Self::Loc => Some(moq_mux::catalog::hang::Container::Loc),
+            Self::Unrecognized => None,
+        }
     }
 }
 
@@ -46,13 +42,7 @@ pub(crate) fn encode_container<'a>(env: Env<'a>, container: &hang::catalog::Cont
     let container = match container {
         hang::catalog::Container::Legacy => WireContainer::Legacy,
         hang::catalog::Container::Loc => WireContainer::Loc,
-        hang::catalog::Container::Cmaf { init, .. } => {
-            let mut binary = NewBinary::new(env, init.len());
-            binary.as_mut_slice().copy_from_slice(init);
-            WireContainer::Cmaf {
-                init: binary.into(),
-            }
-        }
+        _ => WireContainer::Unrecognized,
     };
     container.encode(env)
 }

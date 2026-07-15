@@ -178,12 +178,12 @@ defmodule ExMoQ.Native do
 
   Returns:
      * `:ok` when the write succeeds
-     * `:missing_keyframe` when the write failed because
+     * `:moq_missing_keyframe` when the write failed because
        a MoQ group hasn't opened yet and the frame is not a keyframe.
      * `{:error, reason}` when the write failed for another reason (e.g. track closed).
   """
   @spec send_frame(track(), non_neg_integer(), boolean(), binary()) ::
-          :ok | :missing_keyframe | {:error, reason :: String.t()}
+          :ok | :moq_missing_keyframe | {:error, reason :: String.t()}
   def send_frame(_track_res, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 

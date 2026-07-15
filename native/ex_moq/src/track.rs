@@ -202,7 +202,7 @@ pub(crate) fn send_frame(
     match result {
         Ok(()) => Ok(atoms::ok()),
         Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {
-            Ok(atoms::missing_keyframe())
+            Ok(atoms::moq_missing_keyframe())
         }
         Err(e) => Err(crate::nif_error!(
             "writing frame for track {0} failed: {1}",

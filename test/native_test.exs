@@ -55,7 +55,7 @@ defmodule ExMoQ.NativeTest do
     :ok = Native.close_session(pub_session)
   end
 
-  test "send_frame before the first keyframe reports :missing_keyframe", %{
+  test "send_frame before the first keyframe reports :moq_missing_keyframe", %{
     broadcast: broadcast,
     relay: relay
   } do
@@ -65,7 +65,7 @@ defmodule ExMoQ.NativeTest do
     {:ok, producer} = Native.create_broadcast_producer(session, broadcast)
     {:ok, track} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
 
-    assert :missing_keyframe = Native.send_frame(track, 0, false, "delta before any group")
+    assert :moq_missing_keyframe = Native.send_frame(track, 0, false, "delta before any group")
     assert :ok = Native.send_frame(track, 0, true, "keyframe opens a group")
     assert :ok = Native.send_frame(track, 40_000_000, false, "delta within the group")
 

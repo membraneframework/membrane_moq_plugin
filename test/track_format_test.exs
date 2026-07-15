@@ -76,17 +76,20 @@ defmodule Membrane.MoQ.TrackFormatTest do
       assert TrackFormat.to_stream_format(native) == fmt
     end
 
-    test "an in-band track without a description gets a synthesized avcC" do
-      native =
-        {:h264,
-         %{
-           params: %{width: 1280, height: 720, framerate: 30.0},
-           description: <<>>,
-           codec: %{inline: true, profile: 100, constraints: 0, level: 31}
-         }}
+    # Upstream keys payload framing on description presence (WebCodecs semantics):
+    # no description means Annex B on the wire, whatever the inline flag says.
+    for inline <- [true, false] do
+      test "a track without a description (inline: #{inline}) maps to Annex B" do
+        native =
+          {:h264,
+           %{
+             params: %{width: 1280, height: 720, framerate: 30.0},
+             description: <<>>,
+             codec: %{inline: unquote(inline), profile: 100, constraints: 0, level: 31}
+           }}
 
-      assert %H264{stream_structure: {:avc3, dcr}} = TrackFormat.to_stream_format(native)
-      assert dcr == avcc(100, 0, 31)
+        assert %H264{stream_structure: :annexb} = TrackFormat.to_stream_format(native)
+      end
     end
 
     # The NIF decodes absent dimensions as nil; a remote catalog may still say 0.
@@ -156,6 +159,18 @@ defmodule Membrane.MoQ.TrackFormatTest do
          }}
 
       assert %H265{width: nil, height: nil} = TrackFormat.to_stream_format(native)
+    end
+
+    test "a track without a description maps to Annex B" do
+      native =
+        {:h265,
+         %{
+           params: %{width: 1280, height: 720, framerate: 30.0},
+           description: <<>>,
+           codec: %{in_band: true}
+         }}
+
+      assert %H265{stream_structure: :annexb} = TrackFormat.to_stream_format(native)
     end
 
     test "media_type/1 is :video" do

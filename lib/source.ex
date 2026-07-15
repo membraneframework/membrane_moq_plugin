@@ -24,7 +24,6 @@ defmodule Membrane.MoQ.Source do
   use Membrane.Source
 
   require Membrane.Logger
-  require Membrane.{H264, H265}
 
   alias ExMoQ.Native
   alias Membrane.MoQ.Source.Tracks
@@ -36,8 +35,8 @@ defmodule Membrane.MoQ.Source do
       any_of(
         Membrane.AAC,
         Membrane.Opus,
-        %Membrane.H264{stream_structure: ss} when Membrane.H264.is_avc(ss),
-        %Membrane.H265{stream_structure: ss} when Membrane.H265.is_hvc(ss),
+        Membrane.H264,
+        Membrane.H265,
         %Membrane.RemoteStream{type: :packetized}
       ),
     flow_control: :push,

@@ -109,14 +109,14 @@ defmodule Membrane.MoQ.TrackFormat do
          %{
            params: %{width: width, height: height, framerate: framerate},
            description: dcr,
-           codec: %{inline: inline} = codec
+           codec: %{inline: inline}
          }}
       ) do
     %H264{
       width: dimension(width),
       height: dimension(height),
       framerate: framerate(framerate),
-      stream_structure: {if(inline, do: :avc3, else: :avc1), h264_dcr(dcr, codec)}
+      stream_structure: h264_stream_structure(dcr, inline)
     }
   end
 
@@ -132,7 +132,7 @@ defmodule Membrane.MoQ.TrackFormat do
       width: dimension(width),
       height: dimension(height),
       framerate: framerate(framerate),
-      stream_structure: {if(in_band, do: :hev1, else: :hvc1), dcr}
+      stream_structure: h265_stream_structure(dcr, in_band)
     }
   end
 
@@ -163,15 +163,17 @@ defmodule Membrane.MoQ.TrackFormat do
   def buffer_metadata(keyframe?, %H265{}), do: %{h265: %{key_frame?: keyframe?}}
   def buffer_metadata(_keyframe?, _audio_format), do: %{}
 
-  @spec h264_dcr(binary(), map()) :: binary()
-  # hang allows an in-band (avc3) rendition to omit the catalog description.
-  # Membrane's avc3 still requires an avcC, so synthesise one from the codec fields.
-  defp h264_dcr(<<>>, %{inline: true, profile: profile, constraints: constraints, level: level}) do
-    <<1, profile, constraints, level, 0b111111::6, _length_size_minus_one = 3::2, 0b111::3,
-      _num_sps = 0::5, _num_pps = 0::8>>
-  end
+  # Payload framing follows upstream's WebCodecs-style convention: a rendition
+  # with a catalog description carries length-prefixed samples, one without
+  # carries Annex B with in-band parameter sets (regardless of the avc1/avc3
+  # flag, which only describes where the parameter sets live).
+  @spec h264_stream_structure(binary(), boolean()) :: H264.stream_structure()
+  defp h264_stream_structure(<<>>, _inline), do: :annexb
+  defp h264_stream_structure(dcr, inline), do: {if(inline, do: :avc3, else: :avc1), dcr}
 
-  defp h264_dcr(dcr, _codec), do: dcr
+  @spec h265_stream_structure(binary(), boolean()) :: H265.stream_structure()
+  defp h265_stream_structure(<<>>, _in_band), do: :annexb
+  defp h265_stream_structure(dcr, in_band), do: {if(in_band, do: :hev1, else: :hvc1), dcr}
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float() | nil
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,
@@ -183,7 +185,7 @@ defmodule Membrane.MoQ.TrackFormat do
   defp dimension(size) when is_integer(size) and size > 0, do: size
   defp dimension(_absent), do: nil
 
-  @spec framerate(float()) :: {pos_integer(), pos_integer()} | nil
+  @spec framerate(float() | nil) :: {pos_integer(), pos_integer()} | nil
   defp framerate(fps) when is_number(fps) and fps > 0 do
     fps
     |> Ratio.new()

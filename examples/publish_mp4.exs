@@ -34,10 +34,6 @@ defmodule Example do
 
   @input_url "https://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/big-buck-bunny/bun33s.mp4"
 
-  def start_link(broadcast) do
-    Membrane.Pipeline.start_link(__MODULE__, broadcast)
-  end
-
   @impl true
   def handle_init(_ctx, broadcast) do
     spec = [
@@ -81,10 +77,10 @@ defmodule Example do
   end
 end
 
-{:ok, _supervisor_pid, pipeline_pid} = Example.start_link(broadcast)
+{:ok, _supervisor_pid, pipeline_pid} = Membrane.Pipeline.start_link(Example, broadcast)
 ref = Process.monitor(pipeline_pid)
 
 receive do
-  {:DOWN, ^ref, :process, _pipeline_pid, _reason} ->
+  {:DOWN, ^ref, :process, ^pipeline_pid, _reason} ->
     :ok
 end

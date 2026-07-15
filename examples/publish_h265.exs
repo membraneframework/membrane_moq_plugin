@@ -26,14 +26,10 @@ Mix.install([
   {:membrane_h26x_plugin, "~> 0.10.7"}
 ])
 
-Logger.configure(level: :debug)
+Logger.configure(level: :info)
 
 defmodule Example do
   use Membrane.Pipeline
-
-  def start_link(broadcast) do
-    Membrane.Pipeline.start_link(__MODULE__, broadcast)
-  end
 
   @video_url "http://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/ffmpeg-testsrc.h265"
 
@@ -71,10 +67,10 @@ defmodule Example do
   end
 end
 
-{:ok, _supervisor_pid, pipeline_pid} = Example.start_link(broadcast)
+{:ok, _supervisor_pid, pipeline_pid} = Membrane.Pipeline.start_link(Example, broadcast)
 ref = Process.monitor(pipeline_pid)
 
 receive do
-  {:DOWN, ^ref, :process, _pipeline_pid, _reason} ->
+  {:DOWN, ^ref, :process, ^pipeline_pid, _reason} ->
     :ok
 end

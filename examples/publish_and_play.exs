@@ -2,17 +2,10 @@
 # `Membrane.MoQ.Sink`, then subscribes to the same broadcast with
 # `Membrane.MoQ.Source` and plays it back locally in an SDL window.
 #
-# This uses TWO separate pipelines on purpose:
+# This uses TWO separate pipelines:
 #
 #   Publisher: Hackney ─▶ H264.Parser(avc3) ─▶ Realtimer ─▶ MoQ.Sink
 #   Player:    MoQ.Source ─▶ H264.Parser(→annexb) ─▶ FFmpeg.Decoder ─▶ SDL
-#
-# They cannot share one pipeline: `MoQ.Source` keeps its setup `:incomplete`
-# until it discovers the published track in the catalog, but the track only
-# appears once the Sink publishes — which needs the pipeline `:playing`, which
-# in turn waits for every element (including the Source) to finish setup. In one
-# pipeline that is a deadlock. As two pipelines the publisher reaches `:playing`
-# and starts publishing on its own, and the player's Source then completes setup.
 #
 # Two further details make the playback half work:
 #
@@ -25,9 +18,6 @@
 #     stream structure (length-prefixed AVCC payloads). The player's `H264.Parser`
 #     re-emits them as Annex B, which is what `Membrane.H264.FFmpeg.Decoder`
 #     accepts.
-#
-# The publish side is paced with `Membrane.Realtimer` so the broadcast stays live
-# long enough for the subscriber to join and keep up.
 #
 # Prerequisites:
 #   - A MoQ relay running at https://localhost:4443 (e.g. moq-relay)
@@ -61,7 +51,7 @@ broadcast =
   end
 
 Mix.install([
-  {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand(), override: true},
+  {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_realtimer_plugin, "~> 0.11.0"},
   {:membrane_hackney_plugin, "~> 0.11.1"},
   {:membrane_h26x_plugin, "~> 0.10.7"},
@@ -75,8 +65,6 @@ defmodule Publisher do
   use Membrane.Pipeline
 
   @video_url "https://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/big-buck-bunny/bun33s_720x480.h264"
-
-  def start_link(opts), do: Membrane.Pipeline.start_link(__MODULE__, opts)
 
   @impl true
   def handle_init(_ctx, opts) do
@@ -111,8 +99,6 @@ end
 
 defmodule Player do
   use Membrane.Pipeline
-
-  def start_link(opts), do: Membrane.Pipeline.start_link(__MODULE__, opts)
 
   @impl true
   def handle_init(_ctx, opts) do
@@ -153,17 +139,13 @@ end
 
 opts = [url: "https://localhost:4443/anon", broadcast: broadcast, track: "video"]
 
-# Start the publisher first and give it a moment to establish the broadcast and
-# begin publishing, so the player's Source subscribes to a catalog that is
-# already serving the video rendition.
-{:ok, _pub_sup, publisher} = Publisher.start_link(opts)
-Process.sleep(1_000)
-{:ok, _play_sup, player} = Player.start_link(opts)
+{:ok, _pub_sup, publisher} = Membrane.Pipeline.start_link(Publisher, opts)
+{:ok, _play_sup, player} = Membrane.Pipeline.start_link(Player, opts)
 
 # Exit when playback finishes (or the window is closed), then stop the publisher.
 ref = Process.monitor(player)
 
 receive do
-  {:DOWN, ^ref, :process, _pid, _reason} ->
+  {:DOWN, ^ref, :process, ^player, _reason} ->
     Membrane.Pipeline.terminate(publisher)
 end

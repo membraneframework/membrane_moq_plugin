@@ -54,6 +54,28 @@ defmodule Membrane.MoQ.IntegrationTest do
     :ok = Membrane.Pipeline.terminate(receiver)
   end
 
+  test "a .msf broadcast name selects the MSF catalog for the Source", %{
+    broadcast: broadcast,
+    relay: relay
+  } do
+    broadcast = broadcast <> ".msf"
+    receiver = start_receiver!(relay, broadcast)
+    sender = start_sender!(relay, broadcast)
+    await_source_connected!(receiver)
+
+    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
+    expected_payloads = drain_payloads(sender, :expected_sink)
+    assert expected_payloads != []
+
+    assert_end_of_stream(receiver, :sink, :input, 30_000)
+    received_payloads = drain_payloads(receiver, :sink)
+
+    assert received_payloads == expected_payloads
+
+    :ok = Membrane.Pipeline.terminate(sender)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
   test "avc3 frames (in-band parameter sets) round-trip unchanged through the Source", %{
     broadcast: broadcast,
     relay: relay

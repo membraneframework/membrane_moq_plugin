@@ -205,6 +205,11 @@ defmodule ExMoQ.Native do
   Each one independently waits for its broadcast to be announced.
   Subscribe to individual tracks with `subscribe_track/5`.
 
+  The catalog format is detected from the broadcast name's filename-style suffix:
+    * `.msf`  -> MSF
+    * `.hang` -> hang
+    * default -> hang
+
   `latency_ns` is how long each track buffers received frames before emitting
   them, in nanoseconds, trading delay for resilience to jitter and reordering.
 

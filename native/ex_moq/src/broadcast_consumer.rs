@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use rustler::{Atom, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
 
 use hang::moq_net;
+use moq_mux::catalog::Stream as _;
 
 use crate::messages::{self, Token};
 use crate::session::SessionResource;
@@ -140,7 +141,7 @@ async fn run_broadcast(
         _ = shutdown_rx.recv() => return,
     };
 
-    let mut catalog = match subscribe_catalog(&broadcast) {
+    let mut catalog = match subscribe_catalog(&path, &broadcast) {
         Ok(catalog) => catalog,
         Err(e) => {
             messages::send_broadcast_closed(&mut env, pid, &path, e.to_string());
@@ -194,10 +195,11 @@ async fn run_broadcast(
 }
 
 fn subscribe_catalog(
+    path: &str,
     broadcast: &moq_net::BroadcastConsumer,
-) -> anyhow::Result<moq_mux::catalog::hang::Consumer<()>> {
-    let catalog_track = broadcast
-        .subscribe_track(&hang::Catalog::default_track())
-        .map_err(|e| anyhow::anyhow!("subscribe_track(catalog) failed: {e}"))?;
-    Ok(moq_mux::catalog::hang::Consumer::<()>::new(catalog_track))
+) -> anyhow::Result<moq_mux::catalog::Consumer<()>> {
+    let format = moq_mux::catalog::CatalogFormat::detect(path)
+        .unwrap_or(moq_mux::catalog::CatalogFormat::DEFAULT);
+    moq_mux::catalog::Consumer::<()>::new(broadcast, format)
+        .map_err(|e| anyhow::anyhow!("catalog subscribe ({format:?}) failed: {e}"))
 }

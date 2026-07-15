@@ -8,8 +8,8 @@ defmodule Membrane.MoQ.TrackFormat do
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
 
   @doc """
-  Build the native track-format term the Sink publishes from a Membrane stream
-  format.
+  Build the native track-format term the Sink publishes
+  from a Membrane stream format.
   """
   @spec from_stream_format(Membrane.StreamFormat.t()) :: Native.track_format()
   def from_stream_format(%H264{

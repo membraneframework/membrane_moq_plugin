@@ -188,8 +188,8 @@ defmodule ExMoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Closes the track, removing its rendition from the catalog and finishing the
-  underlying moq-lite track. Idempotent.
+  Closes the track, removing its rendition from the catalog
+  and finishing the underlying moq-lite track. Idempotent.
 
   A track resource that is garbage-collected without an explicit remove
   is retired the same way.

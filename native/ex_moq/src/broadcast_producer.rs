@@ -8,8 +8,8 @@ use crate::{atoms, lock_ignoring_poison, runtime, session::SessionResource, trac
 pub(crate) struct ProducerInner {
     pub(crate) broadcast: moq_net::BroadcastProducer,
     pub(crate) catalog: moq_mux::catalog::Producer,
-    /// Weak handles to the live wire producers, so closing the broadcast can
-    /// finish them without keeping them alive. Compacted on `add_track`.
+    /// Weak handles to the live wire producers,
+    /// so closing the broadcast can finish them without keeping them alive.
     pub(crate) tracks: Vec<Weak<Mutex<WireProducer>>>,
 }
 

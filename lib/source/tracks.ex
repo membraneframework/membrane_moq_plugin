@@ -14,7 +14,7 @@ defmodule Membrane.MoQ.Source.Tracks do
 
   @type t :: %__MODULE__{
           next_token: token(),
-          tokens: BiMap.t(),
+          tokens: BiMap.t(String.t(), token()),
           active: MapSet.t(token()),
           renditions: %{String.t() => Native.rendition()}
         }

@@ -53,8 +53,6 @@ pub(crate) fn create_broadcast_consumer(
 ) -> (Atom, ResourceArc<BroadcastConsumerResource>) {
     let latency = Duration::from_nanos(latency_ns);
 
-    // A clone with its own announcement cursor, so each broadcast consumer
-    // awaits its broadcast independently of any sibling consumers.
     let origin = lock_ignoring_poison(&session.consume).consume();
 
     let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();

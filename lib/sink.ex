@@ -44,7 +44,8 @@ defmodule Membrane.MoQ.Sink do
         spec: String.t(),
         description: """
         Track name for this pad's stream,
-        see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology.
+        this will be the track name advertised by the hang/MSF catalog.
+        See `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology.
         """
       ],
       priority: [

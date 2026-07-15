@@ -41,7 +41,7 @@ defmodule Membrane.MoQ.Sink do
       ),
     options: [
       track: [
-        spec: String.t(),
+        spec: ExMoQ.Native.track(),
         description: """
         Track name for this pad's stream,
         this will be the track name advertised by the hang/MSF catalog.
@@ -105,7 +105,7 @@ defmodule Membrane.MoQ.Sink do
             session: Native.session() | nil,
             broadcast: String.t(),
             producer: Native.broadcast_producer() | nil,
-            tracks: %{Membrane.Pad.ref() => Native.track()}
+            tracks: %{Membrane.Pad.ref() => Native.track_resource()}
           }
 
     @enforce_keys [:url, :broadcast, :container, :latency, :disable_tls_verify?]

@@ -9,11 +9,11 @@ defmodule Membrane.MoQ.Source do
 
   #{__MODULE__} watches the broadcast catalog and notifies its parent about track changes:
 
-    * `{:new_track, {track :: String.t(), stream_format :: struct()}}`
+    * `{:new_track, {track :: ExMoQ.Native.track(), stream_format :: struct()}}`
         when a track is advertised. `track` is the catalog rendition key to pass
         as the `:track` option of an output pad; `stream_format` is the format
         the pad will start with.
-    * `{:track_removed, track :: String.t()}`
+    * `{:track_removed, track :: ExMoQ.Native.track()}`
         when an advertised track disappears from the catalog (e.g. the publisher ended it).
     * A track whose codec parameters change mid-broadcast is reported as a `:track_removed`,
         followed by a `:new_track`, so a stale pad can be torn down and re-wired against the new format.
@@ -42,7 +42,7 @@ defmodule Membrane.MoQ.Source do
     flow_control: :push,
     options: [
       track: [
-        spec: String.t(),
+        spec: ExMoQ.Native.track(),
         description: """
         Catalog rendition key within the broadcast to subscribe to on this pad,
         see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology

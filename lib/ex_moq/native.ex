@@ -4,10 +4,16 @@ defmodule ExMoQ.Native do
   """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "ex_moq"
 
-  @type track :: reference()
+  @type track_resource :: reference()
   @type session :: reference()
   @type broadcast_producer :: reference()
   @type broadcast_consumer :: reference()
+
+  @typedoc """
+  Name of a track within a broadcast,
+  see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology.
+  """
+  @type track :: String.t()
 
   @typedoc "Wire container a published track's frames are encapsulated in."
   @type container :: :legacy | :loc
@@ -147,12 +153,12 @@ defmodule ExMoQ.Native do
   """
   @spec add_track(
           broadcast_producer(),
-          String.t(),
+          track(),
           track_format(),
           0..255,
           container(),
           non_neg_integer()
-        ) :: {:ok, track()} | {:error, reason :: String.t()}
+        ) :: {:ok, track_resource()} | {:error, reason :: String.t()}
   def add_track(_broadcast_producer, _track, _format, _priority, _container, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -164,7 +170,7 @@ defmodule ExMoQ.Native do
 
   The track's media kind (audio/video) cannot change.
   """
-  @spec update_track(track(), track_format()) :: :ok | {:error, reason :: String.t()}
+  @spec update_track(track_resource(), track_format()) :: :ok | {:error, reason :: String.t()}
   def update_track(_track_res, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -182,7 +188,7 @@ defmodule ExMoQ.Native do
        a MoQ group hasn't opened yet and the frame is not a keyframe.
      * `{:error, reason}` when the write failed for another reason (e.g. track closed).
   """
-  @spec send_frame(track(), non_neg_integer(), boolean(), binary()) ::
+  @spec send_frame(track_resource(), non_neg_integer(), boolean(), binary()) ::
           :ok | :moq_missing_keyframe | {:error, reason :: String.t()}
   def send_frame(_track_res, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -194,7 +200,7 @@ defmodule ExMoQ.Native do
   A track resource that is garbage-collected without an explicit remove
   is retired the same way.
   """
-  @spec remove_track(track()) :: :ok
+  @spec remove_track(track_resource()) :: :ok
   def remove_track(_track_res),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -219,7 +225,7 @@ defmodule ExMoQ.Native do
     * `{:moq_broadcast_closed, path :: String.t(), reason :: String.t()}`
         when the broadcast ends, errors, or the session closes underneath it
     * `{:moq_catalog, path :: String.t(),
-          renditions :: [{name :: String.t(), rendition()}]}`
+          renditions :: [{track(), rendition()}]}`
         with the full catalog snapshot, once the broadcast is announced
         and again on every catalog update.
         Diffing consecutive snapshots is the caller's job:
@@ -255,7 +261,7 @@ defmodule ExMoQ.Native do
       when the subscription fails on the native side
       while the track may still be advertised in the catalog
   """
-  @spec subscribe_track(broadcast_consumer(), String.t(), wire_container(), integer(), 0..255) ::
+  @spec subscribe_track(broadcast_consumer(), track(), wire_container(), integer(), 0..255) ::
           :ok | {:error, reason :: String.t()}
   def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)

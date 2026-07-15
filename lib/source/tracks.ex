@@ -6,17 +6,17 @@ defmodule Membrane.MoQ.Source.Tracks do
   @type token :: integer()
 
   @type snapshot_diff :: %{
-          removed: [String.t()],
-          added: [String.t()],
-          changed: [String.t()],
+          removed: [Native.track()],
+          added: [Native.track()],
+          changed: [Native.track()],
           ended: [{token(), Membrane.Pad.ref()}]
         }
 
   @type t :: %__MODULE__{
           next_token: token(),
-          tokens: BiMap.t(String.t(), token()),
+          tokens: BiMap.t(token(), Membrane.Pad.ref()),
           active: MapSet.t(token()),
-          renditions: %{String.t() => Native.rendition()}
+          renditions: %{Native.track() => Native.rendition()}
         }
 
   defstruct next_token: 0,
@@ -42,7 +42,7 @@ defmodule Membrane.MoQ.Source.Tracks do
   @spec pad_for(t(), token()) :: Membrane.Pad.ref() | nil
   def pad_for(tracks, token), do: BiMap.get(tracks.tokens, token)
 
-  @spec rendition(t(), String.t()) :: Native.rendition() | nil
+  @spec rendition(t(), Native.track()) :: Native.rendition() | nil
   def rendition(tracks, track), do: tracks.renditions[track]
 
   @spec waiting(t()) :: [{token(), Membrane.Pad.ref()}]
@@ -64,8 +64,8 @@ defmodule Membrane.MoQ.Source.Tracks do
 
   @spec apply_snapshot(
           t(),
-          [{String.t(), Native.rendition()}],
-          (Membrane.Pad.ref() -> String.t())
+          [{Native.track(), Native.rendition()}],
+          (Membrane.Pad.ref() -> Native.track())
         ) :: {snapshot_diff(), t()}
   def apply_snapshot(tracks, renditions, track_of) do
     new_renditions = Map.new(renditions)
@@ -86,8 +86,8 @@ defmodule Membrane.MoQ.Source.Tracks do
   end
 
   @spec diff(renditions, renditions) ::
-          {removed :: [String.t()], added :: [String.t()], changed :: [String.t()]}
-        when renditions: %{String.t() => Native.rendition()}
+          {removed :: [Native.track()], added :: [Native.track()], changed :: [Native.track()]}
+        when renditions: %{Native.track() => Native.rendition()}
   defp diff(old, new) do
     removed = for {name, _rendition} <- old, not is_map_key(new, name), do: name
     added = for {name, _rendition} <- new, not is_map_key(old, name), do: name

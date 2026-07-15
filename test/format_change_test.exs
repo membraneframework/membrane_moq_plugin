@@ -1,7 +1,6 @@
 defmodule Membrane.MoQ.FormatChangeTest do
   @moduledoc """
-  Mid-stream stream-format changes on a single Sink pad,
-  observed through MoQ.Source. Covers `ExMoQ.Native.update_track/2`.
+  Mid-stream stream-format changes on a single Sink pad, observed through MoQ.Source.
   """
 
   use ExUnit.Case, async: true
@@ -28,15 +27,6 @@ defmodule Membrane.MoQ.FormatChangeTest do
     [broadcast: "membrane/format-change-#{System.unique_integer([:positive])}"]
   end
 
-  # One Sink pad is fed three fixtures back to back through the Concatenator:
-  #
-  #   1. H264 1280x720 @ 25fps
-  #   2. H264  640x360 @ 30fps   <- soft switch: same codec, different params
-  #   3. H265 1280x720 @ 25fps   <- switch from H264 to H265
-  #
-  # Each format change replaces the catalog rendition in place under the same track name,
-  # so the Source must report `:track_removed` + `:new_track`
-  # for that name and the receiver re-links a fresh pad per rendition.
   for container <- [:legacy, :loc] do
     test "three formats through one Sink pad arrive as three consecutive renditions (#{container})",
          %{
@@ -46,7 +36,6 @@ defmodule Membrane.MoQ.FormatChangeTest do
       receiver = start_receiver!(relay, broadcast)
       publisher = start_publisher!(relay, broadcast, unquote(container), format_change_inputs())
 
-      # 1st rendition
       assert_pipeline_notified(
         receiver,
         :source,
@@ -64,9 +53,7 @@ defmodule Membrane.MoQ.FormatChangeTest do
       assert_sink_buffer(receiver, {:sink, 1}, %Membrane.Buffer{}, 10_000)
 
       assert_pipeline_notified(receiver, :source, {:track_removed, @track}, 15_000)
-      # 1st rendition end
 
-      # 2nd rendition
       assert_pipeline_notified(
         receiver,
         :source,
@@ -83,9 +70,7 @@ defmodule Membrane.MoQ.FormatChangeTest do
       assert_sink_buffer(receiver, {:sink, 2}, %Membrane.Buffer{}, 10_000)
 
       assert_pipeline_notified(receiver, :source, {:track_removed, @track}, 15_000)
-      # 2nd rendition end
 
-      # 3rd rendition
       assert_pipeline_notified(
         receiver,
         :source,
@@ -107,7 +92,6 @@ defmodule Membrane.MoQ.FormatChangeTest do
       assert_end_of_stream(publisher, :sink, Pad.ref(:input, :video), 20_000)
 
       assert_pipeline_notified(receiver, :source, {:track_removed, @track}, 15_000)
-      # 3rd rendition end
 
       assert_end_of_stream(receiver, {:sink, 3}, :input, 10_000)
 

@@ -7,18 +7,6 @@
 #   Publisher: Hackney ─▶ H264.Parser(avc3) ─▶ Realtimer ─▶ MoQ.Sink
 #   Player:    MoQ.Source ─▶ H264.Parser(→annexb) ─▶ FFmpeg.Decoder ─▶ SDL
 #
-# Two further details make the playback half work:
-#
-#   * The stream is published as `:avc3` (not `:avc1`). `MoQ.Source` surfaces the
-#     catalog's H.264 config, but here that is a minimal avc3 decoder record with
-#     no parameter sets, so the SPS/PPS must travel in-band. `:avc3` keeps them in
-#     the bitstream; `:avc1` would move them into the DCR and the receiver would
-#     have nothing to configure the decoder with.
-#   * `MoQ.Source` emits the access units as `Membrane.H264` with an `:avc3`
-#     stream structure (length-prefixed AVCC payloads). The player's `H264.Parser`
-#     re-emits them as Annex B, which is what `Membrane.H264.FFmpeg.Decoder`
-#     accepts.
-#
 # Prerequisites:
 #   - A MoQ relay running at https://localhost:4443 (e.g. moq-relay)
 #   - ffmpeg + SDL available for the decoder/player plugins
@@ -129,7 +117,6 @@ defmodule Player do
     {[spec: spec], %{}}
   end
 
-  # Tear the pipeline down once the playback window has shown the last frame.
   @impl true
   def handle_element_end_of_stream(:player, _pad, _ctx, state), do: {[terminate: :normal], state}
 
@@ -142,7 +129,6 @@ opts = [url: "https://localhost:4443/anon", broadcast: broadcast, track: "video"
 {:ok, _pub_sup, publisher} = Membrane.Pipeline.start_link(Publisher, opts)
 {:ok, _play_sup, player} = Membrane.Pipeline.start_link(Player, opts)
 
-# Exit when playback finishes (or the window is closed), then stop the publisher.
 ref = Process.monitor(player)
 
 receive do

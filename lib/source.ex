@@ -327,8 +327,6 @@ defmodule Membrane.MoQ.Source do
     for {_token, pad} <- ended, not ctx.pads[pad].end_of_stream?, do: {:end_of_stream, pad}
   end
 
-  # Subscribes every waiting pad whose track the catalog advertises.
-  # Pads whose track is absent stay parked until a later catalog update.
   @spec subscribe_ready(map(), State.t()) :: {[Membrane.Element.Action.t()], State.t()}
   defp subscribe_ready(ctx, state),
     do:

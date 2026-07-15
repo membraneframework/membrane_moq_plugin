@@ -3,7 +3,7 @@ use hang::moq_net;
 use moq_native::ClientConfig;
 use rustler::{Atom, LocalPid, NifResult, OwnedEnv, ResourceArc};
 use std::sync::Mutex;
-use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 use url::Url;
 
 use crate::{atoms, messages, runtime};
@@ -11,10 +11,18 @@ use crate::{atoms, messages, runtime};
 pub(crate) struct SessionResource {
     pub(crate) publish: moq_net::OriginProducer,
     pub(crate) consume: Mutex<moq_net::OriginConsumer>,
-    shutdown: mpsc::UnboundedSender<()>,
+    /// The task owns the session, so aborting it drops the connection
+    /// and guarantees no further messages after a graceful close.
+    abort: AbortHandle,
 }
 
 impl rustler::Resource for SessionResource {}
+
+impl Drop for SessionResource {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
 
 #[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
@@ -31,30 +39,17 @@ pub(crate) fn create_session(
     let consumed = moq_net::Origin::random().produce();
     let consume = consumed.consume();
 
-    let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
-
-    runtime().spawn(async move {
-        let session = tokio::select! {
-            biased;
-            _ = shutdown_rx.recv() => return,
-            session = connect(url, published, consumed, disable_tls_verify) => session,
-        };
+    let task = runtime().spawn(async move {
         let mut env = OwnedEnv::new();
-        match session {
+        match connect(url, published, consumed, disable_tls_verify).await {
             Ok(session) => {
                 messages::send_connected(&mut env, pid);
 
-                tokio::select! {
-                    biased;
-                    _ = shutdown_rx.recv() => {} // session closed gracefully by parent
-                    result = session.closed() => {
-                        let reason = match result {
-                            Ok(()) => "MoQ session closed gracefully".to_string(),
-                            Err(e) => e.to_string(),
-                        };
-                        messages::send_disconnected(&mut env, pid, reason);
-                    }
-                }
+                let reason = match session.closed().await {
+                    Ok(()) => "MoQ session closed gracefully".to_string(),
+                    Err(e) => e.to_string(),
+                };
+                messages::send_disconnected(&mut env, pid, reason);
             }
             Err(e) => messages::send_setup_failed(&mut env, pid, e),
         }
@@ -65,7 +60,7 @@ pub(crate) fn create_session(
         ResourceArc::new(SessionResource {
             publish,
             consume: Mutex::new(consume),
-            shutdown: shutdown_tx,
+            abort: task.abort_handle(),
         }),
     ))
 }
@@ -73,7 +68,7 @@ pub(crate) fn create_session(
 #[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn close_session(session: ResourceArc<SessionResource>) -> Atom {
-    let _ = session.shutdown.send(());
+    session.abort.abort();
     atoms::ok()
 }
 

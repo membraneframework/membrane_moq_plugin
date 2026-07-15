@@ -32,10 +32,17 @@ enum Command {
 
 pub(crate) struct BroadcastConsumerResource {
     commands: mpsc::UnboundedSender<Command>,
-    shutdown: mpsc::UnboundedSender<()>,
+    /// Aborting the task drops its `Subscriptions`, which aborts every pump.
+    abort: tokio::task::AbortHandle,
 }
 
 impl Resource for BroadcastConsumerResource {}
+
+impl Drop for BroadcastConsumerResource {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
 
 struct Ctx<'a> {
     broadcast: &'a moq_net::BroadcastConsumer,
@@ -56,22 +63,14 @@ pub(crate) fn create_broadcast_consumer(
     let origin = lock_ignoring_poison(&session.consume).consume();
 
     let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
-    let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel::<()>();
 
-    runtime().spawn(run_broadcast(
-        origin,
-        path,
-        pid,
-        latency,
-        commands_rx,
-        shutdown_rx,
-    ));
+    let task = runtime().spawn(run_broadcast(origin, path, pid, latency, commands_rx));
 
     (
         atoms::ok(),
         ResourceArc::new(BroadcastConsumerResource {
             commands: commands_tx,
-            shutdown: shutdown_tx,
+            abort: task.abort_handle(),
         }),
     )
 }
@@ -111,7 +110,7 @@ pub(crate) fn unsubscribe_track(
 #[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
-    let _ = consumer.shutdown.send(());
+    consumer.abort.abort();
     atoms::ok()
 }
 
@@ -121,22 +120,17 @@ async fn run_broadcast(
     pid: LocalPid,
     latency: Duration,
     mut commands_rx: mpsc::UnboundedReceiver<Command>,
-    mut shutdown_rx: mpsc::UnboundedReceiver<()>,
 ) {
     let mut env = OwnedEnv::new();
 
-    let broadcast = tokio::select! {
-        broadcast = origin.announced_broadcast(path.as_str()) =>
-          if let Some(broadcast) = broadcast {
-            broadcast
-          } else {
-            messages::send_broadcast_closed(&mut env, pid,
-                &path,
-                format!("broadcast {path:?} was not announced before the session closed"),
-            );
-            return;
-          },
-        _ = shutdown_rx.recv() => return,
+    let Some(broadcast) = origin.announced_broadcast(path.as_str()).await else {
+        messages::send_broadcast_closed(
+            &mut env,
+            pid,
+            &path,
+            format!("broadcast {path:?} was not announced before the session closed"),
+        );
+        return;
     };
 
     let mut catalog = match subscribe_catalog(&path, &broadcast) {
@@ -165,10 +159,8 @@ async fn run_broadcast(
                     subs.insert(token, pump);
                 }
                 Some(Command::Unsubscribe { token }) => subs.remove(token),
-                // The resource was dropped without a close; treat as shutdown.
                 None => return,
             },
-            _ = shutdown_rx.recv() => return,
             Some((token, outcome)) = subs.join_next(),
               if subs.has_pumps() => match outcome {
                 Ok(()) => messages::send_track_ended(&mut env, pid, token),

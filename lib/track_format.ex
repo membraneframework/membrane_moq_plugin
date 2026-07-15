@@ -153,10 +153,19 @@ defmodule Membrane.MoQ.TrackFormat do
 
   def to_stream_format(:unrecognized), do: %Membrane.RemoteStream{type: :packetized}
 
-  @spec keyframe?(Membrane.Buffer.t()) :: boolean()
-  def keyframe?(%Membrane.Buffer{metadata: %{h264: %{key_frame?: kf}}}), do: kf
-  def keyframe?(%Membrane.Buffer{metadata: %{h265: %{key_frame?: kf}}}), do: kf
-  def keyframe?(%Membrane.Buffer{}), do: true
+  @spec keyframe?(Membrane.Buffer.t(), Membrane.StreamFormat.t()) :: boolean()
+  def keyframe?(%Membrane.Buffer{metadata: %{h264: %{key_frame?: kf}}}, %H264{}), do: kf
+  def keyframe?(%Membrane.Buffer{metadata: %{h265: %{key_frame?: kf}}}, %H265{}), do: kf
+
+  def keyframe?(%Membrane.Buffer{metadata: metadata}, %codec{}) when codec in [H264, H265],
+    do:
+      raise("""
+      #{inspect(codec)} buffer carries no key_frame? metadata \
+      (metadata keys: #{inspect(Map.keys(metadata))}).
+      MoQ groups must start at keyframes.
+      """)
+
+  def keyframe?(%Membrane.Buffer{}, _audio_format), do: true
 
   @spec buffer_metadata(boolean(), Membrane.StreamFormat.t()) :: Membrane.Buffer.metadata()
   def buffer_metadata(keyframe?, %H264{}), do: %{h264: %{key_frame?: keyframe?}}

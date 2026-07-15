@@ -185,7 +185,7 @@ defmodule Membrane.MoQ.Sink do
     case Native.send_frame(
            track_resource,
            buffer.pts,
-           TrackFormat.keyframe?(buffer),
+           TrackFormat.keyframe?(buffer, ctx.pads[pad].stream_format),
            buffer.payload
          ) do
       :ok ->

@@ -185,6 +185,33 @@ defmodule Membrane.MoQ.TrackFormatTest do
     end
   end
 
+  describe "keyframe?/2" do
+    test "reads the parser metadata on video buffers" do
+      for {codec_key, fmt} <- [{:h264, %H264{}}, {:h265, %H265{}}], kf <- [true, false] do
+        buffer = %Membrane.Buffer{payload: <<>>, metadata: %{codec_key => %{key_frame?: kf}}}
+        assert TrackFormat.keyframe?(buffer, fmt) == kf
+      end
+    end
+
+    test "raises on video buffers without keyframe metadata" do
+      for fmt <- [%H264{}, %H265{}] do
+        buffer = %Membrane.Buffer{payload: <<>>, metadata: %{}}
+
+        assert_raise RuntimeError, ~r/no key_frame\? metadata/, fn ->
+          TrackFormat.keyframe?(buffer, fmt)
+        end
+      end
+    end
+
+    test "treats every audio buffer as a keyframe" do
+      buffer = %Membrane.Buffer{payload: <<>>, metadata: %{}}
+
+      for fmt <- [%AAC{}, %Opus{channels: 2}] do
+        assert TrackFormat.keyframe?(buffer, fmt)
+      end
+    end
+  end
+
   # Minimal valid avcC (H264 decoder configuration record) with no SPS/PPS, so
   # `Membrane.H264.DecoderConfigurationRecord.parse/1` recovers profile/level.
   defp avcc(profile, constraints, level) do

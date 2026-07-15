@@ -10,6 +10,12 @@ defmodule Membrane.MoQ.Sink do
 
   Frames are encapsulated in the wire container selected with the `container` option
   and optionally batched with `latency`.
+
+  ## Parent notifications
+
+    * `{:disconnected, reason :: String.t()}`
+        when the session drops after setup. The sink takes no action on its own;
+        the parent decides whether to tear it down.
   """
   use Membrane.Sink
 
@@ -145,13 +151,17 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
-    raise "MoQ session setup failed with reason: #{inspect(reason)}"
-  end
+  def handle_info({:moq_setup_failed, reason}, _ctx, _state),
+    do: raise("MoQ session setup failed with reason: #{inspect(reason)}")
 
   @impl true
-  def handle_info({:moq_disconnected, reason}, _ctx, _state) do
-    raise "MoQ session closed with reason: #{inspect(reason)}"
+  def handle_info({:moq_disconnected, reason}, _ctx, %State{producer: nil}),
+    do: raise("MoQ session closed during setup with reason: #{inspect(reason)}")
+
+  @impl true
+  def handle_info({:moq_disconnected, reason}, _ctx, state) do
+    Membrane.Logger.debug("MoQ publisher disconnected: #{inspect(reason)}")
+    {[notify_parent: {:disconnected, reason}], state}
   end
 
   @impl true
@@ -209,10 +219,7 @@ defmodule Membrane.MoQ.Sink do
   def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
 
   @impl true
-  def handle_end_of_stream(pad, _ctx, state) do
-    state = close_pad(pad, state)
-    {[], state}
-  end
+  def handle_end_of_stream(pad, _ctx, state), do: {[], close_pad(pad, state)}
 
   @spec add_track(Membrane.Pad.ref(), Membrane.StreamFormat.t(), map(), State.t()) :: State.t()
   defp add_track(pad, fmt, %{track: track, priority: priority}, state) do

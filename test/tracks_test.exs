@@ -1,10 +1,5 @@
 defmodule Membrane.MoQ.Source.TracksTest do
-  @moduledoc """
-  Pure tests of the Source's subscription/catalog bookkeeping.
-  Rendition values are opaque to `Tracks`, so plain atoms stand in for them.
-
-  NOTE: This module was LLM-generated.
-  """
+  @moduledoc "Pure tests of the Source's subscription/catalog bookkeeping."
 
   use ExUnit.Case, async: true
 

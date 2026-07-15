@@ -129,8 +129,82 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     :ok = Membrane.Pipeline.terminate(receiver)
   end
 
-  # These two inject the message the native layer sends when a pump task
-  # panics; the first pad's subscription deterministically gets token 0.
+  test "a pad linked before its track is advertised parks until a later catalog snapshot", %{
+    relay: relay,
+    broadcast: broadcast
+  } do
+    # Endless synthetic audio keeps the broadcast alive
+    # while the video track is added and the audio track is later removed.
+    endless_opus =
+      {0,
+       fn i, size ->
+         buffers =
+           for n <- i..(i + size - 1) do
+             %Membrane.Buffer{payload: <<n::32>>, pts: Membrane.Time.milliseconds(20 * n)}
+           end
+
+         {[buffer: {:output, buffers}], i + size}
+       end}
+
+    publisher =
+      Testing.Pipeline.start_link_supervised!(
+        spec:
+          child(:audio_source, %Testing.Source{
+            stream_format: %Membrane.Opus{channels: 2, self_delimiting?: false},
+            output: endless_opus
+          })
+          |> child(:audio_realtimer, Membrane.Realtimer)
+          |> via_in(Pad.ref(:input, :audio), options: [track: "audio"])
+          |> child(:sink, %Membrane.MoQ.Sink{
+            url: relay.url,
+            broadcast: broadcast,
+            disable_tls_verify?: relay.disable_tls_verify?
+          })
+      )
+
+    receiver =
+      Testing.Pipeline.start_link_supervised!(
+        spec:
+          child(:source, %Membrane.MoQ.Source{
+            url: relay.url,
+            broadcast: broadcast,
+            disable_tls_verify?: relay.disable_tls_verify?
+          })
+          |> via_out(Pad.ref(:output, :video), options: [track: @track])
+          |> child(:video_sink, Testing.Sink)
+      )
+
+    assert_pipeline_notified(receiver, :source, {:new_track, {"audio", %Membrane.Opus{}}}, 15_000)
+    refute_sink_stream_format(receiver, :video_sink, _format, 500)
+
+    Testing.Pipeline.execute_actions(publisher,
+      spec:
+        child(:video_file, %Membrane.File.Source{location: "test/fixtures/bbb_with_aud.h264"})
+        |> child(:video_parser, %Membrane.H264.Parser{
+          output_stream_structure: :avc1,
+          generate_best_effort_timestamps: %{framerate: {30, 1}}
+        })
+        |> child(:video_take, %Take{count: 40})
+        |> child(:video_realtimer, Membrane.Realtimer)
+        |> via_in(Pad.ref(:input, :video), options: [track: @track])
+        |> get_child(:sink)
+    )
+
+    assert_pipeline_notified(receiver, :source, {:new_track, {@track, %Membrane.H264{}}}, 15_000)
+    assert_sink_stream_format(receiver, :video_sink, %Membrane.H264{}, 10_000)
+    assert_sink_buffer(receiver, :video_sink, %Membrane.Buffer{}, 10_000)
+
+    Testing.Pipeline.execute_actions(publisher,
+      remove_children: [:audio_source, :audio_realtimer]
+    )
+
+    assert_pipeline_notified(receiver, :source, {:track_removed, "audio"}, 10_000)
+    assert_sink_buffer(receiver, :video_sink, %Membrane.Buffer{}, 10_000)
+
+    :ok = Membrane.Pipeline.terminate(publisher)
+    :ok = Membrane.Pipeline.terminate(receiver)
+  end
+
   test ":moq_track_error for a live subscription sends EOS without killing the source", %{
     relay: relay,
     broadcast: broadcast
@@ -145,7 +219,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     source_pid = Testing.Pipeline.get_child_pid!(receiver, :source)
     send(source_pid, {:moq_track_error, 0, "injected pump panic"})
 
-    # The failed subscription's pad gets EOS, and the source stays alive.
     assert_end_of_stream(receiver, :sink, :input, 10_000)
     refute_receive {:DOWN, ^ref, :process, ^receiver, _reason}, 500
 
@@ -168,7 +241,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     send(source_pid, {:moq_track_error, 999, "stale subscription"})
 
     refute_receive {:DOWN, ^ref, :process, ^receiver, _reason}, 500
-    # The source keeps delivering after ignoring the stale message.
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
 
     :ok = Membrane.Pipeline.terminate(publisher)

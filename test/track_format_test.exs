@@ -1,9 +1,6 @@
 defmodule Membrane.MoQ.TrackFormatTest do
   @moduledoc """
   Unit tests for the pure codec-translation layer shared by the Sink and Source.
-
-  These exercise `from_stream_format/1` and `to_stream_format/1` as inverses
-  without touching the NIF or a relay, so they run in the default suite.
   """
   use ExUnit.Case, async: true
 

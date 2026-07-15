@@ -49,12 +49,12 @@ defmodule Membrane.MoQ.Source do
         """
       ],
       priority: [
-        spec: 0..255,
-        default: 0,
+        spec: 0..255 | nil,
+        default: nil,
         description: """
         Delivery priority of this subscription.
         Under congestion, tracks with a higher value are sent first.
-        Recommended values are `80` for audio, `60` for video
+        When nil, hang defaults for the track's media kind are used.
         """
       ]
     ]
@@ -343,6 +343,7 @@ defmodule Membrane.MoQ.Source do
 
     with false <- eos?,
          {format, container} <- Tracks.rendition(state.tracks, track),
+         priority = priority || TrackFormat.default_priority(format),
          :ok <- Native.subscribe_track(state.consumer, track, container, token, priority) do
       {[stream_format: {pad, TrackFormat.to_stream_format(format)}],
        %{state | tracks: Tracks.activate(state.tracks, token)}}

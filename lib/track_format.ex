@@ -99,6 +99,18 @@ defmodule Membrane.MoQ.TrackFormat do
   def media_type(:unrecognized), do: :unknown
 
   @doc """
+  Default delivery priority for a track format, following hang's convention
+  """
+  @spec default_priority(Native.track_format()) :: 0..255
+  def default_priority(format) do
+    case media_type(format) do
+      :audio -> 80
+      :video -> 60
+      :unknown -> 0
+    end
+  end
+
+  @doc """
   Reconstruct a Membrane stream format from a native track-format term,
   or `RemoteStream.t()` if it is not recognized.
   """

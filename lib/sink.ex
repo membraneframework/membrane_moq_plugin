@@ -47,7 +47,7 @@ defmodule Membrane.MoQ.Sink do
         description: """
         Delivery priority of this pad's track.
         Under congestion, tracks with a higher value are sent first.
-        When nil, default hang defaults are used.
+        When nil, hang defaults for the track's media kind are used.
         """
       ]
     ]
@@ -223,7 +223,7 @@ defmodule Membrane.MoQ.Sink do
         state.producer,
         track,
         track_fmt,
-        priority || default_priority(track_fmt),
+        priority || TrackFormat.default_priority(track_fmt),
         state.container,
         Membrane.Time.as_nanoseconds(state.latency, :round)
       )
@@ -257,15 +257,6 @@ defmodule Membrane.MoQ.Sink do
       {track_resource, tracks} ->
         :ok = Native.remove_track(track_resource)
         %{state | tracks: tracks}
-    end
-  end
-
-  # defaults used by upstream, hang convention
-  @spec default_priority(Native.track_format()) :: 0..255
-  defp default_priority(track_fmt) do
-    case TrackFormat.media_type(track_fmt) do
-      :audio -> 80
-      :video -> 60
     end
   end
 end

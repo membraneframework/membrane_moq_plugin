@@ -3,7 +3,7 @@ Mix.install([
   {:membrane_realtimer_plugin, "~> 0.11.0"},
   {:membrane_aac_plugin, "~> 0.19.2"},
   {:membrane_h26x_plugin, "~> 0.10.7"},
-  {:membrane_hackney_plugin, "~> 0.11.1"},
+  {:membrane_hackney_plugin, "0.11.1"},
   {:membrane_mp4_plugin, "~> 0.36.5"},
   {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"}
 ])
@@ -29,7 +29,7 @@ defmodule Example do
       get_child(:demuxer)
       |> via_out(:output, options: [kind: :audio])
       |> child(:audio_parser, %Membrane.AAC.Parser{
-        out_encapsulation: :ADTS
+        out_encapsulation: :none
       })
       |> child(:audio_rt, Membrane.Realtimer)
       |> via_in(Pad.ref(:input, :audio1), options: [track: "audio"])

@@ -79,8 +79,7 @@ child(:source, %Membrane.MoQ.Source{
 
 The `examples/` directory has runnable scripts covering the common setups:
 - loopback publish+play (`publish_and_play.exs`)
-- multi-track A/V from an MP4 (`publish_mp4.exs`), H.265 (`publish_h265.exs`)
-- endless looped publishing (`publish_h264_loop.exs`)
+- multi-track A/V from an MP4 (`publish_mp4.exs`)
 - notification-driven subscribing (`dynamic_subscriber.exs`).
 
 ## Testing

@@ -20,7 +20,7 @@
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_realtimer_plugin, "~> 0.11.0"},
-  {:membrane_hackney_plugin, "~> 0.11.1"},
+  {:membrane_hackney_plugin, "0.11.1"},
   {:membrane_h26x_plugin, "~> 0.10.7"},
   {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"},
   {:membrane_sdl_plugin, "~> 0.18.6"}

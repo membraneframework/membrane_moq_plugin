@@ -189,18 +189,18 @@ defmodule Membrane.MoQ.Source do
     {diff, tracks} =
       Tracks.apply_snapshot(state.tracks, renditions, fn pad -> ctx.pads[pad].options.track end)
 
-    track_removed =
+    tracks_removed =
       Stream.concat(diff.removed, diff.changed)
       |> Stream.map(fn name -> {:notify_parent, {:track_removed, name}} end)
 
-    new_track =
+    new_tracks =
       Stream.concat(diff.changed, diff.added)
       |> Stream.map(fn name ->
         {format, _container} = Tracks.rendition(tracks, name)
         {:notify_parent, {:new_track, {name, TrackFormat.to_stream_format(format)}}}
       end)
 
-    notifications = Enum.concat(track_removed, new_track)
+    notifications = Enum.concat(tracks_removed, new_tracks)
 
     state = %{state | tracks: tracks}
 

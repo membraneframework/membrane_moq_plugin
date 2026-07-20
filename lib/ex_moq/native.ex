@@ -33,15 +33,15 @@ defmodule ExMoQ.Native do
             height: non_neg_integer() | nil,
             framerate: float() | nil
           }
-    @enforce_keys [:width, :height, :framerate]
-    defstruct @enforce_keys
+
+    defstruct [:width, :height, :framerate]
   end
 
   defmodule AudioTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` audio track"
     @type t :: %__MODULE__{
-            sample_rate: non_neg_integer(),
-            channels: non_neg_integer()
+            sample_rate: pos_integer(),
+            channels: pos_integer()
           }
     @enforce_keys [:sample_rate, :channels]
     defstruct @enforce_keys

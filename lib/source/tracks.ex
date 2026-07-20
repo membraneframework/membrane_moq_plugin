@@ -14,13 +14,13 @@ defmodule Membrane.MoQ.Source.Tracks do
 
   @type t :: %__MODULE__{
           next_token: token(),
-          tokens: BiMap.t(token(), Membrane.Pad.ref()),
+          token_to_pad: BiMap.t(token(), Membrane.Pad.ref()),
           active: MapSet.t(token()),
           renditions: %{Native.track() => Native.rendition()}
         }
 
   defstruct next_token: 0,
-            tokens: BiMap.new(),
+            token_to_pad: BiMap.new(),
             active: MapSet.new(),
             renditions: %{}
 
@@ -28,26 +28,26 @@ defmodule Membrane.MoQ.Source.Tracks do
   def add_pad(tracks, pad) do
     token = tracks.next_token
 
-    {token, %{tracks | next_token: token + 1, tokens: BiMap.put(tracks.tokens, token, pad)}}
+    {token, %{tracks | next_token: token + 1, token_to_pad: BiMap.put(tracks.token_to_pad, token, pad)}}
   end
 
   @spec remove_pad(t(), Membrane.Pad.ref()) :: {token() | nil, t()}
   def remove_pad(tracks, pad) do
-    case BiMap.get_key(tracks.tokens, pad) do
+    case BiMap.get_key(tracks.token_to_pad, pad) do
       nil -> {nil, tracks}
       token -> {token, drop(tracks, token)}
     end
   end
 
   @spec pad_for(t(), token()) :: Membrane.Pad.ref() | nil
-  def pad_for(tracks, token), do: BiMap.get(tracks.tokens, token)
+  def pad_for(tracks, token), do: BiMap.get(tracks.token_to_pad, token)
 
   @spec rendition(t(), Native.track()) :: Native.rendition() | nil
   def rendition(tracks, track), do: tracks.renditions[track]
 
   @spec waiting(t()) :: [{token(), Membrane.Pad.ref()}]
   def waiting(tracks) do
-    for {token, pad} <- tracks.tokens,
+    for {token, pad} <- tracks.token_to_pad,
         not MapSet.member?(tracks.active, token),
         do: {token, pad}
   end
@@ -74,7 +74,7 @@ defmodule Membrane.MoQ.Source.Tracks do
     changed_set = MapSet.new(changed)
 
     ended =
-      for {token, pad} <- tracks.tokens,
+      for {token, pad} <- tracks.token_to_pad,
           MapSet.member?(tracks.active, token),
           MapSet.member?(changed_set, track_of.(pad)),
           do: {token, pad}
@@ -105,7 +105,7 @@ defmodule Membrane.MoQ.Source.Tracks do
   defp drop(tracks, token) do
     %{
       tracks
-      | tokens: BiMap.delete_key(tracks.tokens, token),
+      | token_to_pad: BiMap.delete_key(tracks.token_to_pad, token),
         active: MapSet.delete(tracks.active, token)
     }
   end

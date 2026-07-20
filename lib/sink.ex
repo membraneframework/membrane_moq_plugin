@@ -80,7 +80,7 @@ defmodule Membrane.MoQ.Sink do
               ],
               latency: [
                 spec: Membrane.Time.t(),
-                default: 0,
+                default: Membrane.Time.milliseconds(0),
                 description: """
                 How long each track buffers frames before writing them to the wire,
                 trading latency for batched writes.
@@ -163,7 +163,7 @@ defmodule Membrane.MoQ.Sink do
 
   @impl true
   def handle_info({:moq_disconnected, reason}, _ctx, state) do
-    Membrane.Logger.debug("MoQ publisher disconnected: #{inspect(reason)}")
+    Membrane.Logger.warning("MoQ session disconnected: #{inspect(reason)}")
     {[notify_parent: {:disconnected, reason}], state}
   end
 
@@ -228,17 +228,15 @@ defmodule Membrane.MoQ.Sink do
   defp add_track(pad, fmt, %{track: track, priority: priority}, state) do
     track_fmt = TrackFormat.from_stream_format(fmt)
 
-    result =
-      Native.add_track(
-        state.producer,
-        track,
-        track_fmt,
-        priority || TrackFormat.default_priority(track_fmt),
-        state.container,
-        Membrane.Time.as_nanoseconds(state.latency, :round)
-      )
-
-    case result do
+    Native.add_track(
+      state.producer,
+      track,
+      track_fmt,
+      priority || TrackFormat.default_priority(track_fmt),
+      state.container,
+      Membrane.Time.as_nanoseconds(state.latency, :round)
+    )
+    |> case do
       {:ok, track_resource} ->
         put_in(state.tracks[pad], track_resource)
 

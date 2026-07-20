@@ -190,7 +190,8 @@ defmodule Membrane.MoQ.TrackFormat do
   # flag, which only describes where the parameter sets live).
   @spec h264_stream_structure(binary(), boolean()) :: H264.stream_structure()
   defp h264_stream_structure(<<>>, _inline), do: :annexb
-  defp h264_stream_structure(dcr, inline), do: {if(inline, do: :avc3, else: :avc1), dcr}
+  defp h264_stream_structure(dcr, true), do: {:avc3, dcr}
+  defp h264_stream_structure(dcr, false), do: {:avc1, dcr}
 
   @spec h265_stream_structure(binary(), boolean()) :: H265.stream_structure()
   defp h265_stream_structure(<<>>, _in_band), do: :annexb

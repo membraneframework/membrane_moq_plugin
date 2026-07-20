@@ -22,8 +22,6 @@ defmodule Membrane.MoQ.Test.Relay do
 
   use GenServer
 
-  require Logger
-
   @localhost_hosts ["localhost", "127.0.0.1", "::1"]
   @ready_timeout_ms 15_000
   @probe_interval_ms 100
@@ -75,19 +73,28 @@ defmodule Membrane.MoQ.Test.Relay do
     port_number = free_port!()
     config_path = write_config!(port_number)
 
-    # Closing a port (or the whole VM exiting, however abruptly) only closes
+    # Closing a port (or the whole VM exiting) only closes
     # the child's stdin/stdout pipes; it does not kill the child, and the
     # relay never reads stdin, so spawned bare it would linger as an orphan.
-    # The shell wrapper below runs the relay in the background and blocks on
-    # `cat`, which returns EOF the moment our end of the stdin pipe goes
-    # away — and then kills the relay. Expanded, the invocation is:
+    # The shell wrapper below runs the relay in the background with a watcher:
+    # `cat` returns EOF the moment our end of the stdin pipe goes away — and
+    # then kills the relay. Meanwhile the foreground `wait` ties the wrapper's
+    # lifetime to the relay's, so a relay crash reaches us as the port's
+    # `:exit_status`. Expanded, the invocation is:
     #
-    #   /bin/sh -c '"$1" "$2" & pid=$!; cat > /dev/null; kill $pid' wrapper <binary> <config>
+    #   /bin/sh -c 'exec 3<&0; "$1" "$2" & pid=$!;
+    #               { cat <&3; kill $pid; } > /dev/null 2>&1 & wait $pid' \
+    #     wrapper <binary> <config>
     #
     # `sh -c` maps the arguments after the script to $0 ("wrapper", unused),
     # $1 (the relay binary) and $2 (the config path); passing the paths as
     # positional parameters keeps them safe from quoting issues.
-    cleanup_wrapper = ~S("$1" "$2" & pid=$!; cat > /dev/null; kill $pid)
+    # The fd shuffling makes the watcher hold only the stdin pipe:
+    # a background job's stdin is /dev/null, so fd 3 smuggles in the real stdin for `cat`,
+    # and the group's stdout/stderr must not point at the port's pipe,
+    # or Erlang would withhold `:exit_status` until the watcher too is gone.
+    cleanup_wrapper =
+      ~S(exec 3<&0; "$1" "$2" & pid=$!; { cat <&3; kill $pid; } > /dev/null 2>&1 & wait $pid)
 
     port =
       Port.open({:spawn_executable, "/bin/sh"}, [
@@ -125,8 +132,7 @@ defmodule Membrane.MoQ.Test.Relay do
   def handle_info({port, {:data, _output}}, %{port: port} = state), do: {:noreply, state}
 
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    Logger.error("moq-relay exited with status #{status}; integration tests will fail to connect")
-    {:noreply, state}
+    {:stop, {:moq_relay_exited, status}, state}
   end
 
   defp find_binary!() do

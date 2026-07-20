@@ -80,7 +80,7 @@ defmodule Subscriber do
   def handle_child_notification(
         {:track_removed, name},
         :source,
-        _ctx,
+        ctx,
         %State{} = state
       ) do
     Membrane.Logger.info("withdrawn #{name}")
@@ -88,7 +88,8 @@ defmodule Subscriber do
 
     if name == state.current_track do
       {actions, state} = maybe_subscribe(%{state | current_track: nil})
-      {[remove_children: subtree(name)] ++ actions, state}
+      processing_children = for {child, _spec} <- ctx.children, child != :source, do: child
+      {[remove_children: processing_children] ++ actions, state}
     else
       {[], state}
     end
@@ -140,9 +141,6 @@ defmodule Subscriber do
     |> child({:rt, name}, Membrane.Realtimer)
     |> child({:player, name}, Membrane.SDL.Player)
   end
-
-  defp subtree(name),
-    do: [{:parser, name}, {:decoder, name}, {:rt, name}, {:player, name}]
 
   # `MoQ.Source` emits frames in decode order carrying their presentation PTS
   # but no DTS, so the parser regenerates monotonic DTS/PTS from the bitstream

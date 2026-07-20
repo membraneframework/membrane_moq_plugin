@@ -92,8 +92,10 @@ pub(crate) fn add_track(
     let mut resolved = ResolvedConfig::try_from(format)?;
 
     let catalog_container = hang::catalog::Container::from(container);
-    let wire = moq_mux::catalog::hang::Container::try_from(&catalog_container)
+    let wire = (&catalog_container)
+        .try_into()
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
+
     resolved.set_container(catalog_container.clone());
 
     let mut inner = lock_ignoring_poison(&broadcast_res.inner);

@@ -7,7 +7,7 @@ defmodule Membrane.MoQ.Source do
 
   ## Parent notifications
 
-  #{__MODULE__} watches the broadcast catalog and notifies its parent about track changes:
+  #{inspect(__MODULE__)} watches the broadcast catalog and notifies its parent about track changes:
 
     * `{:new_track, {track :: ExMoQ.Native.track(), stream_format :: struct()}}`
         when a track is advertised. `track` is the catalog rendition key to pass

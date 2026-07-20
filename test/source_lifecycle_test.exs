@@ -43,7 +43,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     broadcast: broadcast
   } do
     subscriber = start_subscriber!(relay, broadcast)
-    publisher = start_publisher!(relay, broadcast)
+    _publisher = start_publisher!(relay, broadcast)
 
     assert_pipeline_notified(
       subscriber,
@@ -80,7 +80,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     :ok = Membrane.Pipeline.terminate(publisher)
     assert_pipeline_notified(subscriber, {:source, 0}, {:disconnected, _reason}, 10_000)
 
-    second_publisher = start_publisher!(relay, broadcast)
+    _second_publisher = start_publisher!(relay, broadcast)
     assert_pipeline_notified(subscriber, {:source, 1}, {:new_track, {_track, _format}}, 15_000)
     assert_sink_buffer(subscriber, {:sink, 1}, %Membrane.Buffer{}, 10_000)
   end
@@ -195,7 +195,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     relay: relay,
     broadcast: broadcast
   } do
-    publisher = start_publisher!(relay, broadcast)
+    _publisher = start_publisher!(relay, broadcast)
 
     receiver = start_receiver!(relay, broadcast)
 
@@ -211,7 +211,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     relay: relay,
     broadcast: broadcast
   } do
-    publisher = start_publisher!(relay, broadcast)
+    _publisher = start_publisher!(relay, broadcast)
 
     receiver = start_unlinked_receiver!(relay, broadcast)
     ref = Process.monitor(receiver)

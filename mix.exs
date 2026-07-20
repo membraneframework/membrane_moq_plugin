@@ -47,6 +47,7 @@ defmodule Membrane.MoQ.Mixfile do
       {:membrane_aac_format, "~> 0.8.0"},
       {:membrane_opus_format, "0.3.0"},
       {:membrane_aac_plugin, "~> 0.19", only: :test},
+      {:muontrap, "~> 1.8", only: :test},
       {:membrane_file_plugin, "~> 0.17", only: :test},
       {:membrane_realtimer_plugin, "~> 0.9", only: :test},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false},

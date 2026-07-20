@@ -14,10 +14,10 @@ defmodule Membrane.MoQ.Test.Relay do
   Cleanup of the spawned relay is layered:
 
     * `ExUnit.after_suite/1` (registered on spawn) stops the server once the
-      suite finishes, closing the port and deleting the generated config.
-    * Should the VM die without running that callback (e.g. SIGKILL), the
-      spawn wrapper still reaps the relay: it watches our end of the stdin
-      pipe and kills the relay when the pipe closes (see `init/1`).
+      suite finishes, stopping the relay and deleting the generated config.
+    * Should the VM die without running that callback (e.g. SIGKILL),
+      muontrap's shim process still reaps the relay: it kills it the moment
+      its pipe to the VM closes.
   """
 
   use GenServer
@@ -73,67 +73,36 @@ defmodule Membrane.MoQ.Test.Relay do
     port_number = free_port!()
     config_path = write_config!(port_number)
 
-    # Closing a port (or the whole VM exiting) only closes
-    # the child's stdin/stdout pipes; it does not kill the child, and the
-    # relay never reads stdin, so spawned bare it would linger as an orphan.
-    # The shell wrapper below runs the relay in the background with a watcher:
-    # `cat` returns EOF the moment our end of the stdin pipe goes away — and
-    # then kills the relay. Meanwhile the foreground `wait` ties the wrapper's
-    # lifetime to the relay's, so a relay crash reaches us as the port's
-    # `:exit_status`. Expanded, the invocation is:
-    #
-    #   /bin/sh -c 'exec 3<&0; "$1" "$2" & pid=$!;
-    #               { cat <&3; kill $pid; } > /dev/null 2>&1 & wait $pid' \
-    #     wrapper <binary> <config>
-    #
-    # `sh -c` maps the arguments after the script to $0 ("wrapper", unused),
-    # $1 (the relay binary) and $2 (the config path); passing the paths as
-    # positional parameters keeps them safe from quoting issues.
-    # The fd shuffling makes the watcher hold only the stdin pipe:
-    # a background job's stdin is /dev/null, so fd 3 smuggles in the real stdin for `cat`,
-    # and the group's stdout/stderr must not point at the port's pipe,
-    # or Erlang would withhold `:exit_status` until the watcher too is gone.
-    cleanup_wrapper =
-      ~S(exec 3<&0; "$1" "$2" & pid=$!; { cat <&3; kill $pid; } > /dev/null 2>&1 & wait $pid)
+    {:ok, daemon} =
+      MuonTrap.Daemon.start_link(binary, [config_path],
+        stderr_to_stdout: true,
+        log_output: :debug,
+        log_prefix: "moq-relay: ",
+        exit_status_to_reason: &{:moq_relay_exited, &1}
+      )
 
-    port =
-      Port.open({:spawn_executable, "/bin/sh"}, [
-        :binary,
-        :exit_status,
-        :stderr_to_stdout,
-        args: ["-c", cleanup_wrapper, "wrapper", binary, config_path]
-      ])
-
-    await_ready!(port_number, port)
+    await_ready!(port_number)
 
     ExUnit.after_suite(fn _stats -> stop() end)
 
     {:ok,
      %{
        relay: %{url: "https://localhost:#{port_number}", disable_tls_verify?: true},
-       port: port,
+       daemon: daemon,
        config_path: config_path
      }}
   end
 
   @impl true
   def terminate(_reason, state) do
-    # Closing our end of the stdin pipe makes the wrapper's `cat` return EOF
-    # and kill the relay.
-    if Port.info(state.port) != nil, do: Port.close(state.port)
+    # Stopping the daemon makes muontrap's shim kill the relay.
+    if Process.alive?(state.daemon), do: GenServer.stop(state.daemon)
     File.rm(state.config_path)
     :ok
   end
 
   @impl true
   def handle_call(:relay, _from, state), do: {:reply, state.relay, state}
-
-  @impl true
-  def handle_info({port, {:data, _output}}, %{port: port} = state), do: {:noreply, state}
-
-  def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
-    {:stop, {:moq_relay_exited, status}, state}
-  end
 
   defp find_binary!() do
     System.get_env("MOQ_RELAY") || System.find_executable("moq-relay") ||
@@ -196,26 +165,25 @@ defmodule Membrane.MoQ.Test.Relay do
     path
   end
 
-  defp await_ready!(port_number, port) do
+  defp await_ready!(port_number) do
     deadline = System.monotonic_time(:millisecond) + @ready_timeout_ms
-    await_ready_loop(port_number, deadline, port)
+    await_ready_loop(port_number, deadline)
   end
 
-  defp await_ready_loop(port_number, deadline, port) do
+  defp await_ready_loop(port_number, deadline) do
     cond do
       probe(port_number) ->
         :ok
 
       System.monotonic_time(:millisecond) > deadline ->
         raise """
-        moq-relay did not become ready within #{@ready_timeout_ms} ms; its output so far:
-
-        #{drain_output(port)}
+        moq-relay did not become ready within #{@ready_timeout_ms} ms; \
+        its output is forwarded to the Logger at debug level
         """
 
       true ->
         Process.sleep(@probe_interval_ms)
-        await_ready_loop(port_number, deadline, port)
+        await_ready_loop(port_number, deadline)
     end
   end
 
@@ -235,18 +203,6 @@ defmodule Membrane.MoQ.Test.Relay do
 
       {:error, _reason} ->
         false
-    end
-  end
-
-  defp drain_output(port, acc \\ []) do
-    receive do
-      {^port, {:data, data}} ->
-        drain_output(port, [acc, data])
-
-      {^port, {:exit_status, status}} ->
-        IO.iodata_to_binary([acc, "\n(exited with status #{status})"])
-    after
-      0 -> IO.iodata_to_binary(acc)
     end
   end
 end

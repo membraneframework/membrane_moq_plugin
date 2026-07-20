@@ -11,27 +11,6 @@
 #   - a MoQ relay at https://localhost:4443 (e.g. moq-relay)
 #   - ffmpeg + SDL available for the decoder/player plugins
 
-broadcast =
-  case System.argv() do
-    [broadcast | _rest] ->
-      if String.ends_with?(broadcast, [".hang", ".msf"]) do
-        broadcast
-      else
-        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
-        System.halt(1)
-      end
-
-    [] ->
-      IO.puts(:stderr, """
-      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
-
-      <broadcast> is the name of the MoQ broadcast to subscribe to; it must end
-      with .hang or .msf (e.g. format_change.hang).
-      """)
-
-      System.halt(1)
-  end
-
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_h26x_plugin, "~> 0.10.7"},
@@ -160,6 +139,27 @@ defmodule Subscriber do
      }, Membrane.H265.FFmpeg.Decoder}
   end
 end
+
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to subscribe to; it must end
+      with .hang or .msf (e.g. format_change.hang).
+      """)
+
+      System.halt(1)
+  end
 
 opts = [url: "https://localhost:4443/anon", broadcast: broadcast]
 

@@ -17,27 +17,6 @@
 # where <broadcast> is the broadcast name, ending with .hang or .msf
 # (e.g. playback.hang).
 
-broadcast =
-  case System.argv() do
-    [broadcast | _rest] ->
-      if String.ends_with?(broadcast, [".hang", ".msf"]) do
-        broadcast
-      else
-        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
-        System.halt(1)
-      end
-
-    [] ->
-      IO.puts(:stderr, """
-      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
-
-      <broadcast> is the name of the MoQ broadcast to publish and play back; it
-      must end with .hang or .msf (e.g. playback.hang).
-      """)
-
-      System.halt(1)
-  end
-
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_realtimer_plugin, "~> 0.11.0"},
@@ -123,6 +102,27 @@ defmodule Player do
   @impl true
   def handle_element_end_of_stream(_child, _pad, _ctx, state), do: {[], state}
 end
+
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to publish and play back; it
+      must end with .hang or .msf (e.g. playback.hang).
+      """)
+
+      System.halt(1)
+  end
 
 opts = [url: "https://localhost:4443/anon", broadcast: broadcast, track: "video"]
 

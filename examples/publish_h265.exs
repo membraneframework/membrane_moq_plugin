@@ -1,24 +1,3 @@
-broadcast =
-  case System.argv() do
-    [broadcast | _rest] ->
-      if String.ends_with?(broadcast, [".hang", ".msf"]) do
-        broadcast
-      else
-        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
-        System.halt(1)
-      end
-
-    [] ->
-      IO.puts(:stderr, """
-      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
-
-      <broadcast> is the name of the MoQ broadcast to publish; it must end with
-      .hang or .msf (e.g. h265.hang).
-      """)
-
-      System.halt(1)
-  end
-
 Mix.install([
   {:membrane_moq_plugin, path: __DIR__ |> Path.join("..") |> Path.expand()},
   {:membrane_realtimer_plugin, " ~> 0.11.0"},
@@ -66,6 +45,27 @@ defmodule Example do
     {[], state}
   end
 end
+
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to publish; it must end with
+      .hang or .msf (e.g. h265.hang).
+      """)
+
+      System.halt(1)
+  end
 
 {:ok, _supervisor_pid, pipeline_pid} = Membrane.Pipeline.start_link(Example, broadcast)
 ref = Process.monitor(pipeline_pid)

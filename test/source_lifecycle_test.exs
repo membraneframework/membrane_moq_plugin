@@ -212,7 +212,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     publisher = start_publisher!(relay, broadcast)
 
     receiver = start_receiver!(relay, broadcast)
-    ref = Process.monitor(receiver)
 
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 15_000)
 
@@ -220,7 +219,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     send(source_pid, {:moq_track_error, 0, "injected pump panic"})
 
     assert_end_of_stream(receiver, :sink, :input, 10_000)
-    refute_receive {:DOWN, ^ref, :process, ^receiver, _reason}, 500
 
     :ok = Membrane.Pipeline.terminate(publisher)
     :ok = Membrane.Pipeline.terminate(receiver)

@@ -11,16 +11,16 @@ defmodule Membrane.MoQ.Source.TracksTest do
   test "pads get consecutive tokens and removal returns them once" do
     tracks = %Tracks{}
 
-    {0, tracks} = Tracks.add_pad(tracks, @pad_a)
-    {1, tracks} = Tracks.add_pad(tracks, @pad_b)
+    assert {0, tracks} = Tracks.add_pad(tracks, @pad_a)
+    assert {1, tracks} = Tracks.add_pad(tracks, @pad_b)
     assert Tracks.pad_for(tracks, 0) == @pad_a
 
-    {0, tracks} = Tracks.remove_pad(tracks, @pad_a)
+    assert {0, tracks} = Tracks.remove_pad(tracks, @pad_a)
     assert {nil, ^tracks} = Tracks.remove_pad(tracks, @pad_a)
     assert Tracks.pad_for(tracks, 0) == nil
 
     # Tokens are never reused, even after the highest pad is removed.
-    {2, _tracks} = Tracks.add_pad(tracks, @pad_a)
+    assert {2, _tracks} = Tracks.add_pad(tracks, @pad_a)
   end
 
   test "waiting lists only tokens without a live subscription" do

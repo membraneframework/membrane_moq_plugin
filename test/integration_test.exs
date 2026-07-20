@@ -19,6 +19,39 @@ defmodule Membrane.MoQ.IntegrationTest do
   @track "video"
   @audio_track "audio"
 
+  defmodule EndOfStreamSource do
+    use Membrane.Source
+
+    def_output_pad :output, accepted_format: _any, flow_control: :push
+
+    @impl true
+    def handle_init(_ctx, _opts), do: {[], %{}}
+
+    @impl true
+    def handle_playing(_ctx, state), do: {[end_of_stream: :output], state}
+  end
+
+  # Simulates a track joining mid-stream:
+  # drops frames up to and including the first keyframe,
+  # so a fresh track receives a delta frame first.
+  defmodule MidStreamJoin do
+    use Membrane.Filter
+
+    def_input_pad :input, accepted_format: _any
+    def_output_pad :output, accepted_format: _any
+
+    @impl true
+    def handle_init(_ctx, _opts), do: {[], %{joined?: false}}
+
+    @impl true
+    def handle_buffer(:input, buffer, _ctx, %{joined?: true} = state),
+      do: {[buffer: {:output, buffer}], state}
+
+    @impl true
+    def handle_buffer(:input, buffer, _ctx, state),
+      do: {[], %{state | joined?: buffer.metadata.h264.key_frame?}}
+  end
+
   setup_all do
     [relay: Relay.ensure!()]
   end
@@ -361,18 +394,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     broadcast: broadcast,
     relay: relay
   } do
-    defmodule EndOfStreamSource do
-      use Membrane.Source
-
-      def_output_pad :output, accepted_format: _any, flow_control: :push
-
-      @impl true
-      def handle_init(_ctx, _opts), do: {[], %{}}
-
-      @impl true
-      def handle_playing(_ctx, state), do: {[end_of_stream: :output], state}
-    end
-
     spec =
       child(:source, EndOfStreamSource)
       |> via_in(Pad.ref(:input, :video), options: [track: @track])
@@ -424,26 +445,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     broadcast: broadcast,
     relay: relay
   } do
-    # Simulates a track joining mid-stream:
-    # drops frames up to and including the first keyframe,
-    # so the sink's fresh track (no open MoQ group) receives a delta frame first.
-    defmodule MidStreamJoin do
-      use Membrane.Filter
-
-      def_input_pad :input, accepted_format: _any, flow_control: :auto
-      def_output_pad :output, accepted_format: _any, flow_control: :auto
-
-      @impl true
-      def handle_init(_ctx, _opts), do: {[], %{joined?: false}}
-
-      @impl true
-      def handle_buffer(:input, buffer, _ctx, %{joined?: true} = state),
-        do: {[buffer: {:output, buffer}], state}
-
-      def handle_buffer(:input, buffer, _ctx, state),
-        do: {[], %{state | joined?: buffer.metadata.h264.key_frame?}}
-    end
-
     spec =
       child(:file_source, %Membrane.File.Source{
         location: "test/fixtures/bbb_with_aud.h264"

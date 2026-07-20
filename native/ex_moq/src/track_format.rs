@@ -52,7 +52,6 @@ impl From<&hang::catalog::Container> for ConsumedContainer {
 #[derive(NifStruct, Clone, PartialEq)]
 #[module = "ExMoQ.Native.VideoTrackParams"]
 pub(crate) struct VideoTrackParams {
-    /// Investigate if Rustler could accept `Option<std::num::NonZero<T>>` for these
     pub(crate) width: Option<u32>,
     pub(crate) height: Option<u32>,
     pub(crate) framerate: Option<f64>,

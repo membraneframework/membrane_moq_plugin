@@ -12,7 +12,7 @@ use moq_mux::catalog::Stream as _;
 
 use crate::messages::{self, Token};
 use crate::session::SessionResource;
-use crate::track_format::ConsumedContainer;
+use crate::track_format::{ConsumedContainer, UnrecognizedContainer};
 use crate::{atoms, lock_ignoring_poison, runtime};
 
 use pump::Pump;
@@ -84,9 +84,13 @@ pub(crate) fn subscribe_track(
     token: Token,
     priority: u8,
 ) -> NifResult<Atom> {
-    let wire = container.resolve().ok_or_else(|| {
-        crate::nif_error!("cannot subscribe to a track with an unrecognized wire container")
-    })?;
+    let catalog =
+        hang::catalog::Container::try_from(container).map_err(|UnrecognizedContainer| {
+            crate::nif_error!("cannot subscribe to a track with an unrecognized wire container")
+        })?;
+
+    let wire = moq_mux::catalog::hang::Container::try_from(&catalog)
+        .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
 
     let _ = consumer.commands.send(Command::Subscribe {
         track,
@@ -178,14 +182,14 @@ fn handle_command(subs: &mut Subscriptions, ctx: &Ctx, command: Command) {
             subs.insert(token, pump);
         }
         Command::Unsubscribe { token } => subs.remove(token),
-    };
+    }
 }
 
 fn handle_pump_join(env: &mut OwnedEnv, pid: LocalPid, token: Token, outcome: anyhow::Result<()>) {
     match outcome {
         Ok(()) => messages::send_track_ended(env, pid, token),
         Err(e) => messages::send_track_error(env, pid, token, e.to_string()),
-    };
+    }
 }
 
 fn handle_new_catalog(

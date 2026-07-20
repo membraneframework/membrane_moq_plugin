@@ -22,9 +22,9 @@ defmodule ExMoQ.Native do
   Wire container of a consumed track's frames,
   as advertised in the broadcast's catalog.
   """
-  @type wire_container :: :legacy | :loc | :unrecognized
+  @type consumed_container :: :legacy | :loc | :unrecognized
 
-  @type rendition :: {track_format(), wire_container()}
+  @type rendition :: {track_format(), consumed_container()}
 
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
@@ -261,7 +261,7 @@ defmodule ExMoQ.Native do
       when the subscription fails on the native side
       while the track may still be advertised in the catalog
   """
-  @spec subscribe_track(broadcast_consumer(), track(), wire_container(), integer(), 0..255) ::
+  @spec subscribe_track(broadcast_consumer(), track(), consumed_container(), integer(), 0..255) ::
           :ok | {:error, reason :: String.t()}
   def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)

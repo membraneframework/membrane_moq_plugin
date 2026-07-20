@@ -4,47 +4,49 @@ use rustler::{
 };
 
 #[derive(NifUnitEnum, Clone, Copy, PartialEq)]
-pub(crate) enum ContainerKind {
+pub(crate) enum PublishContainer {
     Legacy,
     Loc,
 }
 
-impl ContainerKind {
-    pub(crate) const fn to_catalog(self) -> hang::catalog::Container {
-        match self {
-            Self::Legacy => hang::catalog::Container::Legacy,
-            Self::Loc => hang::catalog::Container::Loc,
+impl From<PublishContainer> for hang::catalog::Container {
+    fn from(container: PublishContainer) -> Self {
+        match container {
+            PublishContainer::Legacy => Self::Legacy,
+            PublishContainer::Loc => Self::Loc,
         }
     }
 }
 
-/// A consumed rendition's wire container as it crosses the NIF boundary,
-/// so a subscription can echo the catalog's choice back.
 #[derive(NifUnitEnum, Clone, Copy, PartialEq)]
-pub(crate) enum WireContainer {
+pub(crate) enum ConsumedContainer {
     Legacy,
     Loc,
     Unrecognized,
 }
 
-impl WireContainer {
-    /// Build the runtime-dispatched container the frame parser needs.
-    pub(crate) const fn resolve(self) -> Option<moq_mux::catalog::hang::Container> {
-        match self {
-            Self::Legacy => Some(moq_mux::catalog::hang::Container::Legacy),
-            Self::Loc => Some(moq_mux::catalog::hang::Container::Loc),
-            Self::Unrecognized => None,
+pub(crate) struct UnrecognizedContainer;
+
+impl TryFrom<ConsumedContainer> for hang::catalog::Container {
+    type Error = UnrecognizedContainer;
+
+    fn try_from(container: ConsumedContainer) -> Result<Self, Self::Error> {
+        match container {
+            ConsumedContainer::Legacy => Ok(Self::Legacy),
+            ConsumedContainer::Loc => Ok(Self::Loc),
+            ConsumedContainer::Unrecognized => Err(UnrecognizedContainer),
         }
     }
 }
 
-pub(crate) fn encode_container<'a>(env: Env<'a>, container: &hang::catalog::Container) -> Term<'a> {
-    let container = match container {
-        hang::catalog::Container::Legacy => WireContainer::Legacy,
-        hang::catalog::Container::Loc => WireContainer::Loc,
-        _ => WireContainer::Unrecognized,
-    };
-    container.encode(env)
+impl From<&hang::catalog::Container> for ConsumedContainer {
+    fn from(container: &hang::catalog::Container) -> Self {
+        match container {
+            hang::catalog::Container::Legacy => Self::Legacy,
+            hang::catalog::Container::Loc => Self::Loc,
+            _ => Self::Unrecognized,
+        }
+    }
 }
 
 #[derive(NifStruct, Clone, PartialEq)]
@@ -126,31 +128,32 @@ impl ResolvedConfig {
     }
 }
 
-impl TrackFormat<'_> {
-    pub(crate) fn resolve(self) -> NifResult<ResolvedConfig> {
-        let config = match self {
+impl<'a> TryFrom<TrackFormat<'a>> for ResolvedConfig {
+    type Error = rustler::Error;
+    fn try_from(format: TrackFormat<'a>) -> NifResult<Self> {
+        let config = match format {
             TrackFormat::H264 {
                 params,
                 description,
                 codec,
-            } => ResolvedConfig::Video(h264_video_config(params, description.as_slice(), codec)),
+            } => Self::Video(h264_video_config(&params, description.as_slice(), &codec)),
             TrackFormat::H265 {
                 params,
                 description,
                 codec,
-            } => ResolvedConfig::Video(h265_video_config(params, description.as_slice(), codec)?),
-            TrackFormat::Aac { params, codec } => ResolvedConfig::Audio(aac_audio_config(
+            } => Self::Video(h265_video_config(&params, description.as_slice(), codec)?),
+            TrackFormat::Aac { params, codec } => Self::Audio(aac_audio_config(
                 codec.profile,
                 params.sample_rate,
                 params.channels,
             )),
             TrackFormat::Opus { params } => {
-                ResolvedConfig::Audio(opus_audio_config(params.sample_rate, params.channels))
+                Self::Audio(opus_audio_config(params.sample_rate, params.channels))
             }
             TrackFormat::Unrecognized => {
                 return Err(crate::nif_error!(
                     "cannot publish an unrecognized track format"
-                ))
+                ));
             }
         };
         Ok(config)
@@ -282,93 +285,99 @@ pub(crate) enum TrackParams {
     Unrecognized,
 }
 
-pub(crate) fn video_params(config: &hang::catalog::VideoConfig) -> TrackParams {
-    let codec = match &config.codec {
-        hang::catalog::VideoCodec::H264(h) => VideoCodecParams::H264(H264Codec {
-            inline: h.inline,
-            profile: h.profile,
-            constraints: h.constraints,
-            level: h.level,
-        }),
-        hang::catalog::VideoCodec::H265(h) => VideoCodecParams::H265(H265Codec {
-            in_band: h.in_band,
-            profile_space: h.profile_space,
-            profile_idc: h.profile_idc,
-            profile_compatibility_flags: h.profile_compatibility_flags.to_vec(),
-            tier_flag: h.tier_flag,
-            level_idc: h.level_idc,
-            constraint_flags: h.constraint_flags.to_vec(),
-        }),
-        _ => return TrackParams::Unrecognized,
-    };
+impl From<&hang::catalog::VideoConfig> for TrackParams {
+    fn from(config: &hang::catalog::VideoConfig) -> Self {
+        let codec = match &config.codec {
+            hang::catalog::VideoCodec::H264(h) => VideoCodecParams::H264(H264Codec {
+                inline: h.inline,
+                profile: h.profile,
+                constraints: h.constraints,
+                level: h.level,
+            }),
+            hang::catalog::VideoCodec::H265(h) => VideoCodecParams::H265(H265Codec {
+                in_band: h.in_band,
+                profile_space: h.profile_space,
+                profile_idc: h.profile_idc,
+                profile_compatibility_flags: h.profile_compatibility_flags.to_vec(),
+                tier_flag: h.tier_flag,
+                level_idc: h.level_idc,
+                constraint_flags: h.constraint_flags.to_vec(),
+            }),
+            _ => return Self::Unrecognized,
+        };
 
-    TrackParams::Video {
-        params: VideoTrackParams {
-            width: config.coded_width,
-            height: config.coded_height,
-            framerate: config.framerate,
-        },
-        description: config
-            .description
-            .as_ref()
-            .map(|b| b.to_vec())
-            .unwrap_or_default(),
-        codec,
-    }
-}
-
-pub(crate) const fn audio_params(config: &hang::catalog::AudioConfig) -> TrackParams {
-    let codec = match &config.codec {
-        hang::catalog::AudioCodec::AAC(aac) => AudioCodecParams::Aac(AacCodec {
-            profile: aac.profile,
-        }),
-        hang::catalog::AudioCodec::Opus => AudioCodecParams::Opus,
-        _ => return TrackParams::Unrecognized,
-    };
-
-    TrackParams::Audio {
-        params: AudioTrackParams {
-            sample_rate: config.sample_rate,
-            channels: config.channel_count,
-        },
-        codec,
-    }
-}
-
-pub(crate) fn encode_format<'a>(env: Env<'a>, params: &TrackParams) -> Term<'a> {
-    let format = match params {
-        TrackParams::Video {
-            params,
-            description,
+        Self::Video {
+            params: VideoTrackParams {
+                width: config.coded_width,
+                height: config.coded_height,
+                framerate: config.framerate,
+            },
+            description: config
+                .description
+                .as_ref()
+                .map(|b| b.to_vec())
+                .unwrap_or_default(),
             codec,
-        } => {
-            let mut dcr_binary = NewBinary::new(env, description.len());
-            dcr_binary.as_mut_slice().copy_from_slice(description);
-
-            match codec {
-                VideoCodecParams::H264(codec) => TrackFormat::H264 {
-                    params: params.clone(),
-                    description: dcr_binary.into(),
-                    codec: codec.clone(),
-                },
-                VideoCodecParams::H265(codec) => TrackFormat::H265 {
-                    params: params.clone(),
-                    description: dcr_binary.into(),
-                    codec: codec.clone(),
-                },
-            }
         }
-        TrackParams::Audio { params, codec } => match codec {
-            AudioCodecParams::Aac(codec) => TrackFormat::Aac {
-                params: params.clone(),
-                codec: codec.clone(),
-            },
-            AudioCodecParams::Opus => TrackFormat::Opus {
-                params: params.clone(),
-            },
-        },
-        TrackParams::Unrecognized => TrackFormat::Unrecognized,
-    };
+    }
+}
 
-    format.encode(env)
+impl From<&hang::catalog::AudioConfig> for TrackParams {
+    fn from(config: &hang::catalog::AudioConfig) -> Self {
+        let codec = match &config.codec {
+            hang::catalog::AudioCodec::AAC(aac) => AudioCodecParams::Aac(AacCodec {
+                profile: aac.profile,
+            }),
+            hang::catalog::AudioCodec::Opus => AudioCodecParams::Opus,
+            _ => return Self::Unrecognized,
+        };
+
+        Self::Audio {
+            params: AudioTrackParams {
+                sample_rate: config.sample_rate,
+                channels: config.channel_count,
+            },
+            codec,
+        }
+    }
+}
+
+impl Encoder for TrackParams {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        let format = match self {
+            Self::Video {
+                params,
+                description,
+                codec,
+            } => {
+                let mut dcr_binary = NewBinary::new(env, description.len());
+                dcr_binary.as_mut_slice().copy_from_slice(description);
+
+                match codec {
+                    VideoCodecParams::H264(codec) => TrackFormat::H264 {
+                        params: params.clone(),
+                        description: dcr_binary.into(),
+                        codec: codec.clone(),
+                    },
+                    VideoCodecParams::H265(codec) => TrackFormat::H265 {
+                        params: params.clone(),
+                        description: dcr_binary.into(),
+                        codec: codec.clone(),
+                    },
+                }
+            }
+            Self::Audio { params, codec } => match codec {
+                AudioCodecParams::Aac(codec) => TrackFormat::Aac {
+                    params: params.clone(),
+                    codec: codec.clone(),
+                },
+                AudioCodecParams::Opus => TrackFormat::Opus {
+                    params: params.clone(),
+                },
+            },
+            Self::Unrecognized => TrackFormat::Unrecognized,
+        };
+
+        format.encode(env)
+    }
 }

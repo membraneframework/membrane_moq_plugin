@@ -1,7 +1,7 @@
 use rustler::{Binary, Encoder, LocalPid, NewBinary, OwnedEnv, Term};
 
 use crate::atoms;
-use crate::track_format::{audio_params, encode_container, encode_format, video_params};
+use crate::track_format::{ConsumedContainer, TrackParams};
 
 pub(crate) struct PidDead;
 
@@ -44,8 +44,8 @@ pub(crate) fn send_catalog(
             (
                 name,
                 (
-                    encode_format(env, &video_params(config)),
-                    encode_container(env, &config.container),
+                    TrackParams::from(config),
+                    ConsumedContainer::from(&config.container),
                 ),
             )
                 .encode(env)
@@ -54,8 +54,8 @@ pub(crate) fn send_catalog(
             (
                 name,
                 (
-                    encode_format(env, &audio_params(config)),
-                    encode_container(env, &config.container),
+                    TrackParams::from(config).encode(env),
+                    ConsumedContainer::from(&config.container),
                 ),
             )
                 .encode(env)

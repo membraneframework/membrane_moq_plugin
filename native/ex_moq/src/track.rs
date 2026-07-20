@@ -10,7 +10,7 @@ use crate::{
     atoms,
     broadcast_producer::BroadcastProducerResource,
     lock_ignoring_poison, runtime,
-    track_format::{ContainerKind, ResolvedConfig, TrackFormat},
+    track_format::{PublishContainer, ResolvedConfig, TrackFormat},
 };
 
 /// Producer over the runtime-dispatched container enum,
@@ -44,7 +44,7 @@ struct LiveTrack {
 pub(crate) struct TrackResource {
     live: Mutex<Option<LiveTrack>>,
     name: String,
-    container: ContainerKind,
+    container: hang::catalog::Container,
 }
 
 impl Resource for TrackResource {}
@@ -84,17 +84,17 @@ pub(crate) fn add_track(
     track: String,
     format: TrackFormat,
     priority: u8,
-    container: ContainerKind,
+    container: PublishContainer,
     latency_ns: u64,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
-    let mut resolved = format.resolve()?;
+    let mut resolved = ResolvedConfig::try_from(format)?;
 
-    let catalog_container = container.to_catalog();
+    let catalog_container = hang::catalog::Container::from(container);
     let wire = moq_mux::catalog::hang::Container::try_from(&catalog_container)
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
-    resolved.set_container(catalog_container);
+    resolved.set_container(catalog_container.clone());
 
     let mut inner = lock_ignoring_poison(&broadcast_res.inner);
 
@@ -140,7 +140,7 @@ pub(crate) fn add_track(
                 broadcast,
             })),
             name,
-            container,
+            container: catalog_container,
         }),
     ))
 }
@@ -153,8 +153,8 @@ pub(crate) fn update_track(
 ) -> NifResult<Atom> {
     let _guard = runtime().handle().enter();
 
-    let mut resolved = format.resolve()?;
-    resolved.set_container(track_res.container.to_catalog());
+    let mut resolved = ResolvedConfig::try_from(format)?;
+    resolved.set_container(track_res.container.clone());
 
     let mut live = lock_ignoring_poison(&track_res.live);
     let Some(live) = live.as_mut() else {

@@ -30,9 +30,24 @@ defmodule Subscriber do
 
   alias Membrane.Pad
 
+  defmodule State do
+    @moduledoc false
+
+    @type t :: %__MODULE__{
+            url: String.t(),
+            broadcast: String.t(),
+            generation: non_neg_integer(),
+            available_tracks: %{String.t() => Membrane.StreamFormat.t()},
+            current_track: String.t() | nil
+          }
+
+    @enforce_keys [:url, :broadcast]
+    defstruct @enforce_keys ++ [:current_track, generation: 0, available_tracks: %{}]
+  end
+
   @impl true
   def handle_init(_ctx, opts) do
-    state = %{url: opts[:url], broadcast: opts[:broadcast], gen: 0, available: %{}, current: nil}
+    state = %State{url: opts[:url], broadcast: opts[:broadcast]}
     {[spec: source_spec(state)], state}
   end
 
@@ -41,24 +56,29 @@ defmodule Subscriber do
         {:new_track, {track, %module{} = stream_format}},
         {:source, gen},
         _ctx,
-        %{gen: gen} = state
+        %State{generation: gen} = state
       ) do
     Membrane.Logger.info("announced #{track} (#{inspect(module)})")
 
     if module in [Membrane.H264, Membrane.H265] do
-      maybe_subscribe(put_in(state.available[track], stream_format))
+      maybe_subscribe(put_in(state.available_tracks[track], stream_format))
     else
       {[], state}
     end
   end
 
   @impl true
-  def handle_child_notification({:track_removed, name}, {:source, gen}, _ctx, %{gen: gen} = state) do
+  def handle_child_notification(
+        {:track_removed, name},
+        {:source, gen},
+        _ctx,
+        %State{generation: gen} = state
+      ) do
     Membrane.Logger.info("withdrawn #{name}")
-    state = %{state | available: Map.delete(state.available, name)}
+    state = %{state | available_tracks: Map.delete(state.available_tracks, name)}
 
-    if name == state.current do
-      {actions, state} = maybe_subscribe(%{state | current: nil})
+    if name == state.current_track do
+      {actions, state} = maybe_subscribe(%{state | current_track: nil})
       {[remove_children: subtree(name)] ++ actions, state}
     else
       {[], state}
@@ -70,24 +90,24 @@ defmodule Subscriber do
         {:disconnected, reason},
         {:source, gen},
         _ctx,
-        %{gen: gen} = state
+        %State{generation: gen} = state
       ) do
     Membrane.Logger.info("broadcast gone (#{inspect(reason)}); restarting source to resubscribe")
 
     teardown =
-      case state.current do
+      case state.current_track do
         nil -> [{:source, gen}]
         name -> [{:source, gen} | subtree(name)]
       end
 
-    state = %{state | gen: gen + 1, available: %{}, current: nil}
+    state = %{state | generation: gen + 1, available_tracks: %{}, current_track: nil}
     {[remove_children: teardown, spec: source_spec(state)], state}
   end
 
   @impl true
   def handle_child_notification(_notification, _child, _ctx, state), do: {[], state}
 
-  defp source_spec(%{gen: gen} = state) do
+  defp source_spec(%State{generation: gen} = state) do
     child({:source, gen}, %Membrane.MoQ.Source{
       url: state.url,
       broadcast: state.broadcast,
@@ -97,11 +117,11 @@ defmodule Subscriber do
   end
 
   # Subscribe to the lowest-named advertised video track when idle.
-  defp maybe_subscribe(%{current: nil, available: available} = state)
+  defp maybe_subscribe(%State{current_track: nil, available_tracks: available} = state)
        when map_size(available) > 0 do
     {name, stream_format} = Enum.min_by(available, fn {name, _format} -> name end)
     Membrane.Logger.info("subscribing to #{name}")
-    {[spec: track_spec(name, stream_format, state.gen)], %{state | current: name}}
+    {[spec: track_spec(name, stream_format, state.generation)], %{state | current_track: name}}
   end
 
   defp maybe_subscribe(state), do: {[], state}

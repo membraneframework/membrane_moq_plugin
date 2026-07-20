@@ -65,110 +65,57 @@ defmodule Membrane.MoQ.IntegrationTest do
     broadcast: broadcast,
     relay: relay
   } do
-    receiver = start_receiver!(relay, broadcast)
-    # Without `await_source_connected!`, the sender races the receiver: the
-    # source can finish setup AFTER the publisher has already finished, in
-    # which case it sees no frames at all. The Sink announces in
-    # `handle_pad_added`, so by the time we get past `start_sender!` the
-    # broadcast is in the relay's announcement list.
-    sender = start_sender!(relay, broadcast)
-    await_source_connected!(receiver)
+    {expected, received} = round_trip!(relay, broadcast)
 
-    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
-    expected_payloads = drain_payloads(sender, :expected_sink)
-    assert expected_payloads != []
-
-    assert_end_of_stream(receiver, :sink, :input, 30_000)
-    received_payloads = drain_payloads(receiver, :sink)
-
-    assert received_payloads == expected_payloads
+    assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
   test "a .msf broadcast name selects the MSF catalog for the Source", %{
     broadcast: broadcast,
     relay: relay
   } do
-    broadcast = broadcast <> ".msf"
-    receiver = start_receiver!(relay, broadcast)
-    sender = start_sender!(relay, broadcast)
-    await_source_connected!(receiver)
+    {expected, received} = round_trip!(relay, broadcast <> ".msf")
 
-    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
-    expected_payloads = drain_payloads(sender, :expected_sink)
-    assert expected_payloads != []
-
-    assert_end_of_stream(receiver, :sink, :input, 30_000)
-    received_payloads = drain_payloads(receiver, :sink)
-
-    assert received_payloads == expected_payloads
+    assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
   test "avc3 frames (in-band parameter sets) round-trip unchanged through the Source", %{
     broadcast: broadcast,
     relay: relay
   } do
-    receiver = start_receiver!(relay, broadcast)
-    sender = start_sender!(relay, broadcast, stream_structure: :avc3)
-    await_source_connected!(receiver)
+    {expected, received} = round_trip!(relay, broadcast, stream_structure: :avc3)
 
-    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
-    expected_payloads = drain_payloads(sender, :expected_sink)
-    assert expected_payloads != []
-
-    assert_end_of_stream(receiver, :sink, :input, 30_000)
-    received_payloads = drain_payloads(receiver, :sink)
-
-    assert received_payloads == expected_payloads
+    assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
   test "LOC frames round-trip unchanged with keyframe flags intact", %{
     broadcast: broadcast,
     relay: relay
   } do
-    receiver = start_receiver!(relay, broadcast)
-    sender = start_sender!(relay, broadcast, sink_opts: [container: :loc])
-    await_source_connected!(receiver)
+    {expected, received} = round_trip!(relay, broadcast, sink_opts: [container: :loc])
 
-    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
-    expected_buffers = drain_buffers(sender, :expected_sink)
-    assert expected_buffers != []
-
-    assert_end_of_stream(receiver, :sink, :input, 30_000)
-    received_buffers = drain_buffers(receiver, :sink)
-
-    assert Enum.map(received_buffers, & &1.payload) ==
-             Enum.map(expected_buffers, & &1.payload)
+    assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
 
     # LOC doesn't carry the keyframe bit on the wire:
     # the producer starts a group per keyframe
     # and the consumer flags each group's first frame,
     # so the published flags must survive the round-trip 1:1.
-    assert Enum.map(received_buffers, & &1.metadata.h264.key_frame?) ==
-             Enum.map(expected_buffers, & &1.metadata.h264.key_frame?)
+    assert Enum.map(received, & &1.metadata.h264.key_frame?) ==
+             Enum.map(expected, & &1.metadata.h264.key_frame?)
   end
 
   test "frames buffered with the latency option all arrive, unchanged and in order", %{
     broadcast: broadcast,
     relay: relay
   } do
-    receiver = start_receiver!(relay, broadcast)
-
-    sender =
-      start_sender!(relay, broadcast,
+    # EOS closes the track, which flushes the tail of the latency buffer,
+    # so the receiver still reaches end of stream with frames in flight.
+    {expected, received} =
+      round_trip!(relay, broadcast,
         sink_opts: [container: :loc, latency: Membrane.Time.milliseconds(500)]
       )
 
-    await_source_connected!(receiver)
-
-    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
-    expected_payloads = drain_payloads(sender, :expected_sink)
-    assert expected_payloads != []
-
-    # EOS closes the track, which flushes the tail of the latency buffer.
-    assert_end_of_stream(receiver, :sink, :input, 30_000)
-    received_payloads = drain_payloads(receiver, :sink)
-
-    assert received_payloads == expected_payloads
+    assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
   test "AAC frames round-trip unchanged through the Sink and Source", %{
@@ -177,7 +124,7 @@ defmodule Membrane.MoQ.IntegrationTest do
   } do
     receiver = start_receiver!(relay, broadcast, @audio_track)
     sender = start_audio_sender!(relay, broadcast)
-    await_source_connected!(receiver)
+    assert_sink_playing(receiver, :sink, 10_000)
 
     assert_sink_stream_format(
       receiver,
@@ -223,7 +170,7 @@ defmodule Membrane.MoQ.IntegrationTest do
           })
       )
 
-    await_source_connected!(receiver)
+    assert_sink_playing(receiver, :sink, 10_000)
 
     assert_sink_stream_format(receiver, :sink, %Membrane.Opus{channels: 2}, 10_000)
 
@@ -338,7 +285,7 @@ defmodule Membrane.MoQ.IntegrationTest do
           })
       )
 
-    await_source_connected!(receiver)
+    assert_sink_playing(receiver, :sink, 10_000)
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
 
     Testing.Pipeline.execute_actions(sender, remove_children: [:audio_source, :realtimer])
@@ -353,7 +300,7 @@ defmodule Membrane.MoQ.IntegrationTest do
   } do
     receiver = start_receiver!(relay, broadcast)
     sender = start_sender!(relay, broadcast)
-    await_source_connected!(receiver)
+    assert_sink_playing(receiver, :sink, 10_000)
 
     assert_sink_stream_format(receiver, :sink, _stream_format, 10_000)
     :ok = Membrane.Pipeline.terminate(sender)
@@ -466,7 +413,7 @@ defmodule Membrane.MoQ.IntegrationTest do
     # `sender` -> `relay` -> `relay_pipeline` -> `relay` -> `receiver`
 
     assert_sink_playing(relay_pipeline, :probe, 10_000)
-    await_source_connected!(receiver)
+    assert_sink_playing(receiver, :sink, 10_000)
 
     assert_end_of_stream(sender, :expected_sink, :input, 30_000)
     expected_buffers = drain_buffers(sender, :expected_sink)
@@ -485,6 +432,19 @@ defmodule Membrane.MoQ.IntegrationTest do
              Enum.map(expected_buffers, & &1.payload)
 
     assert Enum.map(received_buffers, & &1.metadata.h264.key_frame?) == expected_key_frames
+  end
+
+  defp round_trip!(relay, broadcast, sender_opts \\ []) do
+    receiver = start_receiver!(relay, broadcast)
+    sender = start_sender!(relay, broadcast, sender_opts)
+    assert_sink_playing(receiver, :sink, 10_000)
+
+    assert_end_of_stream(sender, :expected_sink, :input, 30_000)
+    expected = drain_buffers(sender, :expected_sink)
+    assert expected != []
+
+    assert_end_of_stream(receiver, :sink, :input, 30_000)
+    {expected, drain_buffers(receiver, :sink)}
   end
 
   defp start_receiver!(relay, broadcast, track \\ @track) do
@@ -558,9 +518,6 @@ defmodule Membrane.MoQ.IntegrationTest do
       ]
     )
   end
-
-  defp await_source_connected!(receiver),
-    do: assert_sink_playing(receiver, :sink, 10_000)
 
   defp drain_payloads(pipeline, child) do
     pipeline |> drain_buffers(child) |> Enum.map(& &1.payload)

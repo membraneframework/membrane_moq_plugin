@@ -174,7 +174,6 @@ defmodule Membrane.MoQ.TrackFormat do
       raise("""
       #{inspect(codec)} buffer carries no key_frame? metadata \
       (metadata keys: #{inspect(Map.keys(metadata))}).
-      MoQ groups must start at keyframes.
       """)
 
   def keyframe?(%Membrane.Buffer{}, _audio_format), do: true

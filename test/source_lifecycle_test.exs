@@ -8,13 +8,20 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.{Relay, RestartingSubscriber, Take}
+  alias Membrane.MoQ.Test.{Relay, RestartingSubscriber, SetupGate, Take}
   alias Membrane.Pad
   alias Membrane.Testing
 
   @moduletag :integration
 
   @track "video"
+
+  defmodule Membrane.MoQ.Test.SetupGate do
+    use Membrane.Endpoint
+
+    @impl true
+    def handle_setup(_ctx, state), do: {[setup: :incomplete], state}
+  end
 
   setup_all do
     [relay: Relay.ensure!()]
@@ -83,6 +90,37 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     _second_publisher = start_publisher!(relay, broadcast)
     assert_pipeline_notified(subscriber, {:source, 1}, {:new_track, {_track, _format}}, 15_000)
     assert_sink_buffer(subscriber, {:sink, 1}, %Membrane.Buffer{}, 10_000)
+  end
+
+  test "a catalog received before playback defers subscription until handle_playing", %{
+    relay: relay,
+    broadcast: broadcast
+  } do
+    publisher = start_publisher!(relay, broadcast, frames: 300)
+    assert_start_of_stream(publisher, :sink, Pad.ref(:input, :video), 10_000)
+
+    receiver =
+      Testing.Pipeline.start_link_supervised!(
+        spec: [
+          child(:gate, SetupGate),
+          child(:source, %Membrane.MoQ.Source{
+            url: relay.url,
+            broadcast: broadcast,
+            disable_tls_verify?: relay.disable_tls_verify?,
+            latency: Membrane.Time.milliseconds(200)
+          })
+          |> via_out(Pad.ref(:output, :video), options: [track: @track])
+          |> child(:sink, Testing.Sink)
+        ]
+      )
+
+    assert_pipeline_notified(receiver, :source, {:new_track, {@track, %Membrane.H264{}}}, 15_000)
+    refute_sink_stream_format(receiver, :sink, _format, 500)
+
+    Testing.Pipeline.execute_actions(receiver, remove_children: [:gate])
+
+    assert_sink_stream_format(receiver, :sink, %Membrane.H264{}, 10_000)
+    assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
   end
 
   test "a pad added after the source disconnected is immediately end_of_streamed", %{

@@ -36,9 +36,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
     assert_sink_stream_format(receiver, :sink, %Membrane.H264{}, 15_000)
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(publisher)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "a parser wired directly onto the pad decodes from the pad's stream format alone", %{
@@ -67,9 +64,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     for _i <- 1..20 do
       assert_sink_buffer(subscriber, {:sink, 0}, %Membrane.Buffer{}, 10_000)
     end
-
-    :ok = Membrane.Pipeline.terminate(publisher)
-    :ok = Membrane.Pipeline.terminate(subscriber)
   end
 
   test "the parent resubscribes after a broadcast drop and receives the second publish", %{
@@ -89,9 +83,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     second_publisher = start_publisher!(relay, broadcast)
     assert_pipeline_notified(subscriber, {:source, 1}, {:new_track, {_track, _format}}, 15_000)
     assert_sink_buffer(subscriber, {:sink, 1}, %Membrane.Buffer{}, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(second_publisher)
-    :ok = Membrane.Pipeline.terminate(subscriber)
   end
 
   test "a pad added after the source disconnected is immediately end_of_streamed", %{
@@ -125,8 +116,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     )
 
     assert_end_of_stream(receiver, :late_sink, :input, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "a pad linked before its track is advertised parks until a later catalog snapshot", %{
@@ -200,9 +189,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
     assert_pipeline_notified(receiver, :source, {:track_removed, "audio"}, 10_000)
     assert_sink_buffer(receiver, :video_sink, %Membrane.Buffer{}, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(publisher)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test ":moq_track_error for a live subscription sends EOS without killing the source", %{
@@ -219,9 +205,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     send(source_pid, {:moq_track_error, 0, "injected pump panic"})
 
     assert_end_of_stream(receiver, :sink, :input, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(publisher)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test ":moq_track_error for an unknown token is dropped without killing the source", %{
@@ -240,9 +223,6 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
     refute_receive {:DOWN, ^ref, :process, ^receiver, _reason}, 500
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(publisher)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   defp start_publisher!(relay, broadcast, opts \\ []) do

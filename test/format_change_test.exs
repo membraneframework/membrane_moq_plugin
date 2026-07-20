@@ -94,9 +94,6 @@ defmodule Membrane.MoQ.FormatChangeTest do
       assert_pipeline_notified(receiver, :source, {:track_removed, @track}, 15_000)
 
       assert_end_of_stream(receiver, {:sink, 3}, :input, 10_000)
-
-      :ok = Membrane.Pipeline.terminate(publisher)
-      :ok = Membrane.Pipeline.terminate(receiver)
     end
   end
 
@@ -133,9 +130,6 @@ defmodule Membrane.MoQ.FormatChangeTest do
     assert_end_of_stream(receiver, {:sink, 1}, :input, 10_000)
 
     refute_pipeline_notified(receiver, :source, {:new_track, _info}, 100)
-
-    :ok = Membrane.Pipeline.terminate(publisher)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   defp h264_parser(framerate),

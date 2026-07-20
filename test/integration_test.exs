@@ -82,9 +82,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "a .msf broadcast name selects the MSF catalog for the Source", %{
@@ -104,9 +101,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "avc3 frames (in-band parameter sets) round-trip unchanged through the Source", %{
@@ -125,9 +119,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "LOC frames round-trip unchanged with keyframe flags intact", %{
@@ -154,9 +145,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     # so the published flags must survive the round-trip 1:1.
     assert Enum.map(received_buffers, & &1.metadata.h264.key_frame?) ==
              Enum.map(expected_buffers, & &1.metadata.h264.key_frame?)
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "frames buffered with the latency option all arrive, unchanged and in order", %{
@@ -181,9 +169,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     received_payloads = drain_payloads(receiver, :sink)
 
     assert received_payloads == expected_payloads
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "AAC frames round-trip unchanged through the Sink and Source", %{
@@ -207,9 +192,6 @@ defmodule Membrane.MoQ.IntegrationTest do
 
     assert_end_of_stream(receiver, :sink, :input, 30_000)
     assert drain_payloads(receiver, :sink) == expected_payloads
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "Opus frames round-trip unchanged through the Sink and Source", %{
@@ -249,9 +231,6 @@ defmodule Membrane.MoQ.IntegrationTest do
 
     assert_end_of_stream(receiver, :sink, :input, 30_000)
     assert drain_payloads(receiver, :sink) == Enum.map(buffers, & &1.payload)
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "a two-pad A/V broadcast through one Sink is consumed by a two-pad Source", %{
@@ -323,9 +302,6 @@ defmodule Membrane.MoQ.IntegrationTest do
 
     assert drain_payloads(receiver, :video_sink) == expected_video
     assert drain_payloads(receiver, :audio_sink) == expected_audio
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "removing a Sink pad mid-stream makes the Source report :track_removed and end the pad",
@@ -369,9 +345,6 @@ defmodule Membrane.MoQ.IntegrationTest do
 
     assert_pipeline_notified(receiver, :source, {:track_removed, @audio_track}, 10_000)
     assert_end_of_stream(receiver, :sink, :input, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "Source emits end_of_stream when the publisher disconnects after publishing a frame", %{
@@ -386,8 +359,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     :ok = Membrane.Pipeline.terminate(sender)
 
     assert_end_of_stream(receiver, :sink, :input, 10_000)
-
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   test "Sink closes a pad that ended before its stream format without crashing", %{
@@ -409,8 +380,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     refute_receive {:DOWN, ^ref, :process, ^pipeline,
                     {:membrane_child_crash, :moq_sink, _reason}},
                    5_000
-
-    :ok = Membrane.Pipeline.terminate(pipeline)
   end
 
   test "Removing a pad and relinking one with the same track name doesn't crash the sink", %{
@@ -437,8 +406,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     )
 
     assert_end_of_stream(sender, :moq_sink, Pad.ref(:input, :video2), 30_000)
-
-    :ok = Membrane.Pipeline.terminate(sender)
   end
 
   test "Sink skips delta frames preceding the first keyframe instead of crashing", %{
@@ -465,8 +432,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     sender = Testing.Pipeline.start_link_supervised!(spec: spec)
 
     assert_end_of_stream(sender, :moq_sink, Pad.ref(:input, :video), 30_000)
-
-    :ok = Membrane.Pipeline.terminate(sender)
   end
 
   test "Source emits parser-convention keyframe metadata, preserving grouping across a Source-to-Sink relay",
@@ -520,10 +485,6 @@ defmodule Membrane.MoQ.IntegrationTest do
              Enum.map(expected_buffers, & &1.payload)
 
     assert Enum.map(received_buffers, & &1.metadata.h264.key_frame?) == expected_key_frames
-
-    :ok = Membrane.Pipeline.terminate(sender)
-    :ok = Membrane.Pipeline.terminate(relay_pipeline)
-    :ok = Membrane.Pipeline.terminate(receiver)
   end
 
   defp start_receiver!(relay, broadcast, track \\ @track) do

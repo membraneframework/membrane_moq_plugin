@@ -41,7 +41,5 @@ defmodule Membrane.MoQ.SinkTest do
 
     assert_pipeline_notified(pipeline, :sink, {:disconnected, "injected session close"}, 5_000)
     refute_receive {:DOWN, ^ref, :process, ^pipeline, _reason}, 500
-
-    :ok = Membrane.Pipeline.terminate(pipeline)
   end
 end

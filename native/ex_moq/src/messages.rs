@@ -54,7 +54,7 @@ pub(crate) fn send_catalog(
             (
                 name,
                 (
-                    TrackParams::from(config).encode(env),
+                    TrackParams::from(config),
                     ConsumedContainer::from(&config.container),
                 ),
             )

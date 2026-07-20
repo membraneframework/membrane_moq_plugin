@@ -160,9 +160,9 @@ impl<'a> TryFrom<TrackFormat<'a>> for ResolvedConfig {
 }
 
 fn h264_video_config(
-    video_params: VideoTrackParams,
+    video_params: &VideoTrackParams,
     dcr: &[u8],
-    codec: H264Codec,
+    codec: &H264Codec,
 ) -> hang::catalog::VideoConfig {
     let codec = hang::catalog::VideoCodec::H264(hang::catalog::H264 {
         inline: codec.inline,
@@ -183,7 +183,7 @@ fn h264_video_config(
 }
 
 fn h265_video_config(
-    video_params: VideoTrackParams,
+    video_params: &VideoTrackParams,
     dcr: &[u8],
     codec: H265Codec,
 ) -> NifResult<hang::catalog::VideoConfig> {

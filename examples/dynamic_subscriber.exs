@@ -36,32 +36,41 @@ defmodule Subscriber do
     @type t :: %__MODULE__{
             url: String.t(),
             broadcast: String.t(),
-            generation: non_neg_integer(),
             available_tracks: %{String.t() => Membrane.StreamFormat.t()},
-            current_track: String.t() | nil
+            current_track: String.t() | nil,
+            moq_disconnected?: boolean()
           }
 
     @enforce_keys [:url, :broadcast]
-    defstruct @enforce_keys ++ [:current_track, generation: 0, available_tracks: %{}]
+    defstruct @enforce_keys ++ [:current_track, available_tracks: %{}, moq_disconnected?: false]
   end
 
   @impl true
   def handle_init(_ctx, opts) do
     state = %State{url: opts[:url], broadcast: opts[:broadcast]}
-    {[spec: source_spec(state)], state}
+
+    source_spec =
+      child(:source, %Membrane.MoQ.Source{
+        url: state.url,
+        broadcast: state.broadcast,
+        disable_tls_verify?: true,
+        latency: Membrane.Time.milliseconds(200)
+      })
+
+    {[spec: source_spec], state}
   end
 
   @impl true
   def handle_child_notification(
         {:new_track, {track, %module{} = stream_format}},
-        {:source, gen},
+        :source,
         _ctx,
-        %State{generation: gen} = state
+        %State{} = state
       ) do
     Membrane.Logger.info("announced #{track} (#{inspect(module)})")
 
     if module in [Membrane.H264, Membrane.H265] do
-      maybe_subscribe(put_in(state.available_tracks[track], stream_format))
+      put_in(state.available_tracks[track], stream_format) |> maybe_subscribe()
     else
       {[], state}
     end
@@ -70,9 +79,9 @@ defmodule Subscriber do
   @impl true
   def handle_child_notification(
         {:track_removed, name},
-        {:source, gen},
+        :source,
         _ctx,
-        %State{generation: gen} = state
+        %State{} = state
       ) do
     Membrane.Logger.info("withdrawn #{name}")
     state = %{state | available_tracks: Map.delete(state.available_tracks, name)}
@@ -88,48 +97,43 @@ defmodule Subscriber do
   @impl true
   def handle_child_notification(
         {:disconnected, reason},
-        {:source, gen},
+        :source,
         _ctx,
-        %State{generation: gen} = state
+        %State{} = state
       ) do
-    Membrane.Logger.info("broadcast gone (#{inspect(reason)}); restarting source to resubscribe")
-
-    teardown =
-      case state.current_track do
-        nil -> [{:source, gen}]
-        name -> [{:source, gen} | subtree(name)]
-      end
-
-    state = %{state | generation: gen + 1, available_tracks: %{}, current_track: nil}
-    {[remove_children: teardown, spec: source_spec(state)], state}
+    Membrane.Logger.warning("MoQ session disconnected, reason: #{inspect(reason)}")
+    state = %{state | available_tracks: %{}, current_track: nil, moq_disconnected?: true}
+    {[], state}
   end
 
   @impl true
   def handle_child_notification(_notification, _child, _ctx, state), do: {[], state}
 
-  defp source_spec(%State{generation: gen} = state) do
-    child({:source, gen}, %Membrane.MoQ.Source{
-      url: state.url,
-      broadcast: state.broadcast,
-      disable_tls_verify?: true,
-      latency: Membrane.Time.milliseconds(200)
-    })
-  end
+  @impl true
+  def handle_element_end_of_stream(
+        {:player, _name},
+        _pad,
+        _ctx,
+        %State{moq_disconnected?: true} = state
+      ),
+      do: {[terminate: :normal], state}
 
-  # Subscribe to the lowest-named advertised video track when idle.
+  @impl true
+  def handle_element_end_of_stream(_child, _pad, _ctx, state), do: {[], state}
+
   defp maybe_subscribe(%State{current_track: nil, available_tracks: available} = state)
        when map_size(available) > 0 do
     {name, stream_format} = Enum.min_by(available, fn {name, _format} -> name end)
     Membrane.Logger.info("subscribing to #{name}")
-    {[spec: track_spec(name, stream_format, state.generation)], %{state | current_track: name}}
+    {[spec: track_spec(name, stream_format)], %{state | current_track: name}}
   end
 
   defp maybe_subscribe(state), do: {[], state}
 
-  defp track_spec(name, stream_format, gen) do
+  defp track_spec(name, stream_format) do
     {parser, decoder} = playback_for(stream_format)
 
-    get_child({:source, gen})
+    get_child(:source)
     |> via_out(Pad.ref(:output, name), options: [track: name])
     |> child({:parser, name}, parser)
     |> child({:decoder, name}, decoder)
@@ -183,9 +187,20 @@ broadcast =
 
 opts = [url: "https://localhost:4443/anon", broadcast: broadcast]
 
-{:ok, _supervisor, subscriber} = Membrane.Pipeline.start_link(Subscriber, opts)
+{:ok, _supervisor, subscriber_pid} = Membrane.Pipeline.start_link(Subscriber, opts)
 
-# Follow the broadcast until a key is pressed, then shut the pipeline down
-# gracefully so every element's terminate path runs.
-IO.gets("\nFollowing broadcast — press Enter to stop the pipeline.\n")
-Membrane.Pipeline.terminate(subscriber)
+io_pid =
+  spawn(fn ->
+    IO.gets("""
+    Subscriber pipeline started, waiting for broadcast: #{inspect(broadcast)}.
+    Press Enter to stop.
+    """)
+  end)
+
+subscriber_ref = Process.monitor(subscriber_pid)
+io_ref = Process.monitor(io_pid)
+
+receive do
+  {:DOWN, ref, :process, _pid, _reason} when ref in [subscriber_ref, io_ref] ->
+    :ok
+end

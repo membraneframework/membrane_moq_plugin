@@ -8,7 +8,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.{Relay, RestartingSubscriber, SetupGate, Take}
+  alias Membrane.MoQ.Test.{Relay, RestartingSubscriber, Take}
   alias Membrane.Pad
   alias Membrane.Testing
 
@@ -16,7 +16,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
   @track "video"
 
-  defmodule Membrane.MoQ.Test.SetupGate do
+  defmodule SetupGate do
     use Membrane.Endpoint
 
     @impl true

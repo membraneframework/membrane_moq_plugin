@@ -78,8 +78,8 @@ defmodule Membrane.MoQ.Source.Tracks do
     {removed, added, changed} = diff(tracks.renditions, new_renditions)
 
     ended =
-      for {token, pad} <- tracks.token_to_pad,
-          MapSet.member?(tracks.active, token),
+      for token <- tracks.active,
+          pad = pad_for(tracks, token),
           track_of.(pad) in changed,
           do: {token, pad}
 

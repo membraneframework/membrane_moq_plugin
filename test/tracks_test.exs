@@ -31,8 +31,10 @@ defmodule Membrane.MoQ.Source.TracksTest do
     tracks = Tracks.activate(tracks, a)
     assert Tracks.waiting(tracks) == [{b, @pad_b}]
 
-    tracks = Tracks.deactivate(tracks, a)
-    assert Enum.sort(Tracks.waiting(tracks)) == [{a, @pad_a}, {b, @pad_b}]
+    # A dead subscription retires its token binding entirely.
+    assert {@pad_a, tracks} = Tracks.remove_token(tracks, a)
+    assert {nil, ^tracks} = Tracks.remove_token(tracks, a)
+    assert Tracks.waiting(tracks) == [{b, @pad_b}]
   end
 
   test "apply_snapshot categorizes the diff and stores the renditions" do

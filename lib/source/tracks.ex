@@ -28,7 +28,8 @@ defmodule Membrane.MoQ.Source.Tracks do
   def add_pad(tracks, pad) do
     token = tracks.next_token
 
-    {token, %{tracks | next_token: token + 1, token_to_pad: BiMap.put(tracks.token_to_pad, token, pad)}}
+    {token,
+     %{tracks | next_token: token + 1, token_to_pad: BiMap.put(tracks.token_to_pad, token, pad)}}
   end
 
   @spec remove_pad(t(), Membrane.Pad.ref()) :: {token() | nil, t()}
@@ -36,6 +37,14 @@ defmodule Membrane.MoQ.Source.Tracks do
     case BiMap.get_key(tracks.token_to_pad, pad) do
       nil -> {nil, tracks}
       token -> {token, drop(tracks, token)}
+    end
+  end
+
+  @spec remove_token(t(), token()) :: {Membrane.Pad.ref() | nil, t()}
+  def remove_token(tracks, token) do
+    case BiMap.get(tracks.token_to_pad, token) do
+      nil -> {nil, tracks}
+      pad -> {pad, drop(tracks, token)}
     end
   end
 
@@ -55,11 +64,6 @@ defmodule Membrane.MoQ.Source.Tracks do
   @spec activate(t(), token()) :: t()
   def activate(tracks, token) do
     %{tracks | active: MapSet.put(tracks.active, token)}
-  end
-
-  @spec deactivate(t(), token()) :: t()
-  def deactivate(tracks, token) do
-    %{tracks | active: MapSet.delete(tracks.active, token)}
   end
 
   @spec apply_snapshot(

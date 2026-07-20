@@ -158,7 +158,7 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_playing(ctx, %{status: :disconnect_pending} = state),
-    do: {eos_all(ctx.pads), %{state | status: :disconnected}}
+    do: become_disconnected(ctx, state)
 
   @impl true
   def handle_playing(ctx, state), do: subscribe_ready(ctx, state)
@@ -217,55 +217,51 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_info({:moq_frame, token, payload, timestamp_ns, keyframe?}, ctx, state) do
-    actions =
-      case active_pad(ctx, state, token) do
-        nil ->
-          []
+    pad = Tracks.pad_for(state.tracks, token)
 
-        pad ->
-          buffer = %Membrane.Buffer{
-            payload: payload,
-            pts: Membrane.Time.nanoseconds(timestamp_ns),
-            metadata: TrackFormat.buffer_metadata(keyframe?, ctx.pads[pad].stream_format)
-          }
+    case ctx.pads[pad] do
+      %{end_of_stream?: false, stream_format: stream_format} ->
+        buffer = %Membrane.Buffer{
+          payload: payload,
+          pts: Membrane.Time.nanoseconds(timestamp_ns),
+          metadata: TrackFormat.buffer_metadata(keyframe?, stream_format)
+        }
 
-          [buffer: {pad, buffer}]
-      end
+        {[buffer: {pad, buffer}], state}
 
-    {actions, state}
+      _ended_or_absent ->
+        {[], state}
+    end
   end
 
   @impl true
   def handle_info({:moq_track_ended, token}, ctx, state) do
-    state = %{state | tracks: Tracks.deactivate(state.tracks, token)}
+    {pad, tracks} = Tracks.remove_token(state.tracks, token)
+    state = %{state | tracks: tracks}
 
-    actions =
-      case active_pad(ctx, state, token) do
-        nil -> []
-        pad -> [end_of_stream: pad]
-      end
-
-    {actions, state}
+    case ctx.pads[pad] do
+      %{end_of_stream?: false} -> {[end_of_stream: pad], state}
+      _ended_or_absent -> {[], state}
+    end
   end
 
   @impl true
   def handle_info({:moq_track_error, token, reason}, ctx, state) do
     # NOTE: should we bubble this up as a parent notif?
-    state = %{state | tracks: Tracks.deactivate(state.tracks, token)}
+    {pad, tracks} = Tracks.remove_token(state.tracks, token)
+    state = %{state | tracks: tracks}
 
-    case active_pad(ctx, state, token) do
-      nil ->
-        {[], state}
-
-      pad ->
-        track = ctx.pads[pad].options.track
-
+    case ctx.pads[pad] do
+      %{end_of_stream?: false, options: %{track: track}} ->
         Membrane.Logger.warning("""
         MoQ subscription for track #{inspect(track)} failed, sending EOS.
         reason: #{inspect(reason)}
         """)
 
         {[end_of_stream: pad], state}
+
+      _ended_or_absent ->
+        {[], state}
     end
   end
 
@@ -316,8 +312,12 @@ defmodule Membrane.MoQ.Source do
     notify_disconnected = [notify_parent: {:disconnected, reason}]
 
     case ctx.playback do
-      :playing -> {notify_disconnected ++ eos_all(ctx.pads), %{state | status: :disconnected}}
-      :stopped -> {notify_disconnected, %{state | status: :disconnect_pending}}
+      :playing ->
+        {actions, state} = become_disconnected(ctx, state)
+        {notify_disconnected ++ actions, state}
+
+      :stopped ->
+        {notify_disconnected, %{state | status: :disconnect_pending}}
     end
   end
 
@@ -339,18 +339,14 @@ defmodule Membrane.MoQ.Source do
   @spec subscribe_pad(Tracks.token(), Membrane.Pad.ref(), map(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
   defp subscribe_pad(token, pad, ctx, state) do
-    %{options: %{track: track, priority: priority}, end_of_stream?: eos?} = ctx.pads[pad]
+    %{options: %{track: track, priority: priority}} = ctx.pads[pad]
 
-    with false <- eos?,
-         {format, container} <- Tracks.rendition(state.tracks, track),
+    with {format, container} <- Tracks.rendition(state.tracks, track),
          priority = priority || TrackFormat.default_priority(format),
          :ok <- Native.subscribe_track(state.consumer, track, container, token, priority) do
       {[stream_format: {pad, TrackFormat.to_stream_format(format)}],
        %{state | tracks: Tracks.activate(state.tracks, token)}}
     else
-      true ->
-        {[], state}
-
       nil ->
         # track not advertised yet; parked until a catalog update resolves it
         {[], state}
@@ -361,22 +357,15 @@ defmodule Membrane.MoQ.Source do
         reason: #{inspect(reason)}
         """)
 
-        {[end_of_stream: pad], state}
+        {_pad, tracks} = Tracks.remove_token(state.tracks, token)
+        {[end_of_stream: pad], %{state | tracks: tracks}}
     end
   end
 
-  @spec eos_all(%{Membrane.Pad.ref() => map()}) :: [Membrane.Element.Action.t()]
-  defp eos_all(pads) do
-    for {pad, %{end_of_stream?: false}} <- pads, do: {:end_of_stream, pad}
-  end
-
-  @spec active_pad(map(), State.t(), Tracks.token()) :: Membrane.Pad.ref() | nil
-  defp active_pad(ctx, state, token) do
-    with pad when pad != nil <- Tracks.pad_for(state.tracks, token),
-         %{end_of_stream?: false} <- ctx.pads[pad] do
-      pad
-    else
-      _absent_or_ended -> nil
-    end
+  @spec become_disconnected(Membrane.Element.CallbackContext.t(), State.t()) ::
+          {[Membrane.Element.Action.t()], State.t()}
+  defp become_disconnected(ctx, %State{} = state) do
+    actions = for {pad, %{end_of_stream?: false}} <- ctx.pads, do: {:end_of_stream, pad}
+    {actions, %{state | status: :disconnected, tracks: %Tracks{}}}
   end
 end

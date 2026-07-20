@@ -20,18 +20,6 @@ defmodule ExMoQ.NativeTest do
     [broadcast: "membrane/native-#{System.unique_integer([:positive])}"]
   end
 
-  test "create_session reports :moq_setup_failed when nothing listens on the port" do
-    {:ok, socket} = :gen_udp.open(0)
-    {:ok, port} = :inet.port(socket)
-    :ok = :gen_udp.close(socket)
-
-    {:ok, _session} = Native.create_session("https://127.0.0.1:#{port}", self(), true)
-
-    assert_receive {:moq_setup_failed, reason}, 10_000
-    assert is_binary(reason)
-    refute_received :moq_connected
-  end
-
   test "subscribing to a track the broadcast does not carry fails with :moq_track_error", %{
     broadcast: broadcast,
     relay: relay

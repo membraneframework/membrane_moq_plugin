@@ -72,8 +72,6 @@ pub(crate) fn close_session(session: ResourceArc<SessionResource>) -> Atom {
     atoms::ok()
 }
 
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
 async fn connect(
     url: Url,
     published: moq_net::OriginConsumer,
@@ -86,10 +84,5 @@ async fn connect(
     let client = config.init().map_err(|e| e.to_string())?;
     let client = client.with_publish(published).with_consume(consumed);
 
-    match tokio::time::timeout(CONNECT_TIMEOUT, client.connect(url)).await {
-        Ok(result) => result.map_err(|e| e.to_string()),
-        Err(_elapsed) => Err(format!(
-            "connecting to the relay timed out after {CONNECT_TIMEOUT:?}"
-        )),
-    }
+    client.connect(url).await.map_err(|e| e.to_string())
 }

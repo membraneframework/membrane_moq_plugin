@@ -2,7 +2,7 @@
 name = "ex_moq"
 version = "0.1.0"
 authors = []
-edition = "2021"
+edition = "2024"
 rust-version = "1.88.0"
 
 [lib]

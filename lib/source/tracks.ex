@@ -12,11 +12,13 @@ defmodule Membrane.MoQ.Source.Tracks do
           ended: [{token(), Membrane.Pad.ref()}]
         }
 
+  @type renditions :: %{Native.track() => Native.rendition()}
+
   @type t :: %__MODULE__{
           next_token: token(),
           token_to_pad: BiMap.t(token(), Membrane.Pad.ref()),
           active: MapSet.t(token()),
-          renditions: %{Native.track() => Native.rendition()}
+          renditions: renditions()
         }
 
   defstruct next_token: 0,
@@ -75,12 +77,10 @@ defmodule Membrane.MoQ.Source.Tracks do
     new_renditions = Map.new(renditions)
     {removed, added, changed} = diff(tracks.renditions, new_renditions)
 
-    changed_set = MapSet.new(changed)
-
     ended =
       for {token, pad} <- tracks.token_to_pad,
           MapSet.member?(tracks.active, token),
-          MapSet.member?(changed_set, track_of.(pad)),
+          track_of.(pad) in changed,
           do: {token, pad}
 
     tracks = %{tracks | renditions: new_renditions}
@@ -89,18 +89,18 @@ defmodule Membrane.MoQ.Source.Tracks do
     {%{removed: removed, added: added, changed: changed, ended: ended}, tracks}
   end
 
-  @spec diff(renditions, renditions) ::
+  @spec diff(old :: renditions(), new :: renditions()) ::
           {removed :: [Native.track()], added :: [Native.track()], changed :: [Native.track()]}
-        when renditions: %{Native.track() => Native.rendition()}
   defp diff(old, new) do
     removed = for {name, _rendition} <- old, not is_map_key(new, name), do: name
     added = for {name, _rendition} <- new, not is_map_key(old, name), do: name
 
     changed =
-      for {name, rendition} <- new,
-          is_map_key(old, name),
-          Map.fetch!(old, name) != rendition,
-          do: name
+      Map.intersect(new, old, fn _name, old_rendition, new_rendition ->
+        old_rendition != new_rendition
+      end)
+      |> Map.filter(fn {_name, changed?} -> changed? end)
+      |> Map.keys()
 
     {removed, added, changed}
   end

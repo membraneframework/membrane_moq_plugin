@@ -194,7 +194,8 @@ defmodule Membrane.MoQ.TrackFormat do
 
   @spec h265_stream_structure(binary(), boolean()) :: H265.stream_structure()
   defp h265_stream_structure(<<>>, _in_band), do: :annexb
-  defp h265_stream_structure(dcr, in_band), do: {if(in_band, do: :hev1, else: :hvc1), dcr}
+  defp h265_stream_structure(dcr, true), do: {:hev1, dcr}
+  defp h265_stream_structure(dcr, false), do: {:hvc1, dcr}
 
   @spec framerate_to_float({integer(), integer()} | nil) :: float() | nil
   defp framerate_to_float({num, den}) when is_integer(num) and is_integer(den) and den > 0,

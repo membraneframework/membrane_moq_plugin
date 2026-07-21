@@ -25,6 +25,21 @@ enum Rendition {
 struct KindMismatch;
 
 impl Rendition {
+    fn new(catalog: &moq_mux::catalog::Producer, name: &str, config: ResolvedConfig) -> Self {
+        match config {
+            ResolvedConfig::Video(config) => {
+                let mut handle = catalog.video_track(name);
+                handle.set(config);
+                Self::Video(handle)
+            }
+            ResolvedConfig::Audio(config) => {
+                let mut handle = catalog.audio_track(name);
+                handle.set(config);
+                Self::Audio(handle)
+            }
+        }
+    }
+
     fn set(&mut self, config: ResolvedConfig) -> Result<(), KindMismatch> {
         match (self, config) {
             (Self::Video(handle), ResolvedConfig::Video(config)) => handle.set(config),
@@ -108,18 +123,7 @@ pub(crate) fn add_track(
 
     let name = tp.name.clone();
 
-    let rendition = match resolved {
-        ResolvedConfig::Video(config) => {
-            let mut handle = inner.catalog.video_track(&name);
-            handle.set(config);
-            Rendition::Video(handle)
-        }
-        ResolvedConfig::Audio(config) => {
-            let mut handle = inner.catalog.audio_track(&name);
-            handle.set(config);
-            Rendition::Audio(handle)
-        }
-    };
+    let rendition = Rendition::new(&inner.catalog, &name, resolved);
 
     let latency = std::time::Duration::from_nanos(latency_ns);
     let producer = Arc::new(Mutex::new(

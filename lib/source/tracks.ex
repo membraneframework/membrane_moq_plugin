@@ -17,28 +17,32 @@ defmodule Membrane.MoQ.Source.Tracks do
   @type t :: %__MODULE__{
           next_token: token(),
           # Entry lives from pad being added until pad EOS
-          token_to_pad: BiMap.t(token(), Membrane.Pad.ref()),
+          subscriptions: BiMap.t(token(), {Membrane.Pad.ref(), Native.track()}),
           # Entry lives from native subscription task start until pad EOS
           active: MapSet.t(token()),
           renditions: renditions()
         }
 
   defstruct next_token: 0,
-            token_to_pad: BiMap.new(),
+            subscriptions: BiMap.new(),
             active: MapSet.new(),
             renditions: %{}
 
-  @spec add_pad(t(), Membrane.Pad.ref()) :: {token(), t()}
-  def add_pad(tracks, pad) do
+  @spec add_pad(t(), Membrane.Pad.ref(), Native.track()) :: {token(), t()}
+  def add_pad(tracks, pad, track) do
     token = tracks.next_token
 
     {token,
-     %{tracks | next_token: token + 1, token_to_pad: BiMap.put(tracks.token_to_pad, token, pad)}}
+     %{
+       tracks
+       | next_token: token + 1,
+         subscriptions: BiMap.put(tracks.subscriptions, token, {pad, track})
+     }}
   end
 
-  @spec remove_pad(t(), Membrane.Pad.ref()) :: {token() | nil, t()}
-  def remove_pad(tracks, pad) do
-    case BiMap.get_key(tracks.token_to_pad, pad) do
+  @spec remove_pad(t(), Membrane.Pad.ref(), Native.track()) :: {token() | nil, t()}
+  def remove_pad(tracks, pad, track) do
+    case BiMap.get_key(tracks.subscriptions, {pad, track}) do
       nil -> {nil, tracks}
       token -> {token, drop(tracks, token)}
     end
@@ -46,23 +50,28 @@ defmodule Membrane.MoQ.Source.Tracks do
 
   @spec remove_token(t(), token()) :: {Membrane.Pad.ref() | nil, t()}
   def remove_token(tracks, token) do
-    case BiMap.get(tracks.token_to_pad, token) do
+    case BiMap.get(tracks.subscriptions, token) do
       nil -> {nil, tracks}
-      pad -> {pad, drop(tracks, token)}
+      {pad, _track} -> {pad, drop(tracks, token)}
     end
   end
 
   @spec pad_for(t(), token()) :: Membrane.Pad.ref() | nil
-  def pad_for(tracks, token), do: BiMap.get(tracks.token_to_pad, token)
+  def pad_for(tracks, token) do
+    case BiMap.get(tracks.subscriptions, token) do
+      nil -> nil
+      {pad, _track} -> pad
+    end
+  end
 
   @spec rendition(t(), Native.track()) :: Native.rendition() | nil
   def rendition(tracks, track), do: tracks.renditions[track]
 
-  @spec waiting(t()) :: [{token(), Membrane.Pad.ref()}]
+  @spec waiting(t()) :: [{token(), Membrane.Pad.ref(), Native.track()}]
   def waiting(tracks) do
-    for {token, pad} <- tracks.token_to_pad,
+    for {token, {pad, track}} <- tracks.subscriptions,
         not MapSet.member?(tracks.active, token),
-        do: {token, pad}
+        do: {token, pad, track}
   end
 
   @spec activate(t(), token()) :: t()
@@ -70,19 +79,15 @@ defmodule Membrane.MoQ.Source.Tracks do
     %{tracks | active: MapSet.put(tracks.active, token)}
   end
 
-  @spec apply_snapshot(
-          t(),
-          [{Native.track(), Native.rendition()}],
-          (Membrane.Pad.ref() -> Native.track())
-        ) :: {snapshot_diff(), t()}
-  def apply_snapshot(tracks, renditions, track_of) do
+  @spec apply_snapshot(t(), [{Native.track(), Native.rendition()}]) :: {snapshot_diff(), t()}
+  def apply_snapshot(tracks, renditions) do
     new_renditions = Map.new(renditions)
     {removed, added, changed} = diff(tracks.renditions, new_renditions)
 
     ended =
       for token <- tracks.active,
-          pad = pad_for(tracks, token),
-          track_of.(pad) in changed,
+          {pad, track} = BiMap.fetch!(tracks.subscriptions, token),
+          track in changed,
           do: {token, pad}
 
     tracks = %{tracks | renditions: new_renditions}
@@ -111,7 +116,7 @@ defmodule Membrane.MoQ.Source.Tracks do
   defp drop(tracks, token) do
     %{
       tracks
-      | token_to_pad: BiMap.delete_key(tracks.token_to_pad, token),
+      | subscriptions: BiMap.delete_key(tracks.subscriptions, token),
         active: MapSet.delete(tracks.active, token)
     }
   end

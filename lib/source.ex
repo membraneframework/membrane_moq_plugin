@@ -147,11 +147,12 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_pad_added(pad, ctx, state) do
-    {token, tracks} = Tracks.add_pad(state.tracks, pad)
+    track = ctx.pads[pad].options.track
+    {token, tracks} = Tracks.add_pad(state.tracks, pad, track)
     state = %{state | tracks: tracks}
 
     case ctx.playback do
-      :playing -> subscribe_pad(token, pad, ctx, state)
+      :playing -> subscribe_pad(token, pad, track, ctx, state)
       :stopped -> {[], state}
     end
   end
@@ -186,8 +187,7 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_info({:moq_catalog, _path, renditions}, ctx, state) do
-    {diff, tracks} =
-      Tracks.apply_snapshot(state.tracks, renditions, fn pad -> ctx.pads[pad].options.track end)
+    {diff, tracks} = Tracks.apply_snapshot(state.tracks, renditions)
 
     tracks_removed =
       Stream.concat(diff.removed, diff.changed)
@@ -283,8 +283,8 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
-  def handle_pad_removed(pad, _ctx, state) do
-    case Tracks.remove_pad(state.tracks, pad) do
+  def handle_pad_removed(pad, ctx, state) do
+    case Tracks.remove_pad(state.tracks, pad, ctx.pads[pad].options.track) do
       {nil, _tracks} ->
         {[], state}
 
@@ -332,14 +332,14 @@ defmodule Membrane.MoQ.Source do
   @spec subscribe_ready(map(), State.t()) :: {[Membrane.Element.Action.t()], State.t()}
   defp subscribe_ready(ctx, state),
     do:
-      Enum.flat_map_reduce(Tracks.waiting(state.tracks), state, fn {token, pad}, state ->
-        subscribe_pad(token, pad, ctx, state)
+      Enum.flat_map_reduce(Tracks.waiting(state.tracks), state, fn {token, pad, track}, state ->
+        subscribe_pad(token, pad, track, ctx, state)
       end)
 
-  @spec subscribe_pad(Tracks.token(), Membrane.Pad.ref(), map(), State.t()) ::
+  @spec subscribe_pad(Tracks.token(), Membrane.Pad.ref(), Native.track(), map(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
-  defp subscribe_pad(token, pad, ctx, state) do
-    %{options: %{track: track, priority: priority}} = ctx.pads[pad]
+  defp subscribe_pad(token, pad, track, ctx, state) do
+    %{options: %{priority: priority}} = ctx.pads[pad]
 
     with {format, container} <- Tracks.rendition(state.tracks, track),
          priority = priority || TrackFormat.default_priority(format),

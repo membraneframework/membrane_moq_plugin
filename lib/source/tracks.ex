@@ -16,7 +16,9 @@ defmodule Membrane.MoQ.Source.Tracks do
 
   @type t :: %__MODULE__{
           next_token: token(),
+          # Entry lives from pad being added until pad EOS
           token_to_pad: BiMap.t(token(), Membrane.Pad.ref()),
+          # Entry lives from native subscription task start until pad EOS
           active: MapSet.t(token()),
           renditions: renditions()
         }

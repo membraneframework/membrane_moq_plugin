@@ -3,7 +3,7 @@ use rustler::{
     Binary, Encoder, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum, Term,
 };
 
-#[derive(NifUnitEnum, Clone, Copy, PartialEq)]
+#[derive(NifUnitEnum, Clone, Copy)]
 pub(crate) enum PublishContainer {
     Legacy,
     Loc,
@@ -18,7 +18,7 @@ impl From<PublishContainer> for hang::catalog::Container {
     }
 }
 
-#[derive(NifUnitEnum, Clone, Copy, PartialEq)]
+#[derive(NifUnitEnum, Clone, Copy)]
 pub(crate) enum ConsumedContainer {
     Legacy,
     Loc,
@@ -49,7 +49,7 @@ impl From<&hang::catalog::Container> for ConsumedContainer {
     }
 }
 
-#[derive(NifStruct, Clone, PartialEq)]
+#[derive(NifStruct, Clone)]
 #[module = "ExMoQ.Native.VideoTrackParams"]
 pub(crate) struct VideoTrackParams {
     pub(crate) width: Option<u32>,
@@ -57,14 +57,14 @@ pub(crate) struct VideoTrackParams {
     pub(crate) framerate: Option<f64>,
 }
 
-#[derive(NifStruct, Clone, PartialEq)]
+#[derive(NifStruct, Clone)]
 #[module = "ExMoQ.Native.AudioTrackParams"]
 pub(crate) struct AudioTrackParams {
     pub(crate) sample_rate: u32,
     pub(crate) channels: u32,
 }
 
-#[derive(NifStruct, Clone, PartialEq)]
+#[derive(NifStruct, Clone)]
 #[module = "ExMoQ.Native.H264Codec"]
 pub(crate) struct H264Codec {
     pub(crate) inline: bool,
@@ -73,7 +73,7 @@ pub(crate) struct H264Codec {
     pub(crate) level: u8,
 }
 
-#[derive(NifStruct, Clone, PartialEq)]
+#[derive(NifStruct, Clone)]
 #[module = "ExMoQ.Native.H265Codec"]
 pub(crate) struct H265Codec {
     pub(crate) in_band: bool,
@@ -85,7 +85,7 @@ pub(crate) struct H265Codec {
     pub(crate) constraint_flags: Vec<u8>,
 }
 
-#[derive(NifStruct, Clone, PartialEq)]
+#[derive(NifStruct, Clone)]
 #[module = "ExMoQ.Native.AACCodec"]
 pub(crate) struct AacCodec {
     pub(crate) profile: u8,
@@ -256,19 +256,19 @@ fn create_video_config(
     config
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) enum VideoCodecParams {
     H264(H264Codec),
     H265(H265Codec),
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) enum AudioCodecParams {
     Aac(AacCodec),
     Opus,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) enum TrackParams {
     Video {
         params: VideoTrackParams,

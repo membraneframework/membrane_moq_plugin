@@ -1,11 +1,11 @@
 use rustler::{Binary, Encoder, LocalPid, NewBinary, OwnedEnv, Term};
 
 use crate::atoms;
-use crate::track_format::{ConsumedContainer, TrackParams};
+use crate::track_format::{ConsumedContainer, TrackFormat};
 
 pub(crate) struct PidDead;
 
-/// Opaque per-subscription tag echoed back in a track's messages
+/// Caller-chosen per-subscription tag, echoed back in the track's messages
 /// so the Elixir side can route them to the originating subscription.
 pub(crate) type Token = i64;
 
@@ -44,7 +44,7 @@ pub(crate) fn send_catalog(
             (
                 name,
                 (
-                    TrackParams::from(config),
+                    TrackFormat::from_video(env, config),
                     ConsumedContainer::from(&config.container),
                 ),
             )
@@ -54,7 +54,7 @@ pub(crate) fn send_catalog(
             (
                 name,
                 (
-                    TrackParams::from(config),
+                    TrackFormat::from_audio(config),
                     ConsumedContainer::from(&config.container),
                 ),
             )

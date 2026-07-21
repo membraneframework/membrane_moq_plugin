@@ -89,14 +89,12 @@ pub(crate) fn add_track(
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();
 
-    let mut resolved = ResolvedConfig::try_from(format)?;
-
     let catalog_container = hang::catalog::Container::from(container);
     let wire = (&catalog_container)
         .try_into()
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
 
-    resolved.set_container(catalog_container.clone());
+    let resolved = ResolvedConfig::new(format, catalog_container.clone())?;
 
     let mut inner = lock_ignoring_poison(&broadcast_res.inner);
 
@@ -155,8 +153,7 @@ pub(crate) fn update_track(
 ) -> NifResult<Atom> {
     let _guard = runtime().handle().enter();
 
-    let mut resolved = ResolvedConfig::try_from(format)?;
-    resolved.set_container(track_res.container.clone());
+    let resolved = ResolvedConfig::new(format, track_res.container.clone())?;
 
     let mut live = lock_ignoring_poison(&track_res.live);
     let Some(live) = live.as_mut() else {

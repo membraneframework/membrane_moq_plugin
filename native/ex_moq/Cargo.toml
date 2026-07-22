@@ -9,9 +9,9 @@ rust-version = "1.88.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-moq-native = "0.17.5"
-hang = "0.19.3"
-moq-mux = "0.7.4"
+moq-native = "0.18.3"
+hang = "0.19.5"
+moq-mux = "0.7.6"
 url = "2.5.8"
 rustler = "0.38.0"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }

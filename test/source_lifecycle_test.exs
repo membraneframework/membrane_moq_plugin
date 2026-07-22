@@ -139,6 +139,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
             disable_tls_verify?: relay.disable_tls_verify?
           })
       )
+
     ref = Process.monitor(receiver)
 
     assert_pipeline_notified(receiver, :source, {:new_track, {@track, _format}}, 15_000)

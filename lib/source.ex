@@ -137,13 +137,8 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
-  def handle_pad_added(pad, _ctx, %{status: :disconnected} = state) do
-    Membrane.Logger.warning(
-      "Pad #{inspect(pad)} added after the source disconnected, sending end_of_stream"
-    )
-
-    {[end_of_stream: pad], state}
-  end
+  def handle_pad_added(_pad, _ctx, %{status: :disconnected}),
+    do: raise("Cannot link pads to #{inspect(__MODULE__)} after session disconnect")
 
   @impl true
   def handle_pad_added(pad, ctx, state) do

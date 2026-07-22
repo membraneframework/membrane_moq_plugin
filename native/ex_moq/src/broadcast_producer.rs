@@ -27,20 +27,20 @@ pub(crate) fn create_broadcast_producer(
 ) -> NifResult<(Atom, ResourceArc<BroadcastProducerResource>)> {
     let _guard = runtime().handle().enter();
 
-    let mut bp: moq_net::BroadcastProducer = session
+    let mut broadcast_producer = session
         .publish
         .create_broadcast(&path)
         .ok_or_else(|| crate::nif_error!("create_broadcast({path}) refused"))?;
 
-    let catalog = moq_mux::catalog::Producer::new(&mut bp)
+    let catalog_producer = moq_mux::catalog::Producer::new(&mut broadcast_producer)
         .map_err(|e| crate::nif_error!("CatalogProducer::new failed: {e}"))?;
 
     Ok((
         atoms::ok(),
         ResourceArc::new(BroadcastProducerResource {
             inner: Mutex::new(ProducerInner {
-                broadcast: bp,
-                catalog,
+                broadcast: broadcast_producer,
+                catalog: catalog_producer,
                 tracks: Vec::new(),
             }),
         }),

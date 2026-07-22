@@ -113,7 +113,7 @@ pub(crate) fn add_track(
 
     let mut inner = lock_ignoring_poison(&broadcast_res.inner);
 
-    let tp = inner
+    let track_producer = inner
         .broadcast
         .create_track(moq_net::Track {
             name: track,
@@ -121,13 +121,16 @@ pub(crate) fn add_track(
         })
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
 
-    let name = tp.name.clone();
+    let name = track_producer.name.clone();
 
     let rendition = Rendition::new(&inner.catalog, &name, resolved);
 
     let latency = std::time::Duration::from_nanos(latency_ns);
     let producer = Arc::new(Mutex::new(
-        inner.catalog.media_producer(tp, wire).with_latency(latency),
+        inner
+            .catalog
+            .media_producer(track_producer, wire)
+            .with_latency(latency),
     ));
 
     inner.tracks.retain(|weak| weak.strong_count() > 0);

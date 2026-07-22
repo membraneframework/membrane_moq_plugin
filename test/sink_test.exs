@@ -23,7 +23,7 @@ defmodule Membrane.MoQ.SinkTest do
     relay = Relay.ensure!()
 
     pipeline =
-      Pipeline.start_link_supervised!(
+      Pipeline.start_supervised!(
         spec:
           child(:sink, %Membrane.MoQ.Sink{
             url: relay.url,

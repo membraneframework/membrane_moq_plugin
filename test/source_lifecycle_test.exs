@@ -151,7 +151,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
       spec:
         get_child(:source)
         |> via_out(Pad.ref(:output, @track), options: [track: @track])
-        |> child(:sink, Fake.Sink)
+        |> child(:sink, Membrane.Fake.Sink)
     )
 
     assert_receive {:DOWN, ^ref, :process, ^receiver, _reason}

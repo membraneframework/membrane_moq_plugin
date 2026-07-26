@@ -4,12 +4,8 @@ defmodule Membrane.MoQ.Test.Relay do
 
   Provides a MoQ relay for integration tests.
 
-  `ensure!/0` returns `%{url: url, disable_tls_verify?: boolean}`:
-
-    * If `RELAY_URL` is set, that relay is used as-is and nothing is spawned.
-    * Otherwise a `moq-relay` binary (`MOQ_RELAY` env var, or found on `$PATH`)
-      is spawned on a random free port with a self-signed certificate and
-      anonymous auth. The instance is shared by all test modules in the run.
+  Ensures TCP is used for lossless transport,
+  but groups can still be dropped as part of eviction policies.
 
   Cleanup of the spawned relay is layered:
 
@@ -22,7 +18,6 @@ defmodule Membrane.MoQ.Test.Relay do
 
   use GenServer
 
-  @localhost_hosts ["localhost", "127.0.0.1", "::1"]
   @ready_timeout_ms 15_000
   @probe_interval_ms 100
 
@@ -30,19 +25,6 @@ defmodule Membrane.MoQ.Test.Relay do
 
   @spec ensure!() :: relay()
   def ensure!() do
-    case System.get_env("RELAY_URL") do
-      nil ->
-        spawned_relay!()
-
-      url ->
-        # A local relay presents a self-signed certificate; a remote one is
-        # expected to present a valid certificate.
-        %{url: url, disable_tls_verify?: URI.parse(url).host in @localhost_hosts}
-    end
-  end
-
-  defp spawned_relay!() do
-    # Unlinked and named, so one relay serves every test module in the run.
     pid =
       case GenServer.start(__MODULE__, nil, name: __MODULE__) do
         {:ok, pid} ->
@@ -87,7 +69,7 @@ defmodule Membrane.MoQ.Test.Relay do
 
     {:ok,
      %{
-       relay: %{url: "https://localhost:#{port_number}", disable_tls_verify?: true},
+       relay: %{url: "tcp://127.0.0.1:#{port_number}", disable_tls_verify?: false},
        daemon: daemon,
        config_path: config_path
      }}
@@ -107,38 +89,17 @@ defmodule Membrane.MoQ.Test.Relay do
   defp find_binary!() do
     System.get_env("MOQ_RELAY") || System.find_executable("moq-relay") ||
       raise """
-      no MoQ relay available for the integration tests; provide one of:
-        * RELAY_URL — URL of an already-running relay
+      no moq-relay binary for the integration tests; provide one of:
         * MOQ_RELAY — path to a moq-relay binary
         * moq-relay on $PATH (e.g. installed with `cargo install moq-relay`)
       """
   end
 
-  # The relay binds the same port number twice: QUIC over UDP (`[server]`) and
-  # the plain-HTTP readiness endpoint over TCP (`[web.http]`). Take a UDP port
-  # from the OS and keep it only if the same number is also free on TCP.
-  # The sockets are closed before the relay spawns, so another process could
-  # still grab the port in between; unlikely enough for a test helper.
-  defp free_port!(attempts \\ 10)
-
-  defp free_port!(0) do
-    raise "could not find a port free on both UDP and TCP for the test relay"
-  end
-
-  defp free_port!(attempts) do
-    {:ok, udp_socket} = :gen_udp.open(0, reuseaddr: true)
-    {:ok, port_number} = :inet.port(udp_socket)
-
-    case :gen_tcp.listen(port_number, reuseaddr: true) do
-      {:ok, tcp_socket} ->
-        :ok = :gen_tcp.close(tcp_socket)
-        :ok = :gen_udp.close(udp_socket)
-        port_number
-
-      {:error, _reason} ->
-        :ok = :gen_udp.close(udp_socket)
-        free_port!(attempts - 1)
-    end
+  defp free_port!() do
+    {:ok, socket} = :gen_tcp.listen(0, reuseaddr: true)
+    {:ok, port_number} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port_number
   end
 
   defp write_config!(port_number) do
@@ -150,13 +111,7 @@ defmodule Membrane.MoQ.Test.Relay do
     level = "info"
 
     [server]
-    listen = "[::]:#{port_number}"
-    # Self-signed certificate; clients connect with TLS verification disabled.
-    tls.generate = ["localhost"]
-
-    # Serves /certificate.sha256 over plain HTTP, used as the readiness probe.
-    [web.http]
-    listen = "[::]:#{port_number}"
+    tcp.bind = "127.0.0.1:#{port_number}"
 
     [auth]
     public = ""
@@ -187,19 +142,11 @@ defmodule Membrane.MoQ.Test.Relay do
     end
   end
 
-  # Fetches /certificate.sha256, which the relay serves over plain HTTP once
-  # it is up. Hand-rolled over :gen_tcp because Mix prunes the code paths of
-  # undeclared OTP apps like :inets in the test env.
   defp probe(port_number) do
     case :gen_tcp.connect(~c"127.0.0.1", port_number, [:binary, active: false], 1_000) do
       {:ok, socket} ->
-        request =
-          "GET /certificate.sha256 HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"
-
-        :ok = :gen_tcp.send(socket, request)
-        response = :gen_tcp.recv(socket, 0, 1_000)
         :gen_tcp.close(socket)
-        match?({:ok, "HTTP/1.1 200" <> _rest}, response)
+        true
 
       {:error, _reason} ->
         false

@@ -28,12 +28,12 @@ impl Rendition {
     fn new(catalog: &moq_mux::catalog::Producer, name: &str, config: ResolvedConfig) -> Self {
         match config {
             ResolvedConfig::Video(config) => {
-                let mut handle = catalog.video_track(name);
+                let mut handle = catalog.reserve().video(name);
                 handle.set(config);
                 Self::Video(handle)
             }
             ResolvedConfig::Audio(config) => {
-                let mut handle = catalog.audio_track(name);
+                let mut handle = catalog.reserve().audio(name);
                 handle.set(config);
                 Self::Audio(handle)
             }
@@ -53,7 +53,7 @@ impl Rendition {
 struct LiveTrack {
     producer: Arc<Mutex<WireProducer>>,
     rendition: Rendition,
-    broadcast: moq_net::BroadcastProducer,
+    broadcast: moq_net::broadcast::Producer,
 }
 
 pub(crate) struct TrackResource {
@@ -115,13 +115,13 @@ pub(crate) fn add_track(
 
     let track_producer = inner
         .broadcast
-        .create_track(moq_net::Track {
-            name: track,
-            priority,
-        })
+        .create_track(
+            track,
+            moq_net::track::Info::default().with_priority(priority),
+        )
         .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
 
-    let name = track_producer.name.clone();
+    let name = track_producer.name().to_string();
 
     let rendition = Rendition::new(&inner.catalog, &name, resolved);
 
@@ -130,6 +130,7 @@ pub(crate) fn add_track(
         inner
             .catalog
             .media_producer(track_producer, wire)
+            .map_err(|e| crate::nif_error!("media_producer failed: {e}"))?
             .with_latency(latency),
     ));
 
@@ -188,7 +189,7 @@ pub(crate) fn send_frame(
     keyframe: bool,
     data: Binary,
 ) -> NifResult<Atom> {
-    let timestamp = moq_mux::container::Timestamp::from_nanos(timestamp_ns)
+    let timestamp = moq_net::Timestamp::from_nanos(timestamp_ns)
         .map_err(|e| crate::nif_error!("timestamp conversion failed: {e}"))?;
     let frame = moq_mux::container::Frame {
         timestamp,

@@ -6,7 +6,7 @@ use std::sync::{Mutex, Weak};
 use crate::{atoms, lock_ignoring_poison, runtime, session::SessionResource, track::WireProducer};
 
 pub(crate) struct ProducerInner {
-    pub(crate) broadcast: moq_net::BroadcastProducer,
+    pub(crate) broadcast: moq_net::broadcast::Producer,
     pub(crate) catalog: moq_mux::catalog::Producer,
     /// Weak handles to the live wire producers,
     /// so closing the broadcast can finish them without keeping them alive.
@@ -29,8 +29,8 @@ pub(crate) fn create_broadcast_producer(
 
     let mut broadcast_producer = session
         .publish
-        .create_broadcast(&path)
-        .ok_or_else(|| crate::nif_error!("create_broadcast({path}) refused"))?;
+        .create_broadcast(&path, moq_net::broadcast::Route::new().with_announce(true))
+        .map_err(|e| crate::nif_error!("create_broadcast({path}) failed: {e}"))?;
 
     let catalog_producer = moq_mux::catalog::Producer::new(&mut broadcast_producer)
         .map_err(|e| crate::nif_error!("CatalogProducer::new failed: {e}"))?;
@@ -63,6 +63,6 @@ pub(crate) fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerRe
         });
 
     let _ = inner.catalog.finish();
-    let _ = inner.broadcast.abort(moq_net::Error::Cancel);
+    let _ = inner.broadcast.clone().abort(moq_net::Error::Cancel);
     atoms::ok()
 }

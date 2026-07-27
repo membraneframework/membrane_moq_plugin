@@ -45,7 +45,7 @@ impl Drop for BroadcastConsumerResource {
 }
 
 struct Ctx<'a> {
-    broadcast: &'a moq_net::BroadcastConsumer,
+    broadcast: &'a moq_net::broadcast::Consumer,
     latency: Duration,
     pid: LocalPid,
 }
@@ -119,7 +119,7 @@ pub(crate) fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerRe
 }
 
 async fn run_broadcast(
-    origin: moq_net::OriginConsumer,
+    origin: moq_net::origin::Consumer,
     path: String,
     pid: LocalPid,
     latency: Duration,
@@ -137,7 +137,7 @@ async fn run_broadcast(
         return;
     };
 
-    let mut catalog = match subscribe_catalog(&path, &broadcast) {
+    let mut catalog = match subscribe_catalog(&path, &broadcast).await {
         Ok(catalog) => catalog,
         Err(e) => {
             messages::send_broadcast_closed(&mut env, pid, &path, e.to_string());
@@ -209,12 +209,13 @@ fn handle_new_catalog(
     messages::send_broadcast_closed(env, pid, path, close_reason);
 }
 
-fn subscribe_catalog(
+async fn subscribe_catalog(
     path: &str,
-    broadcast: &moq_net::BroadcastConsumer,
+    broadcast: &moq_net::broadcast::Consumer,
 ) -> anyhow::Result<moq_mux::catalog::Consumer<()>> {
     let format = moq_mux::catalog::CatalogFormat::detect(path)
         .unwrap_or(moq_mux::catalog::CatalogFormat::DEFAULT);
     moq_mux::catalog::Consumer::<()>::new(broadcast, format)
+        .await
         .map_err(|e| anyhow::anyhow!("catalog subscribe ({format:?}) failed: {e}"))
 }

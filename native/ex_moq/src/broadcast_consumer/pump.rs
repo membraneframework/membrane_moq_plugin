@@ -10,7 +10,7 @@ use super::Ctx;
 
 /// Everything one track subscription needs to pump its frames to Elixir.
 pub(super) struct Pump {
-    broadcast: moq_net::BroadcastConsumer,
+    broadcast: moq_net::broadcast::Consumer,
     track: String,
     wire: moq_mux::catalog::hang::Container,
     token: Token,
@@ -41,16 +41,17 @@ impl Pump {
     }
 
     pub(super) async fn run(mut self) -> anyhow::Result<()> {
-        let track = &self.track;
-
-        let track_ref = moq_net::Track {
-            name: track.clone(),
-            priority: self.priority,
-        };
-        let track_consumer = self
+        let handle = self
             .broadcast
-            .subscribe_track(&track_ref)
-            .map_err(|e| anyhow::anyhow!("subscribe_track({track}) failed: {e}"))?;
+            .track(&self.track)
+            .map_err(|e| anyhow::anyhow!("track({}) failed: {e}", self.track))?;
+
+        let mut subscription = moq_net::track::Subscription::default();
+        subscription.priority = self.priority;
+        let track_consumer = handle
+            .subscribe(subscription)
+            .await
+            .map_err(|e| anyhow::anyhow!("subscribe({}) failed: {e}", self.track))?;
 
         let mut consumer =
             moq_mux::container::Consumer::new(track_consumer, self.wire).with_latency(self.latency);

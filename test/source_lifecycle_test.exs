@@ -24,7 +24,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
   end
 
   setup_all do
-    [relay: Relay.ensure!()]
+    [relay: Relay.start_supervised!()]
   end
 
   setup do

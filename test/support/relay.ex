@@ -2,18 +2,19 @@ defmodule Membrane.MoQ.Test.Relay do
   @moduledoc """
   NOTE: This test support module was LLM-generated.
 
-  Provides a MoQ relay for integration tests.
+  Runs a MoQ relay for integration tests as a regular supervised process.
+  Start one per test module in `setup_all` for a relay shared by the module's
+  tests, or inside a single test when it needs its own instance — e.g. to stop
+  it mid-test and observe session-drop handling:
+
+      setup_all do
+        [relay: Relay.start_supervised!()]
+      end
 
   Ensures TCP is used for lossless transport,
   but groups can still be dropped as part of eviction policies.
 
-  Cleanup of the spawned relay is layered:
-
-    * `ExUnit.after_suite/1` (registered on spawn) stops the server once the
-      suite finishes, stopping the relay and deleting the generated config.
-    * Should the VM die without running that callback (e.g. SIGKILL),
-      muontrap's shim process still reaps the relay: it kills it the moment
-      its pipe to the VM closes.
+  Proper teardown is ensured via `MuonTrap.Daemon`.
   """
 
   use GenServer
@@ -23,31 +24,17 @@ defmodule Membrane.MoQ.Test.Relay do
 
   @type relay :: %{url: String.t(), disable_tls_verify?: boolean()}
 
-  @spec ensure!() :: relay()
-  def ensure!() do
-    pid =
-      case GenServer.start(__MODULE__, nil, name: __MODULE__) do
-        {:ok, pid} ->
-          pid
+  @spec start_link(term()) :: GenServer.on_start()
+  def start_link(_init_arg \\ nil), do: GenServer.start_link(__MODULE__, nil)
 
-        {:error, {:already_started, pid}} ->
-          pid
-
-        {:error, reason} ->
-          raise "failed to start the test relay: #{Exception.format_exit(reason)}"
-      end
-
-    GenServer.call(pid, :relay, :infinity)
+  @spec start_supervised!() :: relay()
+  def start_supervised!() do
+    __MODULE__ |> ExUnit.Callbacks.start_supervised!() |> relay()
   end
 
-  @doc "Stops the spawned relay, if any. Registered as an `ExUnit.after_suite/1` callback."
-  @spec stop() :: :ok
-  def stop() do
-    case GenServer.whereis(__MODULE__) do
-      nil -> :ok
-      pid -> GenServer.stop(pid)
-    end
-  end
+  @doc "URL and connection options of the relay run by the given server."
+  @spec relay(GenServer.server()) :: relay()
+  def relay(server), do: GenServer.call(server, :relay, :infinity)
 
   @impl true
   def init(nil) do
@@ -55,7 +42,7 @@ defmodule Membrane.MoQ.Test.Relay do
     port_number = free_port!()
     config_path = write_config!(port_number)
 
-    {:ok, daemon} =
+    {:ok, _daemon} =
       MuonTrap.Daemon.start_link(binary, [config_path],
         stderr_to_stdout: true,
         log_output: :debug,
@@ -65,26 +52,13 @@ defmodule Membrane.MoQ.Test.Relay do
 
     await_ready!(port_number)
 
-    ExUnit.after_suite(fn _stats -> stop() end)
+    File.rm!(config_path)
 
-    {:ok,
-     %{
-       relay: %{url: "tcp://127.0.0.1:#{port_number}", disable_tls_verify?: false},
-       daemon: daemon,
-       config_path: config_path
-     }}
+    {:ok, %{url: "tcp://127.0.0.1:#{port_number}", disable_tls_verify?: false}}
   end
 
   @impl true
-  def terminate(_reason, state) do
-    # Stopping the daemon makes muontrap's shim kill the relay.
-    if Process.alive?(state.daemon), do: GenServer.stop(state.daemon)
-    File.rm(state.config_path)
-    :ok
-  end
-
-  @impl true
-  def handle_call(:relay, _from, state), do: {:reply, state.relay, state}
+  def handle_call(:relay, _from, relay), do: {:reply, relay, relay}
 
   defp find_binary!() do
     System.get_env("MOQ_RELAY") || System.find_executable("moq-relay") ||

@@ -20,7 +20,7 @@ defmodule Membrane.MoQ.SinkTest do
 
   @tag :integration
   test "a session disconnect after setup notifies the parent" do
-    relay = Relay.ensure!()
+    relay = Relay.start_supervised!()
 
     pipeline =
       Testing.Pipeline.start_link_supervised!(

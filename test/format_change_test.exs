@@ -20,7 +20,7 @@ defmodule Membrane.MoQ.FormatChangeTest do
   @fixture_dir "test/fixtures/format_change"
 
   setup_all do
-    [relay: Relay.ensure!()]
+    [relay: Relay.start_supervised!()]
   end
 
   setup do

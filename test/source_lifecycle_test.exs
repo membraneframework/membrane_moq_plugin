@@ -243,6 +243,13 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     source_pid = Testing.Pipeline.get_child_pid!(receiver, :source)
     send(source_pid, {:moq_track_error, 0, "injected pump panic"})
 
+    assert_pipeline_notified(
+      receiver,
+      :source,
+      {:subscription_died, {@track, "injected pump panic"}},
+      10_000
+    )
+
     assert_end_of_stream(receiver, :sink, :input, 10_000)
   end
 
@@ -261,6 +268,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     send(source_pid, {:moq_track_error, 999, "stale subscription"})
 
     refute_receive {:DOWN, ^ref, :process, ^receiver, _reason}, 500
+    refute_pipeline_notified(receiver, :source, {:subscription_died, _payload}, 500)
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 10_000)
   end
 

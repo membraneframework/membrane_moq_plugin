@@ -17,6 +17,10 @@ defmodule Membrane.MoQ.Source do
         when an advertised track disappears from the catalog (e.g. the publisher ended it).
     * A track whose codec parameters change mid-broadcast is reported as a `:track_removed`,
         followed by a `:new_track`, so a stale pad can be torn down and re-wired against the new format.
+    * `{:subscription_died, {track :: ExMoQ.Native.track(), reason :: String.t()}}`
+        when the native subscription feeding a pad fails while the track may still be
+        advertised in the catalog. The source sends `:end_of_stream` to that pad;
+        re-linking a pad for the track starts a fresh subscription.
     * `{:disconnected, reason :: String.t()}`
         when the broadcast goes away (the publisher left) or the session drops.
         The source sends `:end_of_stream` to all active pads.
@@ -259,7 +263,10 @@ defmodule Membrane.MoQ.Source do
         reason: #{inspect(reason)}
         """)
 
-        {[end_of_stream: pad], %{state | active: active}}
+        {[
+           notify_parent: {:subscription_died, {track, reason}},
+           end_of_stream: pad
+         ], %{state | active: active}}
     end
   end
 

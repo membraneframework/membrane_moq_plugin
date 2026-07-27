@@ -30,7 +30,7 @@ pub(crate) fn create_session(
     pid: LocalPid,
     disable_tls_verify: bool,
 ) -> NifResult<(Atom, ResourceArc<SessionResource>)> {
-    let url = Url::parse(&url).map_err(|e| crate::nif_error!("invalid url: {e}"))?;
+    let url = Url::parse(url).map_err(|e| crate::nif_error!("invalid url: {e}"))?;
 
     let outgoing = moq_net::Origin::random().produce();
     let outgoing_consumer = outgoing.consume();

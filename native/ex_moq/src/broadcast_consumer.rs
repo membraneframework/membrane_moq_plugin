@@ -12,7 +12,7 @@ use moq_mux::catalog::Stream as _;
 
 use crate::messages::{self, Token};
 use crate::session::SessionResource;
-use crate::track_format::{ConsumedContainer, UnrecognizedContainer};
+use crate::track_format::Container;
 use crate::{atoms, lock_ignoring_poison, runtime};
 
 use pump::Pump;
@@ -78,14 +78,14 @@ pub(crate) fn create_broadcast_consumer(
 pub(crate) fn subscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
     track: String,
-    container: ConsumedContainer,
+    container: Option<Container>,
     token: Token,
     priority: u8,
 ) -> NifResult<Atom> {
-    let catalog =
-        hang::catalog::Container::try_from(container).map_err(|UnrecognizedContainer| {
-            crate::nif_error!("cannot subscribe to a track with an unrecognized wire container")
-        })?;
+    let container = container.ok_or_else(|| {
+        crate::nif_error!("cannot subscribe to a track with an unrecognized wire container")
+    })?;
+    let catalog = hang::catalog::Container::from(container);
 
     let wire = moq_mux::catalog::hang::Container::try_from(&catalog)
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;

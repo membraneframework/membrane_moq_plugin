@@ -10,7 +10,7 @@ use crate::{
     atoms,
     broadcast_producer::BroadcastProducerResource,
     lock_ignoring_poison, runtime,
-    track_format::{PublishContainer, ResolvedConfig, TrackFormat},
+    track_format::{Container, ResolvedConfig, TrackFormat},
 };
 
 /// Producer over the runtime-dispatched container enum,
@@ -98,7 +98,7 @@ pub(crate) fn add_track(
     track: String,
     format: TrackFormat,
     priority: u8,
-    container: PublishContainer,
+    container: Container,
     latency_ns: u64,
 ) -> NifResult<(Atom, ResourceArc<TrackResource>)> {
     let _guard = runtime().handle().enter();

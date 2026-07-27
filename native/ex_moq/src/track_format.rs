@@ -2,47 +2,30 @@ use bytes::Bytes;
 use rustler::{Binary, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum};
 
 #[derive(NifUnitEnum, Clone, Copy)]
-pub(crate) enum PublishContainer {
+pub(crate) enum Container {
     Legacy,
     Loc,
 }
 
-impl From<PublishContainer> for hang::catalog::Container {
-    fn from(container: PublishContainer) -> Self {
+impl From<Container> for hang::catalog::Container {
+    fn from(container: Container) -> Self {
         match container {
-            PublishContainer::Legacy => Self::Legacy,
-            PublishContainer::Loc => Self::Loc,
+            Container::Legacy => Self::Legacy,
+            Container::Loc => Self::Loc,
         }
     }
 }
 
 pub(crate) struct UnrecognizedContainer;
 
-#[derive(NifUnitEnum, Clone, Copy)]
-pub(crate) enum ConsumedContainer {
-    Legacy,
-    Loc,
-    Unrecognized,
-}
-
-impl TryFrom<ConsumedContainer> for hang::catalog::Container {
+impl TryFrom<&hang::catalog::Container> for Container {
     type Error = UnrecognizedContainer;
 
-    fn try_from(container: ConsumedContainer) -> Result<Self, Self::Error> {
+    fn try_from(container: &hang::catalog::Container) -> Result<Self, Self::Error> {
         match container {
-            ConsumedContainer::Legacy => Ok(Self::Legacy),
-            ConsumedContainer::Loc => Ok(Self::Loc),
-            ConsumedContainer::Unrecognized => Err(UnrecognizedContainer),
-        }
-    }
-}
-
-impl From<&hang::catalog::Container> for ConsumedContainer {
-    fn from(container: &hang::catalog::Container) -> Self {
-        match container {
-            hang::catalog::Container::Legacy => Self::Legacy,
-            hang::catalog::Container::Loc => Self::Loc,
-            _ => Self::Unrecognized,
+            hang::catalog::Container::Legacy => Ok(Self::Legacy),
+            hang::catalog::Container::Loc => Ok(Self::Loc),
+            _ => Err(UnrecognizedContainer),
         }
     }
 }

@@ -15,16 +15,15 @@ defmodule ExMoQ.Native do
   """
   @type track :: String.t()
 
-  @typedoc "Wire container a published track's frames are encapsulated in."
+  @typedoc "Wire container a track's frames are encapsulated in."
   @type container :: :legacy | :loc
 
   @typedoc """
-  Wire container of a consumed track's frames,
-  as advertised in the broadcast's catalog.
+  Format and wire container of a track, as advertised in the broadcast's catalog.
+  The container is `nil` when the catalog advertises one this library
+  does not recognize.
   """
-  @type consumed_container :: :legacy | :loc | :unrecognized
-
-  @type rendition :: {track_format(), consumed_container()}
+  @type rendition :: {track_format(), container() | nil}
 
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
@@ -261,7 +260,7 @@ defmodule ExMoQ.Native do
       when the subscription fails on the native side
       while the track may still be advertised in the catalog
   """
-  @spec subscribe_track(broadcast_consumer(), track(), consumed_container(), integer(), 0..255) ::
+  @spec subscribe_track(broadcast_consumer(), track(), container() | nil, integer(), 0..255) ::
           :ok | {:error, reason :: String.t()}
   def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)

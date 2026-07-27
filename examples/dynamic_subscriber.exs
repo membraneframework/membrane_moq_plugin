@@ -4,8 +4,10 @@
 #   * subscribes to the lowest-named advertised video track (audio is skipped),
 #   * when that track is withdrawn (`:track_removed`), tears its playback
 #     subtree down and subscribes to the next available one,
-#   * when the broadcast drops (`:disconnected`), restarts the Source and waits
-#     for a republish.
+#
+# NOTE: Might crash when run against a broadcast
+# where a track modifies its format in-place.
+#
 #
 # Prerequisites:
 #   - a MoQ relay at https://localhost:4443 (e.g. moq-relay)
@@ -38,11 +40,13 @@ defmodule Subscriber do
             broadcast: String.t(),
             available_tracks: %{String.t() => Membrane.StreamFormat.t()},
             current_track: String.t() | nil,
+            generation: non_neg_integer(),
             moq_disconnected?: boolean()
           }
 
     @enforce_keys [:url, :broadcast]
-    defstruct @enforce_keys ++ [:current_track, available_tracks: %{}, moq_disconnected?: false]
+    defstruct @enforce_keys ++
+                [:current_track, available_tracks: %{}, generation: 0, moq_disconnected?: false]
   end
 
   @impl true
@@ -112,7 +116,7 @@ defmodule Subscriber do
 
   @impl true
   def handle_element_end_of_stream(
-        {:player, _name},
+        {:player, _generation},
         _pad,
         _ctx,
         %State{moq_disconnected?: true} = state
@@ -126,20 +130,22 @@ defmodule Subscriber do
        when map_size(available) > 0 do
     {name, stream_format} = Enum.min_by(available, fn {name, _format} -> name end)
     Membrane.Logger.info("subscribing to #{name}")
-    {[spec: track_spec(name, stream_format)], %{state | current_track: name}}
+
+    {[spec: track_spec(name, stream_format, state.generation)],
+     %{state | current_track: name, generation: state.generation + 1}}
   end
 
   defp maybe_subscribe(state), do: {[], state}
 
-  defp track_spec(name, stream_format) do
+  defp track_spec(name, stream_format, generation) do
     {parser, decoder} = playback_for(stream_format)
 
     get_child(:source)
-    |> via_out(Pad.ref(:output, name), options: [track: name])
-    |> child({:parser, name}, parser)
-    |> child({:decoder, name}, decoder)
-    |> child({:rt, name}, Membrane.Realtimer)
-    |> child({:player, name}, Membrane.SDL.Player)
+    |> via_out(Pad.ref(:output, generation), options: [track: name])
+    |> child({:parser, generation}, parser)
+    |> child({:decoder, generation}, decoder)
+    |> child({:rt, generation}, Membrane.Realtimer)
+    |> child({:player, generation}, Membrane.SDL.Player)
   end
 
   # `MoQ.Source` emits frames in decode order carrying their presentation PTS

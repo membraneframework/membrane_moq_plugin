@@ -26,7 +26,7 @@ defmodule Membrane.MoQ.Source do
   require Membrane.Logger
 
   alias ExMoQ.Native
-  alias Membrane.MoQ.Source.Tracks
+  alias Membrane.MoQ.Source.Catalog
   alias Membrane.MoQ.TrackFormat
 
   def_output_pad :output,
@@ -93,6 +93,10 @@ defmodule Membrane.MoQ.Source do
   defmodule State do
     @moduledoc false
 
+    @type subscription :: {Membrane.Pad.ref(), Native.track()}
+
+    @type token :: integer()
+
     @type t :: %__MODULE__{
             url: String.t(),
             broadcast: String.t(),
@@ -100,7 +104,14 @@ defmodule Membrane.MoQ.Source do
             latency: Membrane.Time.t(),
             session: Native.session() | nil,
             consumer: Native.broadcast_consumer() | nil,
-            tracks: Tracks.t(),
+            next_token: token(),
+            # subscriptions waiting for playback to start
+            # and the track to be announced by the catalog
+            waiting: %{token() => subscription()},
+            # subscriptions for which a native task forwarding frames exists,
+            # entries only move from `waiting` to `active`
+            active: %{token() => subscription()},
+            catalog: Catalog.t(),
             status: :connecting | :ready | :disconnect_pending | :disconnected
           }
 
@@ -109,7 +120,10 @@ defmodule Membrane.MoQ.Source do
                 [
                   :session,
                   :consumer,
-                  tracks: %Tracks{},
+                  next_token: 0,
+                  waiting: %{},
+                  active: %{},
+                  catalog: %Catalog{},
                   status: :connecting
                 ]
   end
@@ -137,14 +151,20 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
-  def handle_pad_added(_pad, _ctx, %{status: :disconnected}),
-    do: raise("Cannot link pads to #{inspect(__MODULE__)} after session disconnect")
+  def handle_pad_added(_pad, _ctx, %{status: :disconnected}) do
+    raise "Cannot link pads to #{inspect(__MODULE__)} after session disconnect"
+  end
 
   @impl true
   def handle_pad_added(pad, ctx, state) do
     track = ctx.pads[pad].options.track
-    {token, tracks} = Tracks.add_pad(state.tracks, pad, track)
-    state = %{state | tracks: tracks}
+    token = state.next_token
+
+    state = %{
+      state
+      | next_token: token + 1,
+        waiting: Map.put(state.waiting, token, {pad, track})
+    }
 
     case ctx.playback do
       :playing -> subscribe_pad(token, pad, track, ctx, state)
@@ -182,90 +202,75 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_info({:moq_catalog, _path, renditions}, ctx, state) do
-    {diff, tracks} = Tracks.apply_snapshot(state.tracks, renditions)
+    {diff, catalog} = Catalog.update(state.catalog, renditions)
 
-    tracks_removed =
-      Stream.concat(diff.removed, diff.changed)
-      |> Stream.map(fn name -> {:notify_parent, {:track_removed, name}} end)
+    track_notifs = track_notifications(diff, catalog)
 
-    new_tracks =
-      Stream.concat(diff.changed, diff.added)
-      |> Stream.map(fn name ->
-        {format, _container} = Tracks.rendition(tracks, name)
-        {:notify_parent, {:new_track, {name, TrackFormat.to_stream_format(format)}}}
-      end)
-
-    notifications = Enum.concat(tracks_removed, new_tracks)
-
-    state = %{state | tracks: tracks}
+    state = %{state | catalog: catalog}
 
     case ctx.playback do
       :stopped ->
-        {notifications, state}
+        {track_notifs, state}
 
       :playing ->
-        eos_actions = end_subscriptions(diff.ended, ctx, state)
+        {eos_actions, state} = end_subscriptions(diff.changed, state)
         {subscribe_actions, state} = subscribe_ready(ctx, state)
-        {notifications ++ eos_actions ++ subscribe_actions, state}
+        {track_notifs ++ eos_actions ++ subscribe_actions, state}
     end
   end
 
   @impl true
   def handle_info({:moq_frame, token, payload, timestamp_ns, keyframe?}, ctx, state) do
-    pad = Tracks.pad_for(state.tracks, token)
+    case state.active[token] do
+      nil ->
+        {[], state}
 
-    case ctx.pads[pad] do
-      %{end_of_stream?: false, stream_format: stream_format} ->
+      {pad, _track} ->
         buffer = %Membrane.Buffer{
           payload: payload,
           pts: Membrane.Time.nanoseconds(timestamp_ns),
-          metadata: TrackFormat.buffer_metadata(keyframe?, stream_format)
+          metadata: TrackFormat.buffer_metadata(keyframe?, ctx.pads[pad].stream_format)
         }
 
         {[buffer: {pad, buffer}], state}
+    end
+  end
 
-      _ended_or_absent ->
+  @impl true
+  def handle_info({:moq_track_ended, token}, _ctx, state) do
+    case Map.pop(state.active, token) do
+      {nil, _active} ->
         {[], state}
+
+      {{pad, _track}, active} ->
+        {[end_of_stream: pad], %{state | active: active}}
     end
   end
 
   @impl true
-  def handle_info({:moq_track_ended, token}, ctx, state) do
-    {pad, tracks} = Tracks.remove_token(state.tracks, token)
-    state = %{state | tracks: tracks}
+  def handle_info({:moq_track_error, token, reason}, _ctx, state) do
+    case Map.pop(state.active, token) do
+      {nil, _active} ->
+        {[], state}
 
-    case ctx.pads[pad] do
-      %{end_of_stream?: false} -> {[end_of_stream: pad], state}
-      _ended_or_absent -> {[], state}
-    end
-  end
-
-  @impl true
-  def handle_info({:moq_track_error, token, reason}, ctx, state) do
-    # NOTE: should we bubble this up as a parent notif?
-    {pad, tracks} = Tracks.remove_token(state.tracks, token)
-    state = %{state | tracks: tracks}
-
-    case ctx.pads[pad] do
-      %{end_of_stream?: false, options: %{track: track}} ->
+      {{pad, track}, active} ->
         Membrane.Logger.warning("""
         MoQ subscription for track #{inspect(track)} failed, sending EOS.
         reason: #{inspect(reason)}
         """)
 
-        {[end_of_stream: pad], state}
-
-      _ended_or_absent ->
-        {[], state}
+        {[end_of_stream: pad], %{state | active: active}}
     end
   end
 
   @impl true
-  def handle_info({:moq_setup_failed, reason}, _ctx, _state),
-    do: raise("MoQ subscriber setup failed: #{inspect(reason)}")
+  def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
+    raise "MoQ subscriber setup failed: #{inspect(reason)}"
+  end
 
   @impl true
-  def handle_info({:moq_disconnected, reason}, ctx, state), do: handle_closed(reason, ctx, state)
+  def handle_info({:moq_disconnected, reason}, ctx, state),
+    do: handle_closed(reason, ctx, state)
 
   @impl true
   def handle_info({:moq_broadcast_closed, _path, reason}, ctx, state),
@@ -279,23 +284,27 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_pad_removed(pad, ctx, state) do
-    case Tracks.remove_pad(state.tracks, pad, ctx.pads[pad].options.track) do
-      {nil, _tracks} ->
+    track = ctx.pads[pad].options.track
+    same_sub? = fn {_token, sub} -> sub == {pad, track} end
+
+    case {Enum.find(state.active, same_sub?), Enum.find(state.waiting, same_sub?)} do
+      {{token, _sub}, nil} ->
+        Native.unsubscribe_track(state.consumer, token)
+        {[], %{state | active: Map.delete(state.active, token)}}
+
+      {nil, {token, _sub}} ->
+        {[], %{state | waiting: Map.delete(state.waiting, token)}}
+
+      {nil, nil} ->
         {[], state}
-
-      {token, tracks} ->
-        if state.consumer != nil do
-          Native.unsubscribe_track(state.consumer, token)
-        end
-
-        {[], %{state | tracks: tracks}}
     end
   end
 
-  @spec handle_closed(String.t(), map(), State.t()) ::
+  @spec handle_closed(String.t(), Membrane.Element.CallbackContext.t(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
-  defp handle_closed(reason, _ctx, %{status: :connecting}),
-    do: raise("MoQ subscriber setup failed: #{inspect(reason)}")
+  defp handle_closed(reason, _ctx, %{status: :connecting}) do
+    raise "MoQ subscriber setup failed: #{inspect(reason)}"
+  end
 
   defp handle_closed(_reason, _ctx, %{status: status} = state)
        when status in [:disconnect_pending, :disconnected],
@@ -316,31 +325,68 @@ defmodule Membrane.MoQ.Source do
     end
   end
 
-  @spec end_subscriptions([{Tracks.token(), Membrane.Pad.ref()}], map(), State.t()) ::
-          [Membrane.Element.Action.t()]
-  defp end_subscriptions(ended, ctx, state) do
-    Enum.each(ended, fn {token, _pad} -> Native.unsubscribe_track(state.consumer, token) end)
+  @spec track_notifications(Catalog.diff(), Catalog.t()) :: [
+          Membrane.Element.Action.notify_parent()
+        ]
+  defp track_notifications(diff, catalog) do
+    tracks_removed =
+      Stream.concat(diff.removed, diff.changed)
+      |> Stream.map(fn name -> {:notify_parent, {:track_removed, name}} end)
 
-    for {_token, pad} <- ended, not ctx.pads[pad].end_of_stream?, do: {:end_of_stream, pad}
-  end
-
-  @spec subscribe_ready(map(), State.t()) :: {[Membrane.Element.Action.t()], State.t()}
-  defp subscribe_ready(ctx, state),
-    do:
-      Enum.flat_map_reduce(Tracks.waiting(state.tracks), state, fn {token, pad, track}, state ->
-        subscribe_pad(token, pad, track, ctx, state)
+    new_tracks =
+      Stream.concat(diff.changed, diff.added)
+      |> Stream.map(fn name ->
+        {format, _container} = Catalog.rendition(catalog, name)
+        {:notify_parent, {:new_track, {name, TrackFormat.to_stream_format(format)}}}
       end)
 
-  @spec subscribe_pad(Tracks.token(), Membrane.Pad.ref(), Native.track(), map(), State.t()) ::
+    Enum.concat(tracks_removed, new_tracks)
+  end
+
+  @spec end_subscriptions([Native.track()], State.t()) ::
+          {[Membrane.Element.Action.t()], State.t()}
+  defp end_subscriptions(changed_tracks, state) do
+    {ended, active} =
+      Map.split_with(state.active, fn {_token, {_pad, track}} -> track in changed_tracks end)
+
+    eos_actions =
+      Enum.map(ended, fn {token, {pad, _track}} ->
+        Native.unsubscribe_track(state.consumer, token)
+        {:end_of_stream, pad}
+      end)
+
+    {eos_actions, %{state | active: active}}
+  end
+
+  @spec subscribe_ready(Membrane.Element.CallbackContext.t(), State.t()) ::
+          {[Membrane.Element.Action.t()], State.t()}
+  defp subscribe_ready(ctx, state) do
+    Enum.flat_map_reduce(state.waiting, state, fn {token, {pad, track}}, state ->
+      subscribe_pad(token, pad, track, ctx, state)
+    end)
+  end
+
+  @spec subscribe_pad(
+          integer(),
+          Membrane.Pad.ref(),
+          Native.track(),
+          Membrane.Element.CallbackContext.t(),
+          State.t()
+        ) ::
           {[Membrane.Element.Action.t()], State.t()}
   defp subscribe_pad(token, pad, track, ctx, state) do
-    %{options: %{priority: priority}} = ctx.pads[pad]
+    priority = ctx.pads[pad].options.priority
 
-    with {format, container} <- Tracks.rendition(state.tracks, track),
+    with {format, container} <- Catalog.rendition(state.catalog, track),
          priority = priority || TrackFormat.default_priority(format),
          :ok <- Native.subscribe_track(state.consumer, track, container, token, priority) do
-      {[stream_format: {pad, TrackFormat.to_stream_format(format)}],
-       %{state | tracks: Tracks.activate(state.tracks, token)}}
+      state = %{
+        state
+        | waiting: Map.delete(state.waiting, token),
+          active: Map.put(state.active, token, {pad, track})
+      }
+
+      {[stream_format: {pad, TrackFormat.to_stream_format(format)}], state}
     else
       nil ->
         # track not advertised yet; parked until a catalog update resolves it
@@ -352,8 +398,7 @@ defmodule Membrane.MoQ.Source do
         reason: #{inspect(reason)}
         """)
 
-        {_pad, tracks} = Tracks.remove_token(state.tracks, token)
-        {[end_of_stream: pad], %{state | tracks: tracks}}
+        {[end_of_stream: pad], %{state | waiting: Map.delete(state.waiting, token)}}
     end
   end
 
@@ -361,6 +406,6 @@ defmodule Membrane.MoQ.Source do
           {[Membrane.Element.Action.t()], State.t()}
   defp become_disconnected(ctx, %State{} = state) do
     actions = for {pad, %{end_of_stream?: false}} <- ctx.pads, do: {:end_of_stream, pad}
-    {actions, %{state | status: :disconnected, tracks: %Tracks{}}}
+    {actions, %{state | status: :disconnected, waiting: %{}, active: %{}, catalog: %Catalog{}}}
   end
 end

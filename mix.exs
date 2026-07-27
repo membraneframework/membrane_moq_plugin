@@ -39,7 +39,6 @@ defmodule Membrane.MoQ.Mixfile do
     [
       {:membrane_core, "~> 1.0"},
       {:rustler, "~> 0.38"},
-      {:bimap, "~> 1.3"},
       {:ratio, "~> 4.0.1"},
       {:membrane_h26x_plugin, "~> 0.10.7"},
       {:membrane_h264_format, "~> 0.6.0"},

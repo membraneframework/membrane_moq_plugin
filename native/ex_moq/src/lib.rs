@@ -36,6 +36,9 @@ pub(crate) mod atoms {
     }
 }
 
+// `.lock().unwrap()` on a poisoned mutex panics, poisoning other mutexes locked during the call.
+// We use this locking utility instead to isolate e.g. a poison from a track resource's mutex
+// not to cause panic in other NIF calls.
 pub(crate) fn lock_ignoring_poison<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()

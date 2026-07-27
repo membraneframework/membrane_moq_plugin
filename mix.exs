@@ -37,7 +37,7 @@ defmodule Membrane.MoQ.Mixfile do
 
   defp deps do
     [
-      {:membrane_core, "~> 1.0"},
+      {:membrane_core, "~> 1.3"},
       {:rustler, "~> 0.38"},
       {:ratio, "~> 4.0.1"},
       {:membrane_h26x_plugin, "~> 0.10.7"},

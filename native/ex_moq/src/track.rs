@@ -92,7 +92,6 @@ impl Drop for TrackResource {
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn add_track(
     broadcast_res: ResourceArc<BroadcastProducerResource>,
@@ -153,7 +152,6 @@ pub(crate) fn add_track(
     ))
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn update_track(
     track_res: ResourceArc<TrackResource>,
@@ -181,7 +179,6 @@ pub(crate) fn update_track(
     Ok(atoms::ok())
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn send_frame(
     track_res: ResourceArc<TrackResource>,
@@ -219,7 +216,6 @@ pub(crate) fn send_frame(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn remove_track(track_res: ResourceArc<TrackResource>) -> Atom {
     let _guard = runtime().handle().enter();

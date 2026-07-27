@@ -19,17 +19,16 @@ pub(crate) struct BroadcastProducerResource {
 
 impl Resource for BroadcastProducerResource {}
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn create_broadcast_producer(
     session: ResourceArc<SessionResource>,
-    path: String,
+    path: &str,
 ) -> NifResult<(Atom, ResourceArc<BroadcastProducerResource>)> {
     let _guard = runtime().handle().enter();
 
     let mut broadcast_producer = session
         .publish
-        .create_broadcast(&path, moq_net::broadcast::Route::new().with_announce(true))
+        .create_broadcast(path, moq_net::broadcast::Route::new().with_announce(true))
         .map_err(|e| crate::nif_error!("create_broadcast({path}) failed: {e}"))?;
 
     let catalog_producer = moq_mux::catalog::Producer::new(&mut broadcast_producer)
@@ -47,7 +46,6 @@ pub(crate) fn create_broadcast_producer(
     ))
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) -> Atom {
     let _guard = runtime().handle().enter();

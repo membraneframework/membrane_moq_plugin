@@ -50,7 +50,6 @@ struct Ctx<'a> {
     pid: LocalPid,
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn create_broadcast_consumer(
     session: ResourceArc<SessionResource>,
@@ -75,7 +74,6 @@ pub(crate) fn create_broadcast_consumer(
     )
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn subscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
@@ -101,7 +99,6 @@ pub(crate) fn subscribe_track(
     Ok(atoms::ok())
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn unsubscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
@@ -111,7 +108,6 @@ pub(crate) fn unsubscribe_track(
     atoms::ok()
 }
 
-#[allow(clippy::needless_pass_by_value)]
 #[rustler::nif]
 pub(crate) fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
     consumer.abort.abort();
@@ -127,7 +123,7 @@ async fn run_broadcast(
 ) {
     let mut env = OwnedEnv::new();
 
-    let Some(broadcast) = origin.announced_broadcast(path.as_str()).await else {
+    let Some(broadcast) = origin.announced_broadcast(&path).await else {
         messages::send_broadcast_closed(
             &mut env,
             pid,

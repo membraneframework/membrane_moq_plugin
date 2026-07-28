@@ -94,6 +94,66 @@ pub(crate) enum TrackFormat<'a> {
     Unrecognized,
 }
 
+impl<'a> TrackFormat<'a> {
+    pub(crate) fn from_video(env: Env<'a>, config: &hang::catalog::VideoConfig) -> Self {
+        // Decoder configuration record (avcC/hvcC), empty when carried in-band.
+        let dcr = config.description.as_deref().unwrap_or_default();
+        let mut description = NewBinary::new(env, dcr.len());
+        description.as_mut_slice().copy_from_slice(dcr);
+
+        let params = VideoTrackParams {
+            width: config.coded_width,
+            height: config.coded_height,
+            framerate: config.framerate,
+        };
+
+        match &config.codec {
+            hang::catalog::VideoCodec::H264(h) => Self::H264 {
+                params,
+                description: description.into(),
+                codec: H264Codec {
+                    inline: h.inline,
+                    profile: h.profile,
+                    constraints: h.constraints,
+                    level: h.level,
+                },
+            },
+            hang::catalog::VideoCodec::H265(h) => Self::H265 {
+                params,
+                description: description.into(),
+                codec: H265Codec {
+                    in_band: h.in_band,
+                    profile_space: h.profile_space,
+                    profile_idc: h.profile_idc,
+                    profile_compatibility_flags: h.profile_compatibility_flags.to_vec(),
+                    tier_flag: h.tier_flag,
+                    level_idc: h.level_idc,
+                    constraint_flags: h.constraint_flags.to_vec(),
+                },
+            },
+            _ => Self::Unrecognized,
+        }
+    }
+
+    pub(crate) fn from_audio(config: &hang::catalog::AudioConfig) -> Self {
+        let params = AudioTrackParams {
+            sample_rate: config.sample_rate,
+            channels: config.channel_count,
+        };
+
+        match &config.codec {
+            hang::catalog::AudioCodec::AAC(aac) => Self::Aac {
+                params,
+                codec: AacCodec {
+                    profile: aac.profile,
+                },
+            },
+            hang::catalog::AudioCodec::Opus => Self::Opus { params },
+            _ => Self::Unrecognized,
+        }
+    }
+}
+
 pub(crate) enum ResolvedConfig {
     Video(hang::catalog::VideoConfig),
     Audio(hang::catalog::AudioConfig),
@@ -220,7 +280,7 @@ fn aac_audio_config(
     config.container = container;
 
     // WebCodecs-convention decoders treat a description-less mp4a.40.x rendition as ADTS;
-    // we publish raw AAC frames, so the AudioSpecificConfig must ride in the catalog.
+    // MoQ requires raw AAC frames, so we include the AudioSpecificConfig in the catalog.
     config.description = Some(
         moq_mux::codec::aac::Config {
             profile,
@@ -260,64 +320,4 @@ fn create_video_config(
     config.framerate = framerate;
     config.optimize_for_latency = Some(true);
     config
-}
-
-impl<'a> TrackFormat<'a> {
-    pub(crate) fn from_video(env: Env<'a>, config: &hang::catalog::VideoConfig) -> Self {
-        // Decoder configuration record (avcC/hvcC), empty when carried in-band.
-        let dcr = config.description.as_deref().unwrap_or_default();
-        let mut description = NewBinary::new(env, dcr.len());
-        description.as_mut_slice().copy_from_slice(dcr);
-
-        let params = VideoTrackParams {
-            width: config.coded_width,
-            height: config.coded_height,
-            framerate: config.framerate,
-        };
-
-        match &config.codec {
-            hang::catalog::VideoCodec::H264(h) => Self::H264 {
-                params,
-                description: description.into(),
-                codec: H264Codec {
-                    inline: h.inline,
-                    profile: h.profile,
-                    constraints: h.constraints,
-                    level: h.level,
-                },
-            },
-            hang::catalog::VideoCodec::H265(h) => Self::H265 {
-                params,
-                description: description.into(),
-                codec: H265Codec {
-                    in_band: h.in_band,
-                    profile_space: h.profile_space,
-                    profile_idc: h.profile_idc,
-                    profile_compatibility_flags: h.profile_compatibility_flags.to_vec(),
-                    tier_flag: h.tier_flag,
-                    level_idc: h.level_idc,
-                    constraint_flags: h.constraint_flags.to_vec(),
-                },
-            },
-            _ => Self::Unrecognized,
-        }
-    }
-
-    pub(crate) fn from_audio(config: &hang::catalog::AudioConfig) -> Self {
-        let params = AudioTrackParams {
-            sample_rate: config.sample_rate,
-            channels: config.channel_count,
-        };
-
-        match &config.codec {
-            hang::catalog::AudioCodec::AAC(aac) => Self::Aac {
-                params,
-                codec: AacCodec {
-                    profile: aac.profile,
-                },
-            },
-            hang::catalog::AudioCodec::Opus => Self::Opus { params },
-            _ => Self::Unrecognized,
-        }
-    }
 }

@@ -1,6 +1,7 @@
 mod pump;
 mod subscriptions;
 
+use std::ops::ControlFlow;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -48,6 +49,11 @@ struct Ctx<'a> {
     broadcast: &'a moq_net::broadcast::Consumer,
     latency: Duration,
     pid: LocalPid,
+}
+
+enum Exit {
+    Closed(String),
+    Detached,
 }
 
 #[rustler::nif]
@@ -151,41 +157,56 @@ async fn run_broadcast(
 
     let mut subs = Subscriptions::new();
 
-    loop {
-        tokio::select! {
-            command = commands_rx.recv() => {
-              match command {
-                None => return,
-                Some(command) => handle_command(&mut subs, &ctx, command)
-              }
-            },
-            Some((token, outcome)) = subs.join_next(),
-              if subs.has_pumps() => handle_pump_join(&mut env, pid, token, outcome),
-            snapshot = catalog.next() => handle_new_catalog(&mut env, pid, &path, snapshot)
+    let exit = loop {
+        let result = tokio::select! {
+          command = commands_rx.recv() => handle_command(&mut subs, &ctx, command),
+          Some((token, outcome)) = subs.join_next(),
+            if subs.has_pumps() => handle_pump_join(&mut env, pid, token, outcome),
+          snapshot = catalog.next() => handle_new_catalog(&mut env, pid, &path, snapshot)
+        };
+
+        if let ControlFlow::Break(exit) = result {
+            break exit;
         }
+    };
+
+    if let Exit::Closed(reason) = exit {
+        messages::send_broadcast_closed(&mut env, pid, &path, reason);
     }
 }
 
-fn handle_command(subs: &mut Subscriptions, ctx: &Ctx, command: Command) {
+fn handle_command(
+    subs: &mut Subscriptions,
+    ctx: &Ctx,
+    command: Option<Command>,
+) -> ControlFlow<Exit> {
     match command {
-        Command::Subscribe {
+        None => return ControlFlow::Break(Exit::Detached),
+        Some(Command::Subscribe {
             track,
             wire,
             token,
             priority,
-        } => {
+        }) => {
             let pump = Pump::new(ctx, track, wire, token, priority);
             subs.insert(token, pump);
         }
-        Command::Unsubscribe { token } => subs.remove(token),
+        Some(Command::Unsubscribe { token }) => subs.remove(token),
     }
+    ControlFlow::Continue(())
 }
 
-fn handle_pump_join(env: &mut OwnedEnv, pid: LocalPid, token: Token, outcome: anyhow::Result<()>) {
+fn handle_pump_join(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    token: Token,
+    outcome: anyhow::Result<()>,
+) -> ControlFlow<Exit> {
     match outcome {
         Ok(()) => messages::send_track_ended(env, pid, token),
         Err(e) => messages::send_track_error(env, pid, token, e.to_string()),
     }
+    ControlFlow::Continue(())
 }
 
 fn handle_new_catalog(
@@ -193,16 +214,16 @@ fn handle_new_catalog(
     pid: LocalPid,
     path: &str,
     snapshot: Result<Option<moq_mux::catalog::hang::Catalog>, moq_mux::Error>,
-) {
+) -> ControlFlow<Exit> {
     let close_reason = match snapshot {
         Ok(Some(snapshot)) => match messages::send_catalog(env, pid, path, &snapshot) {
-            Ok(()) => return,
+            Ok(()) => return ControlFlow::Continue(()),
             Err(messages::PidDead) => "consumer pid is dead".to_string(),
         },
         Ok(None) => "broadcast ended".to_string(),
         Err(e) => format!("catalog error: {e}"),
     };
-    messages::send_broadcast_closed(env, pid, path, close_reason);
+    ControlFlow::Break(Exit::Closed(close_reason))
 }
 
 async fn subscribe_catalog(

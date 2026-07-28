@@ -99,8 +99,6 @@ defmodule Membrane.MoQ.Source do
 
     @type subscription :: {Membrane.Pad.ref(), Native.track()}
 
-    @type token :: integer()
-
     @type t :: %__MODULE__{
             url: String.t(),
             broadcast: String.t(),
@@ -108,13 +106,13 @@ defmodule Membrane.MoQ.Source do
             latency: Membrane.Time.t(),
             session: Native.session() | nil,
             consumer: Native.broadcast_consumer() | nil,
-            next_token: token(),
+            next_token: Native.token(),
             # subscriptions waiting for playback to start
             # and the track to be announced by the catalog
-            waiting: %{token() => subscription()},
+            waiting: %{Native.token() => subscription()},
             # subscriptions for which a native task forwarding frames exists,
             # entries only move from `waiting` to `active`
-            active: %{token() => subscription()},
+            active: %{Native.token() => subscription()},
             catalog: Catalog.t(),
             status: :connecting | :ready | :disconnect_pending | :disconnected
           }

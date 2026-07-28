@@ -19,6 +19,12 @@ defmodule ExMoQ.Native do
   @type container :: :legacy | :loc
 
   @typedoc """
+  Caller-chosen opaque integer identifying a track subscription,
+  echoed back in the subscription's messages.
+  """
+  @type token :: integer()
+
+  @typedoc """
   Format and wire container of a track, as advertised in the broadcast's catalog.
   The container is `nil` when the catalog advertises one this library
   does not recognize.
@@ -244,8 +250,8 @@ defmodule ExMoQ.Native do
   echo the value advertised for the track in the `:moq_catalog` message.
   An unusable container is rejected synchronously with `{:error, reason}`.
 
-  `token` is a caller-chosen opaque integer echoed back in this track's messages
-  so the caller can route them to the originating subscription.
+  `token` (see `t:token/0`) lets the caller route this track's messages
+  to the originating subscription.
   Keep tokens unique across all broadcast consumers reporting to the same pid.
 
   The subscription is immediate:
@@ -253,14 +259,14 @@ defmodule ExMoQ.Native do
   Waiting until the catalog advertises a track is the caller's job (watch `:moq_catalog`).
 
   Sends to the consumer's `pid`:
-    * `{:moq_frame, token :: integer(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
+    * `{:moq_frame, token(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
       for every received frame
-    * `{:moq_track_ended, token :: integer()}` when the wire track finishes
-    * `{:moq_track_error, token :: integer(), reason :: String.t()}`
+    * `{:moq_track_ended, token()}` when the wire track finishes
+    * `{:moq_track_error, token(), reason :: String.t()}`
       when the subscription fails on the native side
       while the track may still be advertised in the catalog
   """
-  @spec subscribe_track(broadcast_consumer(), track(), container() | nil, integer(), 0..255) ::
+  @spec subscribe_track(broadcast_consumer(), track(), container() | nil, token(), 0..255) ::
           :ok | {:error, reason :: String.t()}
   def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -269,7 +275,7 @@ defmodule ExMoQ.Native do
   Cancels the subscription identified by `token`.
   No `{:moq_track_ended, ...}` is sent for a cancelled track. Idempotent.
   """
-  @spec unsubscribe_track(broadcast_consumer(), integer()) :: :ok
+  @spec unsubscribe_track(broadcast_consumer(), token()) :: :ok
   def unsubscribe_track(_broadcast_consumer, _token),
     do: :erlang.nif_error(:nif_not_loaded)
 

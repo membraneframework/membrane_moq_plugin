@@ -131,41 +131,42 @@ defmodule Subscriber do
     {name, stream_format} = Enum.min_by(available, fn {name, _format} -> name end)
     Membrane.Logger.info("subscribing to #{name}")
 
-    {[spec: track_spec(name, stream_format, state.generation)],
+    {[spec: track_spec(name, state.generation, stream_format)],
      %{state | current_track: name, generation: state.generation + 1}}
   end
 
   defp maybe_subscribe(state), do: {[], state}
-
-  defp track_spec(name, stream_format, generation) do
-    {parser, decoder} = playback_for(stream_format)
-
-    get_child(:source)
-    |> via_out(Pad.ref(:output, generation), options: [track: name])
-    |> child({:parser, generation}, parser)
-    |> child({:decoder, generation}, decoder)
-    |> child({:rt, generation}, Membrane.Realtimer)
-    |> child({:player, generation}, Membrane.SDL.Player)
-  end
 
   # `MoQ.Source` emits frames in decode order carrying their presentation PTS
   # but no DTS, so the parser regenerates monotonic DTS/PTS from the bitstream
   # structure (using the catalog's framerate) — otherwise the decoder would
   # emit frames still in decode order and the playback would jitter. `:annexb`
   # is what the FFmpeg decoders accept.
-  defp playback_for(%Membrane.H264{} = format) do
-    {%Membrane.H264.Parser{
-       generate_best_effort_timestamps: %{framerate: format.framerate || {30, 1}},
-       output_stream_structure: :annexb
-     }, Membrane.H264.FFmpeg.Decoder}
-  end
+  @spec track_spec(String.t(), non_neg_integer(), Membrane.StreamFormat.t()) ::
+          Membrane.ChildrenSpec.t()
+  defp track_spec(name, generation, %Membrane.H264{framerate: framerate}),
+    do:
+      get_child(:source)
+      |> via_out(Pad.ref(:output, generation), options: [track: name])
+      |> child({:parser, generation}, %Membrane.H264.Parser{
+        generate_best_effort_timestamps: %{framerate: framerate || {30, 1}},
+        output_stream_structure: :annexb
+      })
+      |> child({:decoder, generation}, Membrane.H264.FFmpeg.Decoder)
+      |> child({:rt, generation}, Membrane.Realtimer)
+      |> child({:player, generation}, Membrane.SDL.Player)
 
-  defp playback_for(%Membrane.H265{} = format) do
-    {%Membrane.H265.Parser{
-       generate_best_effort_timestamps: %{framerate: format.framerate || {30, 1}},
-       output_stream_structure: :annexb
-     }, Membrane.H265.FFmpeg.Decoder}
-  end
+  defp track_spec(name, generation, %Membrane.H265{framerate: framerate}),
+    do:
+      get_child(:source)
+      |> via_out(Pad.ref(:output, generation), options: [track: name])
+      |> child({:parser, generation}, %Membrane.H265.Parser{
+        generate_best_effort_timestamps: %{framerate: framerate || {30, 1}},
+        output_stream_structure: :annexb
+      })
+      |> child({:decoder, generation}, Membrane.H265.FFmpeg.Decoder)
+      |> child({:rt, generation}, Membrane.Realtimer)
+      |> child({:player, generation}, Membrane.SDL.Player)
 end
 
 broadcast =

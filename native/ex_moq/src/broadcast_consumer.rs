@@ -13,7 +13,7 @@ use moq_mux::catalog::Stream as _;
 use crate::messages::{self, Token};
 use crate::session::SessionResource;
 use crate::track_format::Container;
-use crate::{atoms, lock_ignoring_poison, runtime};
+use crate::{atoms, runtime};
 
 use subscription_queue::{PollEventResult, SubscriptionQueue};
 
@@ -72,7 +72,7 @@ pub(crate) fn create_broadcast_consumer(
 ) -> (Atom, ResourceArc<BroadcastConsumerResource>) {
     let latency = Duration::from_nanos(latency_ns);
 
-    let origin = lock_ignoring_poison(&session.consume).consume();
+    let origin = session.consume.consume();
 
     let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
 

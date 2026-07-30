@@ -2,7 +2,6 @@ use hang::moq_net;
 
 use moq_native::ClientConfig;
 use rustler::{Atom, LocalPid, NifResult, OwnedEnv, ResourceArc};
-use std::sync::Mutex;
 use tokio::task::AbortHandle;
 use url::Url;
 
@@ -10,7 +9,7 @@ use crate::{atoms, messages, runtime};
 
 pub(crate) struct SessionResource {
     pub(crate) publish: moq_net::origin::Producer,
-    pub(crate) consume: Mutex<moq_net::origin::Consumer>,
+    pub(crate) consume: moq_net::origin::Consumer,
     /// The task owns the session, so aborting it drops the connection
     /// and guarantees no further messages after a graceful close.
     abort: AbortHandle,
@@ -55,7 +54,7 @@ pub(crate) fn create_session(
         atoms::ok(),
         ResourceArc::new(SessionResource {
             publish: outgoing,
-            consume: Mutex::new(incoming_consumer),
+            consume: incoming_consumer,
             abort: task.abort_handle(),
         }),
     ))

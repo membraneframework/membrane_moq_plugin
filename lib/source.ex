@@ -239,7 +239,7 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
-  def handle_info({:moq_track_ended, token}, _ctx, state) do
+  def handle_info({:moq_track_finished, token}, _ctx, state) do
     case Map.pop(state.active, token) do
       {nil, _active} ->
         {[], state}

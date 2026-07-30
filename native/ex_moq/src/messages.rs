@@ -95,12 +95,12 @@ pub(crate) fn send_frame(
     .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_track_ended(
+pub(crate) fn send_track_finished(
     env: &mut OwnedEnv,
     pid: LocalPid,
     token: Token,
 ) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| (atoms::moq_track_ended(), token).encode(env))
+    env.send_and_clear(&pid, |env| (atoms::moq_track_finished(), token).encode(env))
         .map_err(|_| PidDead)
 }
 

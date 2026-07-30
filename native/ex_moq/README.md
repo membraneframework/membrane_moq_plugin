@@ -75,7 +75,7 @@ Stream.repeatedly(fn ->
     {:moq_frame, 1, payload, timestamp_ns, keyframe?} ->
       handle_frame(payload, timestamp_ns, keyframe?)
 
-    {:moq_track_ended, 1} ->
+    {:moq_track_finished, 1} ->
       IO.puts("track finished")
 
     {:moq_track_error, 1, reason} ->

@@ -224,7 +224,7 @@ fn handle_event(
         PollEventResult::TrackError(reason) => {
             messages::send_track_error(env, pid, token, reason.to_string())
         }
-        PollEventResult::TrackFinished => messages::send_track_ended(env, pid, token),
+        PollEventResult::TrackFinished => messages::send_track_finished(env, pid, token),
     };
     match send_result {
         Ok(()) => ControlFlow::Continue(()),

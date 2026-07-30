@@ -29,7 +29,7 @@ pub(crate) mod atoms {
         moq_disconnected,
         moq_frame,
         moq_catalog,
-        moq_track_ended,
+        moq_track_finished,
         moq_track_error,
         moq_broadcast_ready,
         moq_broadcast_closed,

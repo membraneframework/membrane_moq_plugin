@@ -261,7 +261,7 @@ defmodule ExMoQ.Native do
   Sends to the consumer's `pid`:
     * `{:moq_frame, token(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
       for every received frame
-    * `{:moq_track_ended, token()}` when the wire track finishes
+    * `{:moq_track_finished, token()}` when the wire track finishes
     * `{:moq_track_error, token(), reason :: String.t()}`
       when the subscription fails on the native side
       while the track may still be advertised in the catalog
@@ -273,7 +273,7 @@ defmodule ExMoQ.Native do
 
   @doc """
   Cancels the subscription identified by `token`.
-  No `{:moq_track_ended, ...}` is sent for a cancelled track. Idempotent.
+  No `{:moq_track_finished, ...}` is sent for a cancelled track. Idempotent.
   """
   @spec unsubscribe_track(broadcast_consumer(), token()) :: :ok
   def unsubscribe_track(_broadcast_consumer, _token),

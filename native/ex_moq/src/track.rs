@@ -13,8 +13,6 @@ use crate::{
     track_format::{Container, ResolvedConfig, TrackFormat},
 };
 
-/// Producer over the runtime-dispatched container enum,
-/// so one resource type covers every wire format the catalog can describe.
 pub(crate) type WireProducer = moq_mux::container::Producer<moq_mux::catalog::hang::Container>;
 
 enum Rendition {
@@ -110,7 +108,9 @@ pub(crate) fn add_track(
 
     let resolved = ResolvedConfig::new(format, catalog_container.clone())?;
 
-    let mut inner = lock_ignoring_poison(&broadcast_res.inner);
+    let mut inner = broadcast_res.inner.lock().map_err(|_poison| {
+        crate::nif_error!("broadcast producer poisoned by panic in an earlier NIF call")
+    })?;
 
     let track_producer = inner
         .broadcast
@@ -161,7 +161,11 @@ pub(crate) fn update_track(
 
     let resolved = ResolvedConfig::new(format, track_res.container.clone())?;
 
-    let mut live = lock_ignoring_poison(&track_res.live);
+    let mut live = track_res
+        .live
+        .lock()
+        .map_err(|_poison| crate::nif_error!("track poisoned by panic in an earlier NIF call"))?;
+
     let Some(live) = live.as_mut() else {
         return Err(crate::nif_error!(
             "track {:?} was removed; a stale resource cannot update the catalog",
@@ -197,12 +201,22 @@ pub(crate) fn send_frame(
 
     let _guard = runtime().handle().enter();
 
-    let live = lock_ignoring_poison(&track_res.live);
+    let live = track_res.live.lock().map_err(|_poiosn| {
+        crate::nif_error!("track resource poisoned by panic in an earlier NIF call")
+    })?;
+
     let Some(live) = live.as_ref() else {
         return Err(crate::nif_error!("track {:?} was removed", track_res.name));
     };
 
-    let result = lock_ignoring_poison(&live.producer).write(frame);
+    let result = live
+        .producer
+        .lock()
+        .map_err(|_poison| {
+            crate::nif_error!("track producer poisoned by panic in an earlier nif call")
+        })?
+        .write(frame);
+
     match result {
         Ok(()) => Ok(atoms::ok()),
         Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {

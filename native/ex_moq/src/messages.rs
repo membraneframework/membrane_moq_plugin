@@ -71,19 +71,23 @@ pub(crate) fn send_frame(
     env: &mut OwnedEnv,
     pid: LocalPid,
     token: Token,
-    payload: &[u8],
-    timestamp_ns: u64,
-    keyframe: bool,
+    frame: moq_mux::container::Frame,
 ) -> Result<(), PidDead> {
+    let moq_mux::container::Frame {
+        payload,
+        timestamp,
+        keyframe,
+        duration: _,
+    } = frame;
     env.send_and_clear(&pid, |env| {
         let mut payload_binary = NewBinary::new(env, payload.len());
-        payload_binary.as_mut_slice().copy_from_slice(payload);
+        payload_binary.as_mut_slice().copy_from_slice(&payload);
 
         (
             atoms::moq_frame(),
             token,
             Into::<Binary>::into(payload_binary),
-            timestamp_ns,
+            timestamp.as_nanos() as u64,
             keyframe,
         )
             .encode(env)
@@ -91,12 +95,23 @@ pub(crate) fn send_frame(
     .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_track_ended(env: &mut OwnedEnv, pid: LocalPid, token: Token) {
-    let _ = env.send_and_clear(&pid, |env| (atoms::moq_track_ended(), token).encode(env));
+pub(crate) fn send_track_ended(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    token: Token,
+) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| (atoms::moq_track_ended(), token).encode(env))
+        .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_track_error(env: &mut OwnedEnv, pid: LocalPid, token: Token, reason: String) {
-    let _ = env.send_and_clear(&pid, |env| {
+pub(crate) fn send_track_error(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    token: Token,
+    reason: String,
+) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| {
         (atoms::moq_track_error(), token, reason).encode(env)
-    });
+    })
+    .map_err(|_| PidDead)
 }

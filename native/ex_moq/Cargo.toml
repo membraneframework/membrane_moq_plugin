@@ -14,6 +14,7 @@ hang = "0.20.1"
 moq-mux = "0.9.0"
 url = "2.5.8"
 rustler = "0.38.0"
+thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 bytes = "1"
 anyhow = "1.0.102"

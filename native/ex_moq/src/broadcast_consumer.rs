@@ -1,14 +1,13 @@
-mod pump;
-mod subscriptions;
+mod subscription_queue;
 
 use std::ops::ControlFlow;
 use std::time::Duration;
 
+use rustler::{Atom, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
 use tokio::sync::mpsc;
 
-use rustler::{Atom, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
-
 use hang::moq_net;
+use hang::moq_net::kio;
 use moq_mux::catalog::Stream as _;
 
 use crate::messages::{self, Token};
@@ -16,8 +15,7 @@ use crate::session::SessionResource;
 use crate::track_format::Container;
 use crate::{atoms, lock_ignoring_poison, runtime};
 
-use pump::Pump;
-use subscriptions::Subscriptions;
+use subscription_queue::{PollEventResult, SubscriptionQueue};
 
 enum Command {
     Subscribe {
@@ -29,31 +27,40 @@ enum Command {
     Unsubscribe {
         token: Token,
     },
+    Close,
 }
 
 pub(crate) struct BroadcastConsumerResource {
     commands: mpsc::UnboundedSender<Command>,
-    /// Aborting the task drops its `Subscriptions`, which aborts every pump.
-    abort: tokio::task::AbortHandle,
+    task: tokio::task::AbortHandle,
 }
 
 impl Resource for BroadcastConsumerResource {}
 
 impl Drop for BroadcastConsumerResource {
     fn drop(&mut self) {
-        self.abort.abort();
+        self.task.abort();
     }
-}
-
-struct Ctx<'a> {
-    broadcast: &'a moq_net::broadcast::Consumer,
-    latency: Duration,
-    pid: LocalPid,
 }
 
 enum Exit {
     Closed(String),
     Detached,
+}
+
+struct CloseGuard {
+    pid: LocalPid,
+    path: String,
+    reason: Option<String>,
+}
+
+impl Drop for CloseGuard {
+    fn drop(&mut self) {
+        if let Some(reason) = self.reason.take() {
+            let mut env = OwnedEnv::new();
+            messages::send_broadcast_closed(&mut env, self.pid, &self.path, reason);
+        }
+    }
 }
 
 #[rustler::nif]
@@ -75,7 +82,7 @@ pub(crate) fn create_broadcast_consumer(
         atoms::ok(),
         ResourceArc::new(BroadcastConsumerResource {
             commands: commands_tx,
-            abort: task.abort_handle(),
+            task: task.abort_handle(),
         }),
     )
 }
@@ -116,7 +123,7 @@ pub(crate) fn unsubscribe_track(
 
 #[rustler::nif]
 pub(crate) fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
-    consumer.abort.abort();
+    let _ = consumer.commands.send(Command::Close);
     atoms::ok()
 }
 
@@ -129,82 +136,62 @@ async fn run_broadcast(
 ) {
     let mut env = OwnedEnv::new();
 
-    let Some(broadcast) = origin.announced_broadcast(&path).await else {
-        messages::send_broadcast_closed(
-            &mut env,
-            pid,
-            &path,
-            format!("broadcast {path:?} was not announced before the session closed"),
-        );
+    let mut guard = CloseGuard {
+        pid,
+        path,
+        reason: Some("consumer task died unexpectedly".to_string()),
+    };
+
+    let Some(broadcast) = origin.announced_broadcast(&guard.path).await else {
+        guard.reason = Some(format!(
+            "broadcast {:?} was not announced before the session closed",
+            guard.path
+        ));
         return;
     };
 
-    let mut catalog = match subscribe_catalog(&path, &broadcast).await {
+    let mut catalog = match subscribe_catalog(&guard.path, &broadcast).await {
         Ok(catalog) => catalog,
         Err(e) => {
-            messages::send_broadcast_closed(&mut env, pid, &path, e.to_string());
+            guard.reason = Some(e.to_string());
             return;
         }
     };
 
-    messages::send_broadcast_ready(&mut env, pid, &path);
+    messages::send_broadcast_ready(&mut env, pid, &guard.path);
 
-    let ctx = Ctx {
-        broadcast: &broadcast,
-        latency,
-        pid,
-    };
-
-    let mut subs = Subscriptions::new();
+    let mut subs = SubscriptionQueue::new(broadcast, latency);
 
     let exit = loop {
         let result = tokio::select! {
-          command = commands_rx.recv() => handle_command(&mut subs, &ctx, command),
-          Some((token, outcome)) = subs.join_next(),
-            if subs.has_pumps() => handle_pump_join(&mut env, pid, token, outcome),
-          snapshot = catalog.next() => handle_new_catalog(&mut env, pid, &path, snapshot)
+          command = commands_rx.recv() => handle_command(&mut subs, command),
+          snapshot = catalog.next() => handle_new_catalog(&mut env, pid, &guard.path, snapshot),
+          event = kio::wait(|waiter| subs.poll_event(waiter)) => handle_event(&mut env, pid, event)
         };
 
         if let ControlFlow::Break(exit) = result {
             break exit;
         }
+
+        tokio::task::coop::consume_budget().await;
     };
 
-    if let Exit::Closed(reason) = exit {
-        messages::send_broadcast_closed(&mut env, pid, &path, reason);
-    }
+    guard.reason = match exit {
+        Exit::Closed(reason) => Some(reason),
+        Exit::Detached => None,
+    };
 }
 
-fn handle_command(
-    subs: &mut Subscriptions,
-    ctx: &Ctx,
-    command: Option<Command>,
-) -> ControlFlow<Exit> {
+fn handle_command(subs: &mut SubscriptionQueue, command: Option<Command>) -> ControlFlow<Exit> {
     match command {
-        None => return ControlFlow::Break(Exit::Detached),
+        None | Some(Command::Close) => return ControlFlow::Break(Exit::Detached),
         Some(Command::Subscribe {
             track,
             wire,
             token,
             priority,
-        }) => {
-            let pump = Pump::new(ctx, track, wire, token, priority);
-            subs.insert(token, pump);
-        }
+        }) => subs.insert(token, track, wire, priority),
         Some(Command::Unsubscribe { token }) => subs.remove(token),
-    }
-    ControlFlow::Continue(())
-}
-
-fn handle_pump_join(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    token: Token,
-    outcome: anyhow::Result<()>,
-) -> ControlFlow<Exit> {
-    match outcome {
-        Ok(()) => messages::send_track_ended(env, pid, token),
-        Err(e) => messages::send_track_error(env, pid, token, e.to_string()),
     }
     ControlFlow::Continue(())
 }
@@ -224,6 +211,25 @@ fn handle_new_catalog(
         Err(e) => format!("catalog error: {e}"),
     };
     ControlFlow::Break(Exit::Closed(close_reason))
+}
+
+fn handle_event(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    event: (Token, PollEventResult),
+) -> ControlFlow<Exit> {
+    let (token, result) = event;
+    let send_result = match result {
+        PollEventResult::Frame(frame) => messages::send_frame(env, pid, token, frame),
+        PollEventResult::TrackError(reason) => {
+            messages::send_track_error(env, pid, token, reason.to_string())
+        }
+        PollEventResult::TrackFinished => messages::send_track_ended(env, pid, token),
+    };
+    match send_result {
+        Ok(()) => ControlFlow::Continue(()),
+        Err(messages::PidDead) => ControlFlow::Break(Exit::Detached),
+    }
 }
 
 async fn subscribe_catalog(

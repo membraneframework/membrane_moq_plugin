@@ -4,17 +4,18 @@ mod broadcast_consumer;
 mod broadcast_producer;
 mod messages;
 mod session;
-mod track;
 mod track_format;
 
 use broadcast_consumer::BroadcastConsumerResource;
 use broadcast_producer::BroadcastProducerResource;
 use session::SessionResource;
-use track::TrackResource;
 
 macro_rules! nif_error {
-    ($($arg:tt)*) => {
-        rustler::Error::Term(Box::new(format!($($arg)*)))
+    ($fmt:literal $($arg:tt)*) => {
+        rustler::Error::Term(Box::new(format!($fmt $($arg)*)))
+    };
+    ($term:expr) => {
+        rustler::Error::Term(Box::new($term))
     };
 }
 pub(crate) use nif_error;
@@ -24,6 +25,9 @@ pub(crate) mod atoms {
         ok,
         error,
         moq_missing_keyframe,
+        moq_producer_poisoned,
+        moq_track_already_exists,
+        moq_unknown_track,
         moq_connected,
         moq_setup_failed,
         moq_disconnected,
@@ -34,15 +38,6 @@ pub(crate) mod atoms {
         moq_broadcast_ready,
         moq_broadcast_closed,
     }
-}
-
-// A poisoned mutex means an earlier NIF call panicked while mutating the guarded state.
-// Cleanup paths ignore the poison: best-effort finish/abort must still run (notably from
-// `Drop`) and must not panic in turn, poisoning other mutexes locked during the call.
-pub(crate) fn lock_ignoring_poison<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
@@ -59,7 +54,6 @@ fn load(env: rustler::Env, _info: rustler::Term) -> bool {
     [
         env.register::<SessionResource>(),
         env.register::<BroadcastProducerResource>(),
-        env.register::<TrackResource>(),
         env.register::<BroadcastConsumerResource>(),
     ]
     .iter()

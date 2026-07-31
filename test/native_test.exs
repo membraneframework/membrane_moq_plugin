@@ -51,17 +51,19 @@ defmodule ExMoQ.NativeTest do
     assert_receive :moq_connected, 10_000
 
     {:ok, producer} = Native.create_broadcast_producer(session, broadcast)
-    {:ok, track} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
+    :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
 
-    assert :moq_missing_keyframe = Native.send_frame(track, 0, false, "delta before any group")
-    assert :ok = Native.send_frame(track, 0, true, "keyframe opens a group")
-    assert :ok = Native.send_frame(track, 40_000_000, false, "delta within the group")
+    assert :moq_missing_keyframe =
+             Native.send_frame(producer, @track, 0, false, "delta before any group")
+
+    assert :ok = Native.send_frame(producer, @track, 0, true, "keyframe opens a group")
+    assert :ok = Native.send_frame(producer, @track, 40_000_000, false, "delta within the group")
 
     :ok = Native.close_broadcast_producer(producer)
     :ok = Native.close_session(session)
   end
 
-  test "update_track on a stale track resource errors instead of touching the catalog", %{
+  test "update_track on a removed track errors instead of touching the catalog", %{
     broadcast: broadcast,
     relay: relay
   } do
@@ -74,25 +76,24 @@ defmodule ExMoQ.NativeTest do
     {:ok, consumer} = Native.create_broadcast_consumer(sub_session, broadcast, self(), 0)
     assert_receive {:moq_broadcast_ready, ^broadcast}, 10_000
 
-    {:ok, track1} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
+    :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
     await_renditions(broadcast, &match?([{@track, {_format, :legacy}}], &1))
 
-    :ok = Native.remove_track(track1)
+    # A name the broadcast already carries cannot be added again.
+    assert {:error, _reason} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
+
+    :ok = Native.remove_track(producer, @track)
     await_renditions(broadcast, &(&1 == []))
 
-    # A removed resource must not resurrect its rendition.
-    assert {:error, _reason} = Native.update_track(track1, h264_format())
+    # An update under the removed name must not resurrect its rendition.
+    assert {:error, _reason} = Native.update_track(producer, @track, h264_format())
     refute_receive {:moq_catalog, _path, _renditions}, 500
 
-    # Nor clobber a successor that reoccupied the name.
-    {:ok, track2} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
+    # The name is free for reuse, and updates then target the successor track.
+    :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
     await_renditions(broadcast, &match?([{@track, {_format, :legacy}}], &1))
 
-    assert {:error, _reason} = Native.update_track(track1, h264_format(1920))
-    refute_receive {:moq_catalog, _path, _renditions}, 500
-
-    # The live resource still updates in place.
-    assert :ok = Native.update_track(track2, h264_format(1920))
+    assert :ok = Native.update_track(producer, @track, h264_format(1920))
 
     await_renditions(
       broadcast,
@@ -114,11 +115,11 @@ defmodule ExMoQ.NativeTest do
 
     {:ok, producer} = Native.create_broadcast_producer(session, broadcast)
 
-    {:ok, track} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
-    assert :ok = Native.send_frame(track, 0, true, "frame")
+    :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
+    assert :ok = Native.send_frame(producer, @track, 0, true, "frame")
 
     :ok = Native.close_broadcast_producer(producer)
-    assert {:error, _reason} = Native.send_frame(track, 40_000_000, true, "frame")
+    assert {:error, _reason} = Native.send_frame(producer, @track, 40_000_000, true, "frame")
 
     :ok = Native.close_session(session)
   end
@@ -136,7 +137,7 @@ defmodule ExMoQ.NativeTest do
     {:ok, consumer} = Native.create_broadcast_consumer(sub_session, broadcast, self(), 0)
     assert_receive {:moq_broadcast_ready, ^broadcast}, 10_000
 
-    {:ok, track} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
+    :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
 
     [{@track, {{:h264, _config}, container}}] =
       await_renditions(broadcast, &match?([{@track, {_format, _container}}], &1))
@@ -144,7 +145,7 @@ defmodule ExMoQ.NativeTest do
     early_token = 1
     :ok = Native.subscribe_track(consumer, @track, container, early_token, 60)
 
-    :ok = Native.send_frame(track, 0, true, "before")
+    :ok = Native.send_frame(producer, @track, 0, true, "before")
     assert_receive {:moq_frame, ^early_token, "before", _timestamp, true}, 10_000
 
     :ok = Native.unsubscribe_track(consumer, early_token)
@@ -154,7 +155,7 @@ defmodule ExMoQ.NativeTest do
     late_token = 2
     :ok = Native.subscribe_track(consumer, @track, container, late_token, 60)
 
-    :ok = Native.send_frame(track, 40_000_000, true, "after")
+    :ok = Native.send_frame(producer, @track, 40_000_000, true, "after")
 
     # The frame reaching the live subscription proves it made the round trip;
     # the unsubscribed one must stay silent.

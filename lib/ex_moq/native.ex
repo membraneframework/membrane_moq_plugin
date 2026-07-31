@@ -4,7 +4,6 @@ defmodule ExMoQ.Native do
   """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "ex_moq"
 
-  @type track_resource :: reference()
   @type session :: reference()
   @type broadcast_producer :: reference()
   @type broadcast_consumer :: reference()
@@ -124,7 +123,13 @@ defmodule ExMoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Closes the broadcast, finishing the catalog and aborting in-flight tracks.
+  Closes the broadcast: flushes every track's buffered frames,
+  finishes the catalog, then aborts the broadcast. Idempotent.
+
+  This is the only graceful shutdown path.
+  A broadcast producer that is garbage-collected
+  without an explicit close is aborted instead.
+  Buffered frames are discarded and consumers observe an error rather than a clean end.
   """
   @spec close_broadcast_producer(broadcast_producer()) :: :ok
   def close_broadcast_producer(_broadcast_producer),
@@ -140,9 +145,15 @@ defmodule ExMoQ.Native do
           | {:opus, %{params: AudioTrackParams.t()}}
           | :unrecognized
 
+  @typedoc """
+  Error returned by producer NIFs when an earlier call panicked mid-operation,
+  leaving the broadcast producer unusable.
+  """
+  @type poisoned :: :moq_producer_poisoned
+
   @doc """
-  Adds a track of any supported codec to the given broadcast and returns a track
-  resource that can be used to send frames.
+  Adds a track of any supported codec to the given broadcast.
+  Frames are then sent with `send_frame/5` under the same track name.
 
   Arguments:
     * `broadcast_producer` - the target broadcast's resource,
@@ -163,7 +174,7 @@ defmodule ExMoQ.Native do
           0..255,
           container(),
           non_neg_integer()
-        ) :: {:ok, track_resource()} | {:error, reason :: String.t()}
+        ) :: :ok | {:error, :moq_track_already_exists | poisoned() | (reason :: String.t())}
   def add_track(_broadcast_producer, _track, _format, _priority, _container, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -175,38 +186,32 @@ defmodule ExMoQ.Native do
 
   The track's media kind (audio/video) cannot change.
   """
-  @spec update_track(track_resource(), track_format()) :: :ok | {:error, reason :: String.t()}
-  def update_track(_track_res, _format),
+  @spec update_track(broadcast_producer(), track(), track_format()) ::
+          :ok | {:error, :moq_unknown_track | poisoned() | (reason :: String.t())}
+  def update_track(_broadcast_producer, _track, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Sends a frame to a track.
+  Sends a frame to the broadcast's track named `track`.
 
   `timestamp_ns` is the presentation timestamp in nanoseconds.
 
   `keyframe?` must be `true` for IDR frames on video tracks (triggers a new MoQ group).
   For audio tracks pass `true` for every frame.
-
-  Returns:
-     * `:ok` when the write succeeds
-     * `:moq_missing_keyframe` when the write failed because
-       a MoQ group hasn't opened yet and the frame is not a keyframe.
-     * `{:error, reason}` when the write failed for another reason (e.g. track closed).
   """
-  @spec send_frame(track_resource(), non_neg_integer(), boolean(), binary()) ::
-          :ok | :moq_missing_keyframe | {:error, reason :: String.t()}
-  def send_frame(_track_res, _timestamp_ns, _keyframe?, _data),
+  @spec send_frame(broadcast_producer(), track(), non_neg_integer(), boolean(), binary()) ::
+          :ok
+          | :moq_missing_keyframe
+          | {:error, :moq_unknown_track | poisoned() | (reason :: String.t())}
+  def send_frame(_broadcast_producer, _track, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Closes the track, removing its rendition from the catalog
-  and finishing the underlying moq-lite track. Idempotent.
-
-  A track resource that is garbage-collected without an explicit remove
-  is retired the same way.
+  Closes the broadcast's track named `track`, removing its rendition from the
+  catalog and finishing the underlying moq-lite track. Idempotent.
   """
-  @spec remove_track(track_resource()) :: :ok
-  def remove_track(_track_res),
+  @spec remove_track(broadcast_producer(), track()) :: :ok
+  def remove_track(_broadcast_producer, _track),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

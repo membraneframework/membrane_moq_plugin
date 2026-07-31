@@ -101,22 +101,16 @@ defmodule Membrane.MoQ.Sink do
 
     @type t :: %__MODULE__{
             url: String.t(),
+            broadcast: String.t(),
             container: Native.container(),
             latency: Membrane.Time.t(),
             disable_tls_verify?: boolean(),
             session: Native.session() | nil,
-            broadcast: String.t(),
-            producer: Native.broadcast_producer() | nil,
-            tracks: %{Membrane.Pad.ref() => Native.track_resource()}
+            producer: Native.broadcast_producer() | nil
           }
 
     @enforce_keys [:url, :broadcast, :container, :latency, :disable_tls_verify?]
-    defstruct @enforce_keys ++
-                [
-                  :session,
-                  :producer,
-                  tracks: %{}
-                ]
+    defstruct @enforce_keys ++ [:session, :producer]
   end
 
   @impl true
@@ -177,19 +171,17 @@ defmodule Membrane.MoQ.Sink do
   def handle_stream_format(pad, fmt, ctx, state) do
     %{options: options} = ctx.pads[pad]
 
-    state =
-      case ctx.old_stream_format do
-        ^fmt -> state
-        nil -> add_track(pad, fmt, options, state)
-        _changed -> update_track(pad, fmt, state)
-      end
+    case ctx.old_stream_format do
+      ^fmt -> :ok
+      nil -> add_track(pad, fmt, options, state)
+      _changed -> update_track(pad, options.track, fmt, state)
+    end
 
     {[], state}
   end
 
   @impl true
   def handle_buffer(pad, %Membrane.Buffer{} = buffer, ctx, state) do
-    track_resource = state.tracks[pad]
     track_name = ctx.pads[pad].options.track
 
     if buffer.pts == nil or buffer.pts < 0 do
@@ -197,7 +189,8 @@ defmodule Membrane.MoQ.Sink do
     end
 
     case Native.send_frame(
-           track_resource,
+           state.producer,
+           track_name,
            buffer.pts,
            TrackFormat.keyframe?(buffer, ctx.pads[pad].stream_format),
            buffer.payload
@@ -219,13 +212,18 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_pad_removed(pad, _ctx, state), do: {[], close_pad(pad, state)}
+  def handle_pad_removed(pad, ctx, state), do: {[], close_pad(pad, ctx, state)}
 
   @impl true
-  def handle_end_of_stream(pad, _ctx, state), do: {[], close_pad(pad, state)}
+  def handle_end_of_stream(pad, ctx, state), do: {[], close_pad(pad, ctx, state)}
 
-  @spec add_track(Membrane.Pad.ref(), Membrane.StreamFormat.t(), map(), State.t()) :: State.t()
-  defp add_track(pad, fmt, %{track: track, priority: priority}, state) do
+  @spec add_track(
+          Membrane.Pad.ref(),
+          pad_options :: %{track: Native.track(), priority: 0..255 | nil},
+          Membrane.StreamFormat.t(),
+          State.t()
+        ) :: :ok
+  defp add_track(pad, %{track: track, priority: priority}, fmt, state) do
     track_fmt = TrackFormat.from_stream_format(fmt)
 
     Native.add_track(
@@ -237,34 +235,32 @@ defmodule Membrane.MoQ.Sink do
       Membrane.Time.as_nanoseconds(state.latency, :round)
     )
     |> case do
-      {:ok, track_resource} ->
-        put_in(state.tracks[pad], track_resource)
+      :ok ->
+        :ok
 
       {:error, reason} ->
         raise "Failed to add track #{inspect(track)} for pad #{inspect(pad)}, reason: #{inspect(reason)}"
     end
   end
 
-  @spec update_track(Membrane.Pad.ref(), Membrane.StreamFormat.t(), State.t()) :: State.t()
-  defp update_track(pad, fmt, state) do
-    case Native.update_track(state.tracks[pad], TrackFormat.from_stream_format(fmt)) do
+  @spec update_track(Membrane.Pad.ref(), Native.track(), Membrane.StreamFormat.t(), State.t()) ::
+          :ok
+  defp update_track(pad, track, fmt, state) do
+    case Native.update_track(state.producer, track, TrackFormat.from_stream_format(fmt)) do
       :ok ->
-        state
+        :ok
 
       {:error, reason} ->
         raise "Failed to update stream format of pad #{inspect(pad)}, reason: #{inspect(reason)}"
     end
   end
 
-  @spec close_pad(Membrane.Pad.ref(), State.t()) :: State.t()
-  defp close_pad(pad, state) do
-    case Map.pop(state.tracks, pad) do
-      {nil, _pads} ->
-        state
+  @spec close_pad(Membrane.Pad.ref(), Membrane.Element.CallbackContext.t(), State.t()) ::
+          State.t()
+  defp close_pad(_pad, _ctx, %State{producer: nil} = state), do: state
 
-      {track_resource, tracks} ->
-        :ok = Native.remove_track(track_resource)
-        %{state | tracks: tracks}
-    end
+  defp close_pad(pad, ctx, state) do
+    :ok = Native.remove_track(state.producer, ctx.pads[pad].options.track)
+    state
   end
 end

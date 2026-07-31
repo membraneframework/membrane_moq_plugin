@@ -20,7 +20,7 @@ use subscription_queue::{PollEventResult, SubscriptionQueue};
 enum Command {
     Subscribe {
         track: String,
-        wire: moq_mux::catalog::hang::Container,
+        wire_container: moq_mux::catalog::hang::Container,
         token: Token,
         priority: u8,
     },
@@ -97,12 +97,12 @@ pub(crate) fn subscribe_track(
     })?;
     let catalog = hang::catalog::Container::from(container);
 
-    let wire = moq_mux::catalog::hang::Container::try_from(&catalog)
+    let wire_container = moq_mux::catalog::hang::Container::try_from(&catalog)
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
 
     let _ = consumer.commands.send(Command::Subscribe {
         track,
-        wire,
+        wire_container,
         token,
         priority,
     });
@@ -182,10 +182,10 @@ fn handle_command(
         None | Some(Command::Close) => return ControlFlow::Break(None),
         Some(Command::Subscribe {
             track,
-            wire,
+            wire_container,
             token,
             priority,
-        }) => subs.insert(token, track, wire, priority),
+        }) => subs.insert(token, track, wire_container, priority),
         Some(Command::Unsubscribe { token }) => subs.remove(token),
     }
     ControlFlow::Continue(())

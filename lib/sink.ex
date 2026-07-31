@@ -106,11 +106,12 @@ defmodule Membrane.MoQ.Sink do
             latency: Membrane.Time.t(),
             disable_tls_verify?: boolean(),
             session: Native.session() | nil,
-            producer: Native.broadcast_producer() | nil
+            producer: Native.broadcast_producer() | nil,
+            missing_keyframe_logged?: MapSet.t(Membrane.Pad.ref())
           }
 
     @enforce_keys [:url, :broadcast, :container, :latency, :disable_tls_verify?]
-    defstruct @enforce_keys ++ [:session, :producer]
+    defstruct @enforce_keys ++ [:session, :producer, missing_keyframe_logged?: MapSet.new()]
   end
 
   @impl true
@@ -188,25 +189,32 @@ defmodule Membrane.MoQ.Sink do
       raise "Buffer PTS must be a non-negative integer, received: #{inspect(buffer.pts)}"
     end
 
-    case Native.send_frame(
-           state.producer,
-           track_name,
-           buffer.pts,
-           TrackFormat.keyframe?(buffer, ctx.pads[pad].stream_format),
-           buffer.payload
-         ) do
-      :ok ->
-        :ok
+    state =
+      case Native.send_frame(
+             state.producer,
+             track_name,
+             buffer.pts,
+             TrackFormat.keyframe?(buffer, ctx.pads[pad].stream_format),
+             buffer.payload
+           ) do
+        :ok ->
+          state
 
-      :moq_missing_keyframe ->
-        Membrane.Logger.debug("""
-        Buffer rejected because it is not a keyframe.
-        Starting a MoQ group requires a keyframe to be sent first.
-        """)
+        :moq_missing_keyframe ->
+          if pad in state.missing_keyframe_logged? do
+            state
+          else
+            Membrane.Logger.info("""
+            Buffer rejected because it is not a keyframe.
+            Starting a MoQ group requires a keyframe to be sent first.
+            """)
 
-      {:error, reason} ->
-        raise "Failed to send frame to track #{inspect(track_name)}: #{reason}"
-    end
+            %{state | missing_keyframe_logged?: MapSet.put(state.missing_keyframe_logged?, pad)}
+          end
+
+        {:error, reason} ->
+          raise "Failed to send frame to track #{inspect(track_name)}: #{reason}"
+      end
 
     {[], state}
   end
@@ -261,6 +269,6 @@ defmodule Membrane.MoQ.Sink do
 
   defp close_pad(pad, ctx, state) do
     :ok = Native.remove_track(state.producer, ctx.pads[pad].options.track)
-    state
+    %{state | missing_keyframe_logged?: MapSet.delete(state.missing_keyframe_logged?, pad)}
   end
 end

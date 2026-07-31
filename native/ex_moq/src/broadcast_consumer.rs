@@ -100,12 +100,16 @@ pub(crate) fn subscribe_track(
     let wire_container = moq_mux::catalog::hang::Container::try_from(&catalog)
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
 
-    let _ = consumer.commands.send(Command::Subscribe {
-        track,
-        wire_container,
-        token,
-        priority,
-    });
+    consumer
+        .commands
+        .send(Command::Subscribe {
+            track,
+            wire_container,
+            token,
+            priority,
+        })
+        .map_err(|e| crate::nif_error!("broadcast consumer closed: {e}"))?;
+
     Ok(atoms::ok())
 }
 

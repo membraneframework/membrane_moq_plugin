@@ -43,15 +43,12 @@ impl Drop for BroadcastConsumerResource {
     }
 }
 
-enum Exit {
-    Closed(String),
-    Detached,
-}
+type ExitReason = Option<String>;
 
 struct CloseGuard {
     pid: LocalPid,
     path: String,
-    reason: Option<String>,
+    reason: ExitReason,
 }
 
 impl Drop for CloseGuard {
@@ -162,29 +159,27 @@ async fn run_broadcast(
 
     let mut subs = SubscriptionQueue::new(broadcast, latency);
 
-    let exit = loop {
+    guard.reason = loop {
         let result = tokio::select! {
           command = commands_rx.recv() => handle_command(&mut subs, command),
           snapshot = catalog.next() => handle_new_catalog(&mut env, pid, &guard.path, snapshot),
           event = kio::wait(|waiter| subs.poll_event(waiter)) => handle_event(&mut env, pid, event)
         };
 
-        if let ControlFlow::Break(exit) = result {
-            break exit;
+        if let ControlFlow::Break(exit_reason) = result {
+            break exit_reason;
         }
 
         tokio::task::coop::consume_budget().await;
     };
-
-    guard.reason = match exit {
-        Exit::Closed(reason) => Some(reason),
-        Exit::Detached => None,
-    };
 }
 
-fn handle_command(subs: &mut SubscriptionQueue, command: Option<Command>) -> ControlFlow<Exit> {
+fn handle_command(
+    subs: &mut SubscriptionQueue,
+    command: Option<Command>,
+) -> ControlFlow<ExitReason> {
     match command {
-        None | Some(Command::Close) => return ControlFlow::Break(Exit::Detached),
+        None | Some(Command::Close) => return ControlFlow::Break(None),
         Some(Command::Subscribe {
             track,
             wire,
@@ -201,23 +196,23 @@ fn handle_new_catalog(
     pid: LocalPid,
     path: &str,
     snapshot: Result<Option<moq_mux::catalog::hang::Catalog>, moq_mux::Error>,
-) -> ControlFlow<Exit> {
+) -> ControlFlow<ExitReason> {
     let close_reason = match snapshot {
         Ok(Some(snapshot)) => match messages::send_catalog(env, pid, path, &snapshot) {
             Ok(()) => return ControlFlow::Continue(()),
-            Err(messages::PidDead) => "consumer pid is dead".to_string(),
+            Err(messages::PidDead) => return ControlFlow::Break(None),
         },
-        Ok(None) => "broadcast ended".to_string(),
+        Ok(None) => "broadcast ended".to_owned(),
         Err(e) => format!("catalog error: {e}"),
     };
-    ControlFlow::Break(Exit::Closed(close_reason))
+    ControlFlow::Break(Some(close_reason))
 }
 
 fn handle_event(
     env: &mut OwnedEnv,
     pid: LocalPid,
     event: (Token, PollEventResult),
-) -> ControlFlow<Exit> {
+) -> ControlFlow<ExitReason> {
     let (token, result) = event;
     let send_result = match result {
         PollEventResult::Frame(frame) => messages::send_frame(env, pid, token, frame),
@@ -228,7 +223,7 @@ fn handle_event(
     };
     match send_result {
         Ok(()) => ControlFlow::Continue(()),
-        Err(messages::PidDead) => ControlFlow::Break(Exit::Detached),
+        Err(messages::PidDead) => ControlFlow::Break(None),
     }
 }
 

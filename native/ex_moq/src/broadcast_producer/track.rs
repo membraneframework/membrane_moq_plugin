@@ -1,12 +1,9 @@
+use std::time::Duration;
+
 use hang::moq_net;
 
-use rustler::{Atom, Binary, NifResult, ResourceArc};
-
-use super::BroadcastProducerResource;
-use crate::{
-    atoms,
-    track_format::{Container, ResolvedConfig, TrackFormat},
-};
+use super::Producer;
+use crate::track_format::ResolvedConfig;
 
 type WireProducer = moq_mux::container::Producer<moq_mux::catalog::hang::Container>;
 
@@ -49,138 +46,125 @@ pub(super) struct LiveTrack {
     container: hang::catalog::Container,
 }
 
-#[rustler::nif]
-pub(crate) fn add_track(
-    broadcast_res: ResourceArc<BroadcastProducerResource>,
-    track: String,
-    format: TrackFormat,
-    priority: u8,
-    container: Container,
-    latency_ns: u64,
-) -> NifResult<Atom> {
-    let catalog_container = hang::catalog::Container::from(container);
-    let wire_container = (&catalog_container)
-        .try_into()
-        .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
-
-    let resolved = ResolvedConfig::try_from(format)?.with_container(catalog_container.clone());
-
-    let mut inner = broadcast_res
-        .0
-        .lock()
-        .map_err(|_poison| crate::nif_error!(atoms::moq_producer_poisoned()))?;
-
-    if inner.tracks.contains_key(&track) {
-        return Err(crate::nif_error!(atoms::moq_track_already_exists()));
-    }
-
-    let track_producer = inner
-        .broadcast
-        .create_track(
-            track.as_str(),
-            moq_net::track::Info::default().with_priority(priority),
-        )
-        .map_err(|e| crate::nif_error!("create_track failed: {e}"))?;
-
-    let rendition = Rendition::new(&inner.catalog, &track, resolved);
-
-    let latency = std::time::Duration::from_nanos(latency_ns);
-    let producer = inner
-        .catalog
-        .media_producer(track_producer, wire_container)
-        .map_err(|e| crate::nif_error!("media_producer failed: {e}"))?
-        .with_latency(latency);
-
-    inner.tracks.insert(
-        track,
-        LiveTrack {
-            producer,
-            rendition,
-            container: catalog_container,
-        },
-    );
-
-    Ok(atoms::ok())
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AddTrackError {
+    #[error("track already exists")]
+    AlreadyExists,
+    #[error("container init failed: {0}")]
+    ContainerInit(moq_mux::Error),
+    #[error("create_track failed: {0}")]
+    CreateTrack(moq_net::Error),
+    #[error("media_producer failed: {0}")]
+    MediaProducer(moq_mux::Error),
 }
 
-#[rustler::nif]
-pub(crate) fn update_track(
-    broadcast_res: ResourceArc<BroadcastProducerResource>,
-    track: &str,
-    format: TrackFormat,
-) -> NifResult<Atom> {
-    let mut inner = broadcast_res
-        .0
-        .lock()
-        .map_err(|_poison| crate::nif_error!(atoms::moq_producer_poisoned()))?;
-
-    let Some(live) = inner.tracks.get_mut(track) else {
-        return Err(crate::nif_error!(atoms::moq_unknown_track()));
-    };
-
-    let resolved = ResolvedConfig::try_from(format)?.with_container(live.container.clone());
-
-    live.rendition.set(resolved).map_err(|_kind_mismatch| {
-        crate::nif_error!("cannot change a track's media kind in place")
-    })?;
-
-    Ok(atoms::ok())
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum UpdateTrackError {
+    #[error("unknown track")]
+    UnknownTrack,
+    #[error("cannot change a track's media kind in place")]
+    KindMismatch,
 }
 
-#[rustler::nif]
-pub(crate) fn send_frame(
-    broadcast_res: ResourceArc<BroadcastProducerResource>,
-    track: &str,
-    timestamp_ns: u64,
-    keyframe: bool,
-    data: Binary,
-) -> NifResult<Atom> {
-    let timestamp = moq_net::Timestamp::from_nanos(timestamp_ns)
-        .map_err(|e| crate::nif_error!("timestamp conversion failed: {e}"))?;
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum WriteFrameError {
+    #[error("unknown track")]
+    UnknownTrack,
+    #[error("missing keyframe")]
+    MissingKeyframe,
+    #[error("writing frame failed: {0}")]
+    Write(moq_mux::Error),
+}
 
-    let frame = moq_mux::container::Frame {
-        timestamp,
-        payload: bytes::Bytes::copy_from_slice(data.as_slice()),
-        keyframe,
-        duration: None,
-    };
+impl Producer {
+    pub(crate) fn add_track(
+        &mut self,
+        track: String,
+        config: ResolvedConfig,
+        container: hang::catalog::Container,
+        priority: u8,
+        latency: Duration,
+    ) -> Result<(), AddTrackError> {
+        let wire_container = (&container)
+            .try_into()
+            .map_err(AddTrackError::ContainerInit)?;
 
-    let mut inner = broadcast_res
-        .0
-        .lock()
-        .map_err(|_poison| crate::nif_error!(atoms::moq_producer_poisoned()))?;
-
-    let Some(live) = inner.tracks.get_mut(track) else {
-        return Err(crate::nif_error!(atoms::moq_unknown_track()));
-    };
-
-    match live.producer.write(frame) {
-        Ok(()) => Ok(atoms::ok()),
-        Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {
-            Ok(atoms::moq_missing_keyframe())
+        if self.tracks.contains_key(&track) {
+            return Err(AddTrackError::AlreadyExists);
         }
-        Err(e) => Err(crate::nif_error!("writing frame failed: {e}")),
+
+        let track_producer = self
+            .broadcast
+            .create_track(
+                track.as_str(),
+                moq_net::track::Info::default().with_priority(priority),
+            )
+            .map_err(AddTrackError::CreateTrack)?;
+
+        let rendition = Rendition::new(
+            &self.catalog,
+            &track,
+            config.with_container(container.clone()),
+        );
+
+        let producer = self
+            .catalog
+            .media_producer(track_producer, wire_container)
+            .map_err(AddTrackError::MediaProducer)?
+            .with_latency(latency);
+
+        self.tracks.insert(
+            track,
+            LiveTrack {
+                producer,
+                rendition,
+                container,
+            },
+        );
+
+        Ok(())
     }
-}
 
-#[rustler::nif]
-pub(crate) fn remove_track(
-    broadcast_res: ResourceArc<BroadcastProducerResource>,
-    track: &str,
-) -> Atom {
-    let (mut inner, poisoned) = match broadcast_res.0.lock() {
-        Ok(guard) => (guard, false),
-        Err(poison) => (poison.into_inner(), true),
-    };
+    pub(crate) fn update_track(
+        &mut self,
+        track: &str,
+        config: ResolvedConfig,
+    ) -> Result<(), UpdateTrackError> {
+        let Some(live) = self.tracks.get_mut(track) else {
+            return Err(UpdateTrackError::UnknownTrack);
+        };
 
-    let Some(mut live) = inner.tracks.remove(track) else {
-        return atoms::ok();
-    };
-
-    if !poisoned {
-        let _ = live.producer.finish();
+        live.rendition
+            .set(config.with_container(live.container.clone()))
+            .map_err(|_kind_mismatch| UpdateTrackError::KindMismatch)
     }
-    let _ = inner.broadcast.remove_track(track);
 
-    atoms::ok()
+    pub(crate) fn write_frame(
+        &mut self,
+        track: &str,
+        frame: moq_mux::container::Frame,
+    ) -> Result<(), WriteFrameError> {
+        let Some(live) = self.tracks.get_mut(track) else {
+            return Err(WriteFrameError::UnknownTrack);
+        };
+
+        match live.producer.write(frame) {
+            Ok(()) => Ok(()),
+            Err(moq_mux::Error::MissingKeyframe(moq_mux::container::MissingKeyframe)) => {
+                Err(WriteFrameError::MissingKeyframe)
+            }
+            Err(e) => Err(WriteFrameError::Write(e)),
+        }
+    }
+
+    pub(crate) fn remove_track(&mut self, track: &str, finish: bool) {
+        let Some(mut live) = self.tracks.remove(track) else {
+            return;
+        };
+
+        if finish {
+            let _ = live.producer.finish();
+        }
+        let _ = self.broadcast.remove_track(track);
+    }
 }

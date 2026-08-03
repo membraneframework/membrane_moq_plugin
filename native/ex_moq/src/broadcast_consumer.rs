@@ -3,7 +3,7 @@ mod subscription_queue;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use rustler::{Atom, LocalPid, NifResult, OwnedEnv, Resource, ResourceArc};
+use rustler::{LocalPid, OwnedEnv};
 use tokio::sync::mpsc;
 
 use hang::moq_net;
@@ -11,9 +11,8 @@ use hang::moq_net::kio;
 use moq_mux::catalog::Stream as _;
 
 use crate::messages::{self, Token};
-use crate::session::SessionResource;
-use crate::track_format::Container;
-use crate::{atoms, runtime};
+use crate::runtime;
+use crate::session::Session;
 
 use subscription_queue::{PollEventResult, SubscriptionQueue};
 
@@ -30,16 +29,56 @@ enum Command {
     Close,
 }
 
-pub(crate) struct BroadcastConsumerResource {
+pub(crate) struct Closed;
+
+pub(crate) struct Consumer {
     commands: mpsc::UnboundedSender<Command>,
     task: tokio::task::AbortHandle,
 }
 
-impl Resource for BroadcastConsumerResource {}
-
-impl Drop for BroadcastConsumerResource {
+impl Drop for Consumer {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+impl Consumer {
+    pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Duration) -> Self {
+        let origin = session.consume.consume();
+
+        let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
+
+        let task = runtime().spawn(run_broadcast(origin, path, pid, latency, commands_rx));
+
+        Self {
+            commands: commands_tx,
+            task: task.abort_handle(),
+        }
+    }
+
+    pub(crate) fn subscribe(
+        &self,
+        track: String,
+        wire_container: moq_mux::catalog::hang::Container,
+        token: Token,
+        priority: u8,
+    ) -> Result<(), Closed> {
+        self.commands
+            .send(Command::Subscribe {
+                track,
+                wire_container,
+                token,
+                priority,
+            })
+            .map_err(|_send_error| Closed)
+    }
+
+    pub(crate) fn unsubscribe(&self, token: Token) {
+        let _ = self.commands.send(Command::Unsubscribe { token });
+    }
+
+    pub(crate) fn close(&self) {
+        let _ = self.commands.send(Command::Close);
     }
 }
 
@@ -58,74 +97,6 @@ impl Drop for CloseGuard {
             messages::send_broadcast_closed(&mut env, self.pid, &self.path, reason);
         }
     }
-}
-
-#[rustler::nif]
-pub(crate) fn create_broadcast_consumer(
-    session: ResourceArc<SessionResource>,
-    path: String,
-    pid: LocalPid,
-    latency_ns: u64,
-) -> (Atom, ResourceArc<BroadcastConsumerResource>) {
-    let latency = Duration::from_nanos(latency_ns);
-
-    let origin = session.consume.consume();
-
-    let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
-
-    let task = runtime().spawn(run_broadcast(origin, path, pid, latency, commands_rx));
-
-    (
-        atoms::ok(),
-        ResourceArc::new(BroadcastConsumerResource {
-            commands: commands_tx,
-            task: task.abort_handle(),
-        }),
-    )
-}
-
-#[rustler::nif]
-pub(crate) fn subscribe_track(
-    consumer: ResourceArc<BroadcastConsumerResource>,
-    track: String,
-    container: Option<Container>,
-    token: Token,
-    priority: u8,
-) -> NifResult<Atom> {
-    let container = container.ok_or_else(|| {
-        crate::nif_error!("cannot subscribe to a track with an unrecognized wire container")
-    })?;
-    let catalog = hang::catalog::Container::from(container);
-
-    let wire_container = moq_mux::catalog::hang::Container::try_from(&catalog)
-        .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
-
-    consumer
-        .commands
-        .send(Command::Subscribe {
-            track,
-            wire_container,
-            token,
-            priority,
-        })
-        .map_err(|e| crate::nif_error!("broadcast consumer closed: {e}"))?;
-
-    Ok(atoms::ok())
-}
-
-#[rustler::nif]
-pub(crate) fn unsubscribe_track(
-    consumer: ResourceArc<BroadcastConsumerResource>,
-    token: Token,
-) -> Atom {
-    let _ = consumer.commands.send(Command::Unsubscribe { token });
-    atoms::ok()
-}
-
-#[rustler::nif]
-pub(crate) fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
-    let _ = consumer.commands.send(Command::Close);
-    atoms::ok()
 }
 
 async fn run_broadcast(

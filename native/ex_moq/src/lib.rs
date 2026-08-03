@@ -1,4 +1,10 @@
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
+
+use hang::moq_net;
+
+use rustler::{Atom, Binary, LocalPid, NifResult, Resource, ResourceArc};
+use url::Url;
 
 mod broadcast_consumer;
 mod broadcast_producer;
@@ -6,9 +12,9 @@ mod messages;
 mod session;
 mod track_format;
 
-use broadcast_consumer::BroadcastConsumerResource;
-use broadcast_producer::BroadcastProducerResource;
-use session::SessionResource;
+use broadcast_producer::{AddTrackError, UpdateTrackError, WriteFrameError};
+use messages::Token;
+use track_format::{Container, ResolvedConfig, TrackFormat};
 
 macro_rules! nif_error {
     ($fmt:literal $($arg:tt)*) => {
@@ -18,10 +24,12 @@ macro_rules! nif_error {
         rustler::Error::Term(Box::new($term))
     };
 }
+
 pub(crate) use nif_error;
 
 pub(crate) mod atoms {
     rustler::atoms! {
+        // TODO: these two are actually redundant
         ok,
         error,
         moq_missing_keyframe,
@@ -48,6 +56,202 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
             .build()
             .expect("tokio runtime build should succeed")
     })
+}
+
+struct SessionResource(session::Session);
+impl Resource for SessionResource {}
+
+struct BroadcastProducerResource(Mutex<broadcast_producer::Producer>);
+impl Resource for BroadcastProducerResource {}
+
+struct BroadcastConsumerResource(broadcast_consumer::Consumer);
+impl Resource for BroadcastConsumerResource {}
+
+#[rustler::nif]
+fn create_session(
+    url: &str,
+    pid: LocalPid,
+    disable_tls_verify: bool,
+) -> NifResult<(Atom, ResourceArc<SessionResource>)> {
+    let url = Url::parse(url).map_err(|e| nif_error!("invalid url: {e}"))?;
+
+    let session = session::Session::connect(url, pid, disable_tls_verify);
+    Ok((atoms::ok(), ResourceArc::new(SessionResource(session))))
+}
+
+#[rustler::nif]
+fn close_session(session: ResourceArc<SessionResource>) -> Atom {
+    session.0.close();
+    atoms::ok()
+}
+
+#[rustler::nif]
+fn create_broadcast_producer(
+    session: ResourceArc<SessionResource>,
+    path: &str,
+) -> NifResult<(Atom, ResourceArc<BroadcastProducerResource>)> {
+    let producer =
+        broadcast_producer::Producer::new(&session.0, path).map_err(|e| nif_error!("{e}"))?;
+
+    Ok((
+        atoms::ok(),
+        ResourceArc::new(BroadcastProducerResource(Mutex::new(producer))),
+    ))
+}
+
+#[rustler::nif]
+fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) -> Atom {
+    let (mut producer, poisoned) = match producer.0.lock() {
+        Ok(guard) => (guard, false),
+        Err(poison) => (poison.into_inner(), true),
+    };
+    if !poisoned {
+        // Flush frames inside the producers' internal cache.
+        // We don't do this for a poisoned resource to avoid touching possibly inconsistent state.
+        producer.finish();
+    }
+    producer.abort();
+    atoms::ok()
+}
+
+#[rustler::nif]
+fn add_track(
+    broadcast: ResourceArc<BroadcastProducerResource>,
+    track: String,
+    // TODO: these should be folded into a struct which may be extended in the future
+    format: TrackFormat,
+    priority: u8,
+    container: Container,
+    latency_ns: u64,
+) -> NifResult<Atom> {
+    let container = hang::catalog::Container::from(container);
+    let config = ResolvedConfig::try_from(format)?;
+    let latency = Duration::from_nanos(latency_ns);
+
+    lock_producer(&broadcast)?
+        .add_track(track, config, container, priority, latency)
+        .map_err(|e| match e {
+            AddTrackError::AlreadyExists => nif_error!(atoms::moq_track_already_exists()),
+            other => nif_error!("{other}"),
+        })?;
+
+    Ok(atoms::ok())
+}
+
+#[rustler::nif]
+fn update_track(
+    broadcast: ResourceArc<BroadcastProducerResource>,
+    track: &str,
+    format: TrackFormat,
+) -> NifResult<Atom> {
+    let config = ResolvedConfig::try_from(format)?;
+
+    lock_producer(&broadcast)?
+        .update_track(track, config)
+        .map_err(|e| match e {
+            UpdateTrackError::UnknownTrack => nif_error!(atoms::moq_unknown_track()),
+            other => nif_error!("{other}"),
+        })?;
+
+    Ok(atoms::ok())
+}
+
+#[rustler::nif]
+fn send_frame(
+    broadcast: ResourceArc<BroadcastProducerResource>,
+    track: &str,
+    timestamp_ns: u64,
+    keyframe: bool,
+    data: Binary,
+) -> NifResult<Atom> {
+    let timestamp = moq_net::Timestamp::from_nanos(timestamp_ns)
+        .map_err(|e| nif_error!("timestamp conversion failed: {e}"))?;
+
+    let frame = moq_mux::container::Frame {
+        timestamp,
+        payload: bytes::Bytes::copy_from_slice(data.as_slice()),
+        keyframe,
+        duration: None,
+    };
+
+    match lock_producer(&broadcast)?.write_frame(track, frame) {
+        Ok(()) => Ok(atoms::ok()),
+        Err(WriteFrameError::MissingKeyframe) => Ok(atoms::moq_missing_keyframe()),
+        Err(WriteFrameError::UnknownTrack) => Err(nif_error!(atoms::moq_unknown_track())),
+        Err(e) => Err(nif_error!("{e}")),
+    }
+}
+
+#[rustler::nif]
+fn remove_track(broadcast: ResourceArc<BroadcastProducerResource>, track: &str) -> Atom {
+    let (mut producer, poisoned) = match broadcast.0.lock() {
+        Ok(guard) => (guard, false),
+        Err(poison) => (poison.into_inner(), true),
+    };
+    producer.remove_track(track, !poisoned);
+    atoms::ok()
+}
+
+#[rustler::nif]
+fn create_broadcast_consumer(
+    session: ResourceArc<SessionResource>,
+    path: String,
+    pid: LocalPid,
+    latency_ns: u64,
+) -> (Atom, ResourceArc<BroadcastConsumerResource>) {
+    let latency = Duration::from_nanos(latency_ns);
+
+    let consumer = broadcast_consumer::Consumer::spawn(&session.0, path, pid, latency);
+    (
+        atoms::ok(),
+        ResourceArc::new(BroadcastConsumerResource(consumer)),
+    )
+}
+
+#[rustler::nif]
+fn subscribe_track(
+    consumer: ResourceArc<BroadcastConsumerResource>,
+    track: String,
+    container: Option<Container>,
+    token: Token,
+    priority: u8,
+) -> NifResult<Atom> {
+    let catalog_container: hang::catalog::Container = container
+        .ok_or_else(|| {
+            nif_error!("cannot subscribe to a track with an unrecognized wire container")
+        })?
+        .into();
+
+    let wire_container = moq_mux::catalog::hang::Container::try_from(&catalog_container)
+        .map_err(|e| nif_error!("container init failed: {e}"))?;
+
+    consumer
+        .0
+        .subscribe(track, wire_container, token, priority)
+        .map_err(|_closed| nif_error!("broadcast consumer closed"))?;
+
+    Ok(atoms::ok())
+}
+
+#[rustler::nif]
+fn unsubscribe_track(consumer: ResourceArc<BroadcastConsumerResource>, token: Token) -> Atom {
+    consumer.0.unsubscribe(token);
+    atoms::ok()
+}
+
+#[rustler::nif]
+fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
+    consumer.0.close();
+    atoms::ok()
+}
+
+fn lock_producer(
+    resource: &BroadcastProducerResource,
+) -> NifResult<MutexGuard<'_, broadcast_producer::Producer>> {
+    resource
+        .0
+        .lock()
+        .map_err(|_poison| nif_error!(atoms::moq_producer_poisoned()))
 }
 
 fn load(env: rustler::Env, _info: rustler::Term) -> bool {

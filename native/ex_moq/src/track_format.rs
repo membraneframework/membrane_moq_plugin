@@ -159,42 +159,30 @@ pub(crate) enum ResolvedConfig {
     Audio(hang::catalog::AudioConfig),
 }
 
-impl ResolvedConfig {
-    pub(crate) fn new(
-        format: TrackFormat<'_>,
-        container: hang::catalog::Container,
-    ) -> NifResult<Self> {
+impl TryFrom<TrackFormat<'_>> for ResolvedConfig {
+    type Error = rustler::Error;
+
+    fn try_from(format: TrackFormat<'_>) -> NifResult<Self> {
         let config = match format {
             TrackFormat::H264 {
                 params,
                 description,
                 codec,
-            } => Self::Video(h264_video_config(
-                &params,
-                description.as_slice(),
-                &codec,
-                container,
-            )),
+            } => Self::Video(h264_video_config(&params, description.as_slice(), &codec)),
             TrackFormat::H265 {
                 params,
                 description,
                 codec,
-            } => Self::Video(h265_video_config(
-                &params,
-                description.as_slice(),
-                codec,
-                container,
-            )?),
+            } => Self::Video(h265_video_config(&params, description.as_slice(), codec)?),
             TrackFormat::Aac { params, codec } => Self::Audio(aac_audio_config(
                 codec.profile,
                 params.sample_rate,
                 params.channels,
-                container,
             )),
-            TrackFormat::Opus { params } => Self::Audio(opus_audio_config(
+            TrackFormat::Opus { params } => Self::Audio(hang::catalog::AudioConfig::new(
+                hang::catalog::AudioCodec::Opus,
                 params.sample_rate,
                 params.channels,
-                container,
             )),
             TrackFormat::Unrecognized => {
                 return Err(crate::nif_error!(
@@ -206,11 +194,20 @@ impl ResolvedConfig {
     }
 }
 
+impl ResolvedConfig {
+    pub(crate) fn with_container(mut self, container: hang::catalog::Container) -> Self {
+        match &mut self {
+            Self::Video(config) => config.container = container,
+            Self::Audio(config) => config.container = container,
+        }
+        self
+    }
+}
+
 fn h264_video_config(
     video_params: &VideoTrackParams,
     dcr: &[u8],
     codec: &H264Codec,
-    container: hang::catalog::Container,
 ) -> hang::catalog::VideoConfig {
     let codec = hang::catalog::VideoCodec::H264(hang::catalog::H264 {
         inline: codec.inline,
@@ -227,7 +224,6 @@ fn h264_video_config(
         video_params.height,
         video_params.framerate,
         description,
-        container,
     )
 }
 
@@ -235,7 +231,6 @@ fn h265_video_config(
     video_params: &VideoTrackParams,
     dcr: &[u8],
     codec: H265Codec,
-    container: hang::catalog::Container,
 ) -> NifResult<hang::catalog::VideoConfig> {
     let profile_compatibility_flags: [u8; 4] = codec
         .profile_compatibility_flags
@@ -265,19 +260,12 @@ fn h265_video_config(
         video_params.height,
         video_params.framerate,
         description,
-        container,
     ))
 }
 
-fn aac_audio_config(
-    profile: u8,
-    sample_rate: u32,
-    channels: u32,
-    container: hang::catalog::Container,
-) -> hang::catalog::AudioConfig {
+fn aac_audio_config(profile: u8, sample_rate: u32, channels: u32) -> hang::catalog::AudioConfig {
     let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
     let mut config = hang::catalog::AudioConfig::new(codec, sample_rate, channels);
-    config.container = container;
 
     // WebCodecs-convention decoders treat a description-less mp4a.40.x rendition as ADTS;
     // MoQ requires raw AAC frames, so we include the AudioSpecificConfig in the catalog.
@@ -293,27 +281,14 @@ fn aac_audio_config(
     config
 }
 
-fn opus_audio_config(
-    sample_rate: u32,
-    channels: u32,
-    container: hang::catalog::Container,
-) -> hang::catalog::AudioConfig {
-    let mut config =
-        hang::catalog::AudioConfig::new(hang::catalog::AudioCodec::Opus, sample_rate, channels);
-    config.container = container;
-    config
-}
-
 fn create_video_config(
     codec: hang::catalog::VideoCodec,
     width: Option<u32>,
     height: Option<u32>,
     framerate: Option<f64>,
     description: Option<Bytes>,
-    container: hang::catalog::Container,
 ) -> hang::catalog::VideoConfig {
     let mut config = hang::catalog::VideoConfig::new(codec);
-    config.container = container;
     config.description = description;
     config.coded_width = width;
     config.coded_height = height;

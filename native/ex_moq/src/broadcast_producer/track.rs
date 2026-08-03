@@ -63,7 +63,7 @@ pub(crate) fn add_track(
         .try_into()
         .map_err(|e| crate::nif_error!("container init failed: {e}"))?;
 
-    let resolved = ResolvedConfig::new(format, catalog_container.clone())?;
+    let resolved = ResolvedConfig::try_from(format)?.with_container(catalog_container.clone());
 
     let mut inner = broadcast_res
         .0
@@ -118,7 +118,7 @@ pub(crate) fn update_track(
         return Err(crate::nif_error!(atoms::moq_unknown_track()));
     };
 
-    let resolved = ResolvedConfig::new(format, live.container.clone())?;
+    let resolved = ResolvedConfig::try_from(format)?.with_container(live.container.clone());
 
     live.rendition.set(resolved).map_err(|_kind_mismatch| {
         crate::nif_error!("cannot change a track's media kind in place")

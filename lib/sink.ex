@@ -174,7 +174,7 @@ defmodule Membrane.MoQ.Sink do
 
     case ctx.old_stream_format do
       ^fmt -> :ok
-      nil -> add_track(pad, fmt, options, state)
+      nil -> add_track(pad, options, fmt, state)
       _changed -> update_track(pad, options.track, fmt, state)
     end
 

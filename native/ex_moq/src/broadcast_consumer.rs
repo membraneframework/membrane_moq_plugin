@@ -45,10 +45,26 @@ impl Drop for Consumer {
 impl Consumer {
     pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Duration) -> Self {
         let origin = session.consume.consume();
-
         let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
 
-        let task = runtime().spawn(run_broadcast(origin, path, pid, latency, commands_rx));
+        let task = runtime().spawn(async move {
+            let mut guard = CloseGuard {
+                env: OwnedEnv::new(),
+                pid,
+                path,
+                reason: Some("consumer task died unexpectedly".to_string()),
+            };
+
+            guard.reason = run_broadcast(
+                origin,
+                &guard.path,
+                &mut guard.env,
+                pid,
+                latency,
+                commands_rx,
+            )
+            .await;
+        });
 
         Self {
             commands: commands_tx,
@@ -85,6 +101,7 @@ impl Consumer {
 type ExitReason = Option<String>;
 
 struct CloseGuard {
+    env: OwnedEnv,
     pid: LocalPid,
     path: String,
     reason: ExitReason,
@@ -92,64 +109,51 @@ struct CloseGuard {
 
 impl Drop for CloseGuard {
     fn drop(&mut self) {
-        if let Some(reason) = self.reason.take() {
-            let mut env = OwnedEnv::new();
-            let _ = messages::send_broadcast_closed(&mut env, self.pid, &self.path, reason);
-        }
+        let Some(reason) = self.reason.take() else {
+            return;
+        };
+        let _ = messages::send_broadcast_closed(&mut self.env, self.pid, &self.path, reason);
     }
 }
 
 async fn run_broadcast(
     origin: moq_net::origin::Consumer,
-    path: String,
+    path: &str,
+    env: &mut OwnedEnv,
     pid: LocalPid,
     latency: Duration,
     mut commands_rx: mpsc::UnboundedReceiver<Command>,
-) {
-    let mut env = OwnedEnv::new();
-
-    let mut guard = CloseGuard {
-        pid,
-        path,
-        reason: Some("consumer task died unexpectedly".to_string()),
-    };
-
-    let Some(broadcast) = origin.announced_broadcast(&guard.path).await else {
-        guard.reason = Some(format!(
-            "broadcast {:?} was not announced before the session closed",
-            guard.path
+) -> ExitReason {
+    let Some(broadcast) = origin.announced_broadcast(path).await else {
+        return Some(format!(
+            "broadcast {path:?} was not announced before the session closed"
         ));
-        return;
     };
 
-    let mut catalog = match subscribe_catalog(&guard.path, &broadcast).await {
+    let mut catalog = match subscribe_catalog(path, &broadcast).await {
         Ok(catalog) => catalog,
-        Err(e) => {
-            guard.reason = Some(e.to_string());
-            return;
-        }
+        Err(e) => return Some(e.to_string()),
     };
 
-    if messages::send_broadcast_ready(&mut env, pid, &guard.path).is_err() {
-        guard.reason = None;
-        return;
+    if messages::send_broadcast_ready(env, pid, path).is_err() {
+        return None;
     }
 
     let mut subs = SubscriptionQueue::new(broadcast, latency);
 
-    guard.reason = loop {
+    loop {
         let result = tokio::select! {
           command = commands_rx.recv() => handle_command(&mut subs, command),
-          snapshot = catalog.next() => handle_new_catalog(&mut env, pid, &guard.path, snapshot),
-          event = kio::wait(|waiter| subs.poll_event(waiter)) => handle_event(&mut env, pid, event)
+          snapshot = catalog.next() => handle_new_catalog(env, pid, path, snapshot),
+          event = kio::wait(|waiter| subs.poll_event(waiter)) => handle_event(env, pid, event)
         };
 
         if let ControlFlow::Break(exit_reason) = result {
-            break exit_reason;
+            return exit_reason;
         }
 
         tokio::task::coop::consume_budget().await;
-    };
+    }
 }
 
 fn handle_command(

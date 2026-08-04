@@ -17,7 +17,6 @@ struct PendingSub {
 }
 
 enum Subscription {
-    Failed(QueueError),
     Pending(PendingSub),
     Streaming(Box<WireConsumer>),
 }
@@ -37,11 +36,11 @@ pub(super) struct TrackError {
     source: QueueError,
 }
 
-enum Polled {
-    Frame(Frame, Box<WireConsumer>),
-    Pending(Subscription),
-    Failed(QueueError),
+enum Step {
+    Yield(Frame, Subscription),
+    Wait(Subscription),
     Finished,
+    Err(QueueError),
 }
 
 pub(super) enum PollEventResult {
@@ -71,49 +70,64 @@ impl SubscriptionQueue {
         }
     }
 
+    pub(super) fn insert(
+        &mut self,
+        token: Token,
+        track: String,
+        container: moq_mux::catalog::hang::Container,
+        priority: u8,
+    ) -> Result<(), TrackError> {
+        self.remove(token);
+
+        let consumer = match self.broadcast.track(&track) {
+            Ok(consumer) => consumer,
+            Err(e) => {
+                return Err(TrackError {
+                    track,
+                    source: e.into(),
+                });
+            }
+        };
+
+        let subscription = moq_net::track::Subscription::default().with_priority(priority);
+        self.entries.push_back(Entry {
+            token,
+            track,
+            state: Subscription::Pending(PendingSub {
+                subscribing: consumer.subscribe(subscription).into_inner(),
+                container,
+            }),
+        });
+        Ok(())
+    }
+
+    pub(super) fn remove(&mut self, target: Token) {
+        self.entries.retain(|entry| entry.token != target);
+    }
+
     pub(super) fn poll_event(&mut self, waiter: &kio::Waiter) -> Poll<(Token, PollEventResult)> {
         for _ in 0..self.entries.len() {
-            let Entry {
-                token,
-                track,
-                state,
-            } = self
-                .entries
-                .pop_front()
-                .expect("Queue with positive length should be non-empty");
+            let entry = self.entries.pop_front().expect("Queue should be non-empty");
 
-            let result = match state {
-                Subscription::Failed(source) => Polled::Failed(source),
-                Subscription::Pending(pending) => {
-                    Self::handle_pending(pending, self.latency, waiter)
+            match Self::step(entry.state, self.latency, waiter) {
+                Step::Wait(state) => {
+                    self.entries.push_back(Entry { state, ..entry });
                 }
-                Subscription::Streaming(consumer) => Self::handle_streaming(consumer, waiter),
-            };
-
-            match result {
-                Polled::Frame(frame, consumer) => {
-                    self.entries.push_back(Entry {
-                        token,
-                        track,
-                        state: Subscription::Streaming(consumer),
-                    });
-                    return Poll::Ready((token, PollEventResult::Frame(frame)));
+                Step::Yield(frame, state) => {
+                    self.entries.push_back(Entry { state, ..entry });
+                    return Poll::Ready((entry.token, PollEventResult::Frame(frame)));
                 }
-                Polled::Failed(source) => {
+                Step::Finished => {
+                    return Poll::Ready((entry.token, PollEventResult::TrackFinished));
+                }
+                Step::Err(source) => {
                     return Poll::Ready((
-                        token,
-                        PollEventResult::TrackError(TrackError { track, source }),
+                        entry.token,
+                        PollEventResult::TrackError(TrackError {
+                            track: entry.track,
+                            source,
+                        }),
                     ));
-                }
-                Polled::Pending(state) => {
-                    self.entries.push_back(Entry {
-                        token,
-                        track,
-                        state,
-                    });
-                }
-                Polled::Finished => {
-                    return Poll::Ready((token, PollEventResult::TrackFinished));
                 }
             }
         }
@@ -121,53 +135,26 @@ impl SubscriptionQueue {
         Poll::Pending
     }
 
-    pub(super) fn insert(
-        &mut self,
-        token: Token,
-        track: String,
-        container: moq_mux::catalog::hang::Container,
-        priority: u8,
-    ) {
-        self.remove(token);
-        let state = match self.broadcast.track(&track) {
-            Ok(consumer) => {
-                let subscription = moq_net::track::Subscription::default().with_priority(priority);
-                Subscription::Pending(PendingSub {
-                    subscribing: consumer.subscribe(subscription).into_inner(),
-                    container,
-                })
-            }
-            Err(e) => Subscription::Failed(e.into()),
-        };
-        self.entries.push_back(Entry {
-            token,
-            track,
-            state,
-        });
-    }
-
-    pub(super) fn remove(&mut self, target: Token) {
-        self.entries.retain(|entry| entry.token != target);
-    }
-
-    fn handle_pending(pending: PendingSub, latency: Duration, waiter: &kio::Waiter) -> Polled {
-        match pending.subscribing.poll_ok(waiter) {
-            Poll::Ready(Ok(subscriber)) => {
-                let consumer =
-                    WireConsumer::new(subscriber, pending.container).with_latency(latency);
-                Self::handle_streaming(Box::new(consumer), waiter)
-            }
-            Poll::Ready(Err(e)) => Polled::Failed(QueueError::Pending(e)),
-            Poll::Pending => Polled::Pending(Subscription::Pending(pending)),
-        }
-    }
-
-    fn handle_streaming(mut consumer: Box<WireConsumer>, waiter: &kio::Waiter) -> Polled {
-        match consumer.poll_read(waiter) {
-            Poll::Ready(Ok(Some(frame))) => Polled::Frame(frame, consumer),
-            Poll::Ready(Ok(None)) => Polled::Finished,
-            Poll::Ready(Err(e)) => Polled::Failed(QueueError::Streaming(e)),
-            Poll::Pending => Polled::Pending(Subscription::Streaming(consumer)),
+    fn step(state: Subscription, latency: Duration, waiter: &kio::Waiter) -> Step {
+        match state {
+            Subscription::Pending(pending) => match pending.subscribing.poll_ok(waiter) {
+                Poll::Ready(Ok(subscriber)) => {
+                    let consumer =
+                        WireConsumer::new(subscriber, pending.container).with_latency(latency);
+                    Self::step(Subscription::Streaming(Box::new(consumer)), latency, waiter)
+                }
+                Poll::Ready(Err(e)) => Step::Err(e.into()),
+                Poll::Pending => Step::Wait(Subscription::Pending(pending)),
+            },
+            Subscription::Streaming(mut consumer) => match consumer.poll_read(waiter) {
+                Poll::Ready(Ok(Some(frame))) => {
+                    Step::Yield(frame, Subscription::Streaming(consumer))
+                }
+                // `None` from a read signals track EOS
+                Poll::Ready(Ok(None)) => Step::Finished,
+                Poll::Ready(Err(e)) => Step::Err(e.into()),
+                Poll::Pending => Step::Wait(Subscription::Streaming(consumer)),
+            },
         }
     }
 }

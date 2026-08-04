@@ -143,7 +143,7 @@ async fn run_broadcast(
 
     loop {
         let result = tokio::select! {
-          command = commands_rx.recv() => handle_command(&mut subs, command),
+          command = commands_rx.recv() => handle_command(env, pid, &mut subs, command),
           snapshot = catalog.next() => handle_new_catalog(env, pid, path, snapshot),
           event = kio::wait(|waiter| subs.poll_event(waiter)) => handle_event(env, pid, event)
         };
@@ -157,20 +157,32 @@ async fn run_broadcast(
 }
 
 fn handle_command(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
     subs: &mut SubscriptionQueue,
     command: Option<Command>,
 ) -> ControlFlow<ExitReason> {
     match command {
-        None | Some(Command::Close) => return ControlFlow::Break(None),
+        None | Some(Command::Close) => ControlFlow::Break(None),
+        Some(Command::Unsubscribe { token }) => {
+            subs.remove(token);
+            ControlFlow::Continue(())
+        }
         Some(Command::Subscribe {
             track,
             wire_container,
             token,
             priority,
-        }) => subs.insert(token, track, wire_container, priority),
-        Some(Command::Unsubscribe { token }) => subs.remove(token),
+        }) => {
+            match subs
+                .insert(token, track, wire_container, priority)
+                .or_else(|e| messages::send_track_error(env, pid, token, e.to_string()))
+            {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(_pid_dead) => ControlFlow::Break(None),
+            }
+        }
     }
-    ControlFlow::Continue(())
 }
 
 fn handle_new_catalog(

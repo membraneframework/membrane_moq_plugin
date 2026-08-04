@@ -4,47 +4,44 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::time::Duration;
 
-use crate::track_format::ResolvedConfig;
+use crate::track_format::TrackConfig;
 use crate::{runtime, session::Session};
-
-enum Handle {
-    Video(moq_mux::catalog::VideoTrack),
-    Audio(moq_mux::catalog::AudioTrack),
-}
 
 struct KindMismatch;
 
-struct Rendition {
-    handle: Handle,
-    container: hang::catalog::Container,
+enum Rendition {
+    Video(moq_mux::catalog::VideoTrack),
+    Audio(moq_mux::catalog::AudioTrack),
 }
 
 impl Rendition {
     fn new(
         catalog: &moq_mux::catalog::Producer,
         name: &str,
-        config: ResolvedConfig,
+        config: TrackConfig,
         container: hang::catalog::Container,
     ) -> Self {
-        let handle = match &config {
-            ResolvedConfig::Video(_) => Handle::Video(catalog.reserve().init(name)),
-            ResolvedConfig::Audio(_) => Handle::Audio(catalog.reserve().init(name)),
-        };
-
-        let mut rendition = Self { handle, container };
-        let _ = rendition.set(config);
-        rendition
+        match config {
+            TrackConfig::Video(format) => {
+                let mut handle = catalog.reserve().init(name);
+                handle.set(format.with_container(container));
+                Self::Video(handle)
+            }
+            TrackConfig::Audio(format) => {
+                let mut handle = catalog.reserve().init(name);
+                handle.set(format.with_container(container));
+                Self::Audio(handle)
+            }
+        }
     }
 
-    fn set(&mut self, config: ResolvedConfig) -> Result<(), KindMismatch> {
-        match (&mut self.handle, config) {
-            (Handle::Video(handle), ResolvedConfig::Video(mut config)) => {
-                config.container = self.container.clone();
-                handle.set(config);
+    fn set(&mut self, format: TrackConfig) -> Result<(), KindMismatch> {
+        match (self, format) {
+            (Self::Video(handle), TrackConfig::Video(format)) => {
+                handle.update(|config| *config = format.with_container(config.container.clone()));
             }
-            (Handle::Audio(handle), ResolvedConfig::Audio(mut config)) => {
-                config.container = self.container.clone();
-                handle.set(config);
+            (Self::Audio(handle), TrackConfig::Audio(format)) => {
+                handle.update(|config| *config = format.with_container(config.container.clone()));
             }
             (_, _) => return Err(KindMismatch),
         }
@@ -135,7 +132,7 @@ impl Producer {
     pub(crate) fn add_track(
         &mut self,
         track: String,
-        config: ResolvedConfig,
+        config: TrackConfig,
         container: hang::catalog::Container,
         priority: u8,
         latency: Duration,
@@ -163,7 +160,7 @@ impl Producer {
     pub(crate) fn update_track(
         &mut self,
         track: &str,
-        config: ResolvedConfig,
+        config: TrackConfig,
     ) -> Result<(), UpdateTrackError> {
         self.tracks
             .get_mut(track)
@@ -218,7 +215,7 @@ impl Producer {
         broadcast: &mut moq_net::broadcast::Producer,
         catalog: &moq_mux::catalog::Producer,
         track: &str,
-        config: ResolvedConfig,
+        config: TrackConfig,
         container: hang::catalog::Container,
         priority: u8,
         latency: Duration,

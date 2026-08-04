@@ -154,12 +154,38 @@ impl<'a> TrackFormat<'a> {
     }
 }
 
-pub(crate) enum ResolvedConfig {
-    Video(hang::catalog::VideoConfig),
-    Audio(hang::catalog::AudioConfig),
+pub(crate) struct VideoFormat(hang::catalog::VideoConfig);
+
+impl VideoFormat {
+    pub(crate) fn with_container(
+        self,
+        container: hang::catalog::Container,
+    ) -> hang::catalog::VideoConfig {
+        let mut config = self.0;
+        config.container = container;
+        config
+    }
 }
 
-impl TryFrom<TrackFormat<'_>> for ResolvedConfig {
+pub(crate) struct AudioFormat(hang::catalog::AudioConfig);
+
+impl AudioFormat {
+    pub(crate) fn with_container(
+        self,
+        container: hang::catalog::Container,
+    ) -> hang::catalog::AudioConfig {
+        let mut config = self.0;
+        config.container = container;
+        config
+    }
+}
+
+pub(crate) enum TrackConfig {
+    Video(VideoFormat),
+    Audio(AudioFormat),
+}
+
+impl TryFrom<TrackFormat<'_>> for TrackConfig {
     type Error = rustler::Error;
 
     fn try_from(format: TrackFormat<'_>) -> NifResult<Self> {
@@ -168,22 +194,32 @@ impl TryFrom<TrackFormat<'_>> for ResolvedConfig {
                 params,
                 description,
                 codec,
-            } => Self::Video(h264_video_config(&params, description.as_slice(), &codec)),
+            } => Self::Video(VideoFormat(h264_video_config(
+                &params,
+                description.as_slice(),
+                &codec,
+            ))),
             TrackFormat::H265 {
                 params,
                 description,
                 codec,
-            } => Self::Video(h265_video_config(&params, description.as_slice(), codec)?),
-            TrackFormat::Aac { params, codec } => Self::Audio(aac_audio_config(
+            } => Self::Video(VideoFormat(h265_video_config(
+                &params,
+                description.as_slice(),
+                codec,
+            )?)),
+            TrackFormat::Aac { params, codec } => Self::Audio(AudioFormat(aac_audio_config(
                 codec.profile,
                 params.sample_rate,
                 params.channels,
-            )),
-            TrackFormat::Opus { params } => Self::Audio(hang::catalog::AudioConfig::new(
-                hang::catalog::AudioCodec::Opus,
-                params.sample_rate,
-                params.channels,
-            )),
+            ))),
+            TrackFormat::Opus { params } => {
+                Self::Audio(AudioFormat(hang::catalog::AudioConfig::new(
+                    hang::catalog::AudioCodec::Opus,
+                    params.sample_rate,
+                    params.channels,
+                )))
+            }
             TrackFormat::Unrecognized => {
                 return Err(crate::nif_error!(
                     "cannot publish an unrecognized track format"

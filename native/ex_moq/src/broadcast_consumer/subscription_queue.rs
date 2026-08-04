@@ -131,8 +131,7 @@ impl SubscriptionQueue {
         self.remove(token);
         let state = match self.broadcast.track(&track) {
             Ok(consumer) => {
-                let mut subscription = moq_net::track::Subscription::default();
-                subscription.priority = priority;
+                let subscription = moq_net::track::Subscription::default().with_priority(priority);
                 Subscription::Pending(PendingSub {
                     subscribing: consumer.subscribe(subscription).into_inner(),
                     container,

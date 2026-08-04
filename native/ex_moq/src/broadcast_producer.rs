@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::time::Duration;
 
-use crate::track_format::TrackConfig;
+use crate::track_format::{ContainerPair, TrackConfig, WireContainer};
 use crate::{runtime, session::Session};
 
 struct KindMismatch;
@@ -49,7 +49,7 @@ impl Rendition {
     }
 }
 
-type WireProducer = moq_mux::container::Producer<moq_mux::catalog::hang::Container>;
+type WireProducer = moq_mux::container::Producer<WireContainer>;
 
 struct LiveTrack {
     producer: WireProducer,
@@ -71,8 +71,6 @@ pub(crate) enum CreateError {
 pub(crate) enum AddTrackError {
     #[error("track already exists")]
     AlreadyExists,
-    #[error("container init failed: {0}")]
-    ContainerInit(moq_mux::Error),
     #[error("create_track failed: {0}")]
     CreateTrack(moq_net::Error),
     #[error("media_producer failed: {0}")]
@@ -133,7 +131,7 @@ impl Producer {
         &mut self,
         track: String,
         config: TrackConfig,
-        container: hang::catalog::Container,
+        containers: ContainerPair,
         priority: u8,
         latency: Duration,
     ) -> Result<(), AddTrackError> {
@@ -147,7 +145,7 @@ impl Producer {
             &self.catalog,
             entry.key(),
             config,
-            container,
+            containers,
             priority,
             latency,
         )?;
@@ -216,14 +214,10 @@ impl Producer {
         catalog: &moq_mux::catalog::Producer,
         track: &str,
         config: TrackConfig,
-        container: hang::catalog::Container,
+        containers: ContainerPair,
         priority: u8,
         latency: Duration,
     ) -> Result<LiveTrack, AddTrackError> {
-        let wire_container = (&container)
-            .try_into()
-            .map_err(AddTrackError::ContainerInit)?;
-
         let track_producer = broadcast
             .create_track(
                 track,
@@ -231,7 +225,7 @@ impl Producer {
             )
             .map_err(AddTrackError::CreateTrack)?;
 
-        let producer = match catalog.media_producer(track_producer, wire_container) {
+        let producer = match catalog.media_producer(track_producer, containers.wire) {
             Ok(producer) => producer.with_latency(latency),
             Err(e) => {
                 let _ = broadcast.remove_track(track);
@@ -239,7 +233,7 @@ impl Producer {
             }
         };
 
-        let rendition = Rendition::new(catalog, track, config, container);
+        let rendition = Rendition::new(catalog, track, config, containers.catalog);
 
         Ok(LiveTrack {
             producer,

@@ -13,13 +13,14 @@ use moq_mux::catalog::Stream as _;
 use crate::messages::{self, Token};
 use crate::runtime;
 use crate::session::Session;
+use crate::track_format::WireContainer;
 
 use subscription_queue::{PollEventResult, SubscriptionQueue};
 
 enum Command {
     Subscribe {
         track: String,
-        wire_container: moq_mux::catalog::hang::Container,
+        wire_container: WireContainer,
         token: Token,
         priority: u8,
     },
@@ -75,7 +76,7 @@ impl Consumer {
     pub(crate) fn subscribe(
         &self,
         track: String,
-        wire_container: moq_mux::catalog::hang::Container,
+        wire_container: WireContainer,
         token: Token,
         priority: u8,
     ) -> Result<(), Closed> {

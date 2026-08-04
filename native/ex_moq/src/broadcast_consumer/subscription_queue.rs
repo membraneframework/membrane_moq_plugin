@@ -8,12 +8,13 @@ use hang::moq_net;
 use hang::moq_net::kio;
 
 use crate::messages::Token;
+use crate::track_format::WireContainer;
 
-type WireConsumer = moq_mux::container::Consumer<moq_mux::catalog::hang::Container>;
+type WireConsumer = moq_mux::container::Consumer<WireContainer>;
 
 struct PendingSub {
     subscribing: moq_net::track::Subscribing,
-    container: moq_mux::catalog::hang::Container,
+    container: WireContainer,
 }
 
 enum Subscription {
@@ -74,7 +75,7 @@ impl SubscriptionQueue {
         &mut self,
         token: Token,
         track: String,
-        container: moq_mux::catalog::hang::Container,
+        container: WireContainer,
         priority: u8,
     ) -> Result<(), TrackError> {
         self.remove(token);

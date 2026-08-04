@@ -16,7 +16,7 @@ mod track_format;
 
 use broadcast_producer::{AddTrackError, UpdateTrackError, WriteFrameError};
 use messages::Token;
-use track_format::{Container, TrackConfig, TrackFormat};
+use track_format::{Container, ContainerPair, TrackConfig, TrackFormat};
 
 macro_rules! nif_error {
     ($fmt:literal $($arg:tt)*) => {
@@ -129,12 +129,12 @@ fn add_track(
     container: Container,
     latency_ns: u64,
 ) -> NifResult<Atom> {
-    let container = hang::catalog::Container::from(container);
+    let containers = ContainerPair::from(container);
     let config = TrackConfig::try_from(format)?;
     let latency = Duration::from_nanos(latency_ns);
 
     lock_producer(&broadcast)?
-        .add_track(track, config, container, priority, latency)
+        .add_track(track, config, containers, priority, latency)
         .map_err(|e| match e {
             AddTrackError::AlreadyExists => nif_error!(atoms::moq_track_already_exists()),
             other => nif_error!("{other}"),
@@ -218,18 +218,14 @@ fn subscribe_track(
     token: Token,
     priority: u8,
 ) -> NifResult<Atom> {
-    let catalog_container: hang::catalog::Container = container
-        .ok_or_else(|| {
-            nif_error!("cannot subscribe to a track with an unrecognized wire container")
-        })?
-        .into();
-
-    let wire_container = moq_mux::catalog::hang::Container::try_from(&catalog_container)
-        .map_err(|e| nif_error!("container init failed: {e}"))?;
+    let container = container.ok_or_else(|| {
+        nif_error!("cannot subscribe to a track with an unrecognized wire container")
+    })?;
+    let containers = ContainerPair::from(container);
 
     consumer
         .0
-        .subscribe(track, wire_container, token, priority)
+        .subscribe(track, containers.wire, token, priority)
         .map_err(|_closed| nif_error!("broadcast consumer closed"))?;
 
     Ok(ok())

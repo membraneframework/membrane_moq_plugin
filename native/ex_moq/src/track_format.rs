@@ -1,6 +1,9 @@
 use bytes::Bytes;
 use rustler::{Binary, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum};
 
+pub(crate) type WireContainer = moq_mux::catalog::hang::Container;
+pub(crate) type CatalogContainer = hang::catalog::Container;
+
 pub(crate) struct UnrecognizedContainer;
 
 #[derive(NifUnitEnum, Clone, Copy)]
@@ -9,23 +12,34 @@ pub(crate) enum Container {
     Loc,
 }
 
-impl From<Container> for hang::catalog::Container {
-    fn from(container: Container) -> Self {
+impl TryFrom<&CatalogContainer> for Container {
+    type Error = UnrecognizedContainer;
+
+    fn try_from(container: &CatalogContainer) -> Result<Self, Self::Error> {
         match container {
-            Container::Legacy => Self::Legacy,
-            Container::Loc => Self::Loc,
+            CatalogContainer::Legacy => Ok(Self::Legacy),
+            CatalogContainer::Loc => Ok(Self::Loc),
+            _ => Err(UnrecognizedContainer),
         }
     }
 }
 
-impl TryFrom<&hang::catalog::Container> for Container {
-    type Error = UnrecognizedContainer;
+pub(crate) struct ContainerPair {
+    pub(crate) wire: WireContainer,
+    pub(crate) catalog: CatalogContainer,
+}
 
-    fn try_from(container: &hang::catalog::Container) -> Result<Self, Self::Error> {
+impl From<Container> for ContainerPair {
+    fn from(container: Container) -> Self {
         match container {
-            hang::catalog::Container::Legacy => Ok(Self::Legacy),
-            hang::catalog::Container::Loc => Ok(Self::Loc),
-            _ => Err(UnrecognizedContainer),
+            Container::Legacy => Self {
+                wire: WireContainer::Legacy,
+                catalog: CatalogContainer::Legacy,
+            },
+            Container::Loc => Self {
+                wire: WireContainer::Loc,
+                catalog: CatalogContainer::Loc,
+            },
         }
     }
 }

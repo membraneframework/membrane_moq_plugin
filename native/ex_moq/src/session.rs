@@ -56,14 +56,14 @@ async fn run_session(
     outgoing_consumer: Consumer,
     incoming: Producer,
     disable_tls_verify: bool,
-) {
+) -> Result<(), messages::PidDead> {
     let mut env = OwnedEnv::new();
     match connect(url, outgoing_consumer, incoming, disable_tls_verify).await {
         Ok(session) => {
-            messages::send_connected(&mut env, pid);
+            messages::send_connected(&mut env, pid)?;
 
             let reason = session.closed().await;
-            messages::send_disconnected(&mut env, pid, reason.to_string());
+            messages::send_disconnected(&mut env, pid, reason.to_string())
         }
         Err(e) => messages::send_setup_failed(&mut env, pid, e.to_string()),
     }

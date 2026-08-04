@@ -9,26 +9,48 @@ pub(crate) struct PidDead;
 /// so the Elixir side can route them to the originating subscription.
 pub(crate) type Token = i64;
 
-pub(crate) fn send_connected(env: &mut OwnedEnv, pid: LocalPid) {
-    let _ = env.send_and_clear(&pid, |env| atoms::moq_connected().to_term(env));
+pub(crate) fn send_connected(env: &mut OwnedEnv, pid: LocalPid) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| atoms::moq_connected().to_term(env))
+        .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_setup_failed(env: &mut OwnedEnv, pid: LocalPid, reason: String) {
-    let _ = env.send_and_clear(&pid, |env| (atoms::moq_setup_failed(), reason).encode(env));
+pub(crate) fn send_setup_failed(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    reason: String,
+) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| (atoms::moq_setup_failed(), reason).encode(env))
+        .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_disconnected(env: &mut OwnedEnv, pid: LocalPid, reason: String) {
-    let _ = env.send_and_clear(&pid, |env| (atoms::moq_disconnected(), reason).encode(env));
+pub(crate) fn send_disconnected(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    reason: String,
+) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| (atoms::moq_disconnected(), reason).encode(env))
+        .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_broadcast_ready(env: &mut OwnedEnv, pid: LocalPid, path: &str) {
-    let _ = env.send_and_clear(&pid, |env| (atoms::moq_broadcast_ready(), path).encode(env));
+pub(crate) fn send_broadcast_ready(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    path: &str,
+) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| (atoms::moq_broadcast_ready(), path).encode(env))
+        .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_broadcast_closed(env: &mut OwnedEnv, pid: LocalPid, path: &str, reason: String) {
-    let _ = env.send_and_clear(&pid, |env| {
+pub(crate) fn send_broadcast_closed(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    path: &str,
+    reason: String,
+) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| {
         (atoms::moq_broadcast_closed(), path, reason).encode(env)
-    });
+    })
+    .map_err(|_| PidDead)
 }
 
 /// Sends the full catalog snapshot as a list of

@@ -94,7 +94,7 @@ impl Drop for CloseGuard {
     fn drop(&mut self) {
         if let Some(reason) = self.reason.take() {
             let mut env = OwnedEnv::new();
-            messages::send_broadcast_closed(&mut env, self.pid, &self.path, reason);
+            let _ = messages::send_broadcast_closed(&mut env, self.pid, &self.path, reason);
         }
     }
 }
@@ -130,7 +130,10 @@ async fn run_broadcast(
         }
     };
 
-    messages::send_broadcast_ready(&mut env, pid, &guard.path);
+    if messages::send_broadcast_ready(&mut env, pid, &guard.path).is_err() {
+        guard.reason = None;
+        return;
+    }
 
     let mut subs = SubscriptionQueue::new(broadcast, latency);
 

@@ -252,8 +252,7 @@ defmodule ExMoQ.Native do
   Subscribes to `track` within the broadcast consumed by the given consumer.
 
   `container` selects the parser for the track's frames:
-  echo the value advertised for the track in the `:moq_catalog` message.
-  An unusable container is rejected synchronously with `{:error, reason}`.
+  pass the value advertised for the track in the `:moq_catalog` message.
 
   `token` (see `t:token/0`) lets the caller route this track's messages
   to the originating subscription.
@@ -272,7 +271,7 @@ defmodule ExMoQ.Native do
       while the track may still be advertised in the catalog
   """
   @spec subscribe_track(broadcast_consumer(), track(), container() | nil, token(), 0..255) ::
-          :ok | {:error, reason :: String.t()}
+          :ok | {:error, :moq_unrecognized_container | :moq_consumer_closed}
   def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)
 

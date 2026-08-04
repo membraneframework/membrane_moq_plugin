@@ -31,19 +31,21 @@ pub(crate) use nif_error;
 
 pub(crate) mod atoms {
     rustler::atoms! {
-        moq_missing_keyframe,
-        moq_producer_poisoned,
-        moq_track_already_exists,
-        moq_unknown_track,
         moq_connected,
-        moq_setup_failed,
-        moq_disconnected,
+        moq_broadcast_ready,
         moq_frame,
         moq_catalog,
         moq_track_finished,
-        moq_track_error,
-        moq_broadcast_ready,
+        moq_missing_keyframe,
         moq_broadcast_closed,
+        moq_producer_poisoned,
+        moq_consumer_closed,
+        moq_unrecognized_container,
+        moq_track_already_exists,
+        moq_unknown_track,
+        moq_setup_failed,
+        moq_disconnected,
+        moq_track_error,
     }
 }
 
@@ -218,15 +220,13 @@ fn subscribe_track(
     token: Token,
     priority: u8,
 ) -> NifResult<Atom> {
-    let container = container.ok_or_else(|| {
-        nif_error!("cannot subscribe to a track with an unrecognized wire container")
-    })?;
+    let container = container.ok_or_else(|| nif_error!(atoms::moq_unrecognized_container()))?;
     let containers = ContainerPair::from(container);
 
     consumer
         .0
         .subscribe(track, containers.wire, token, priority)
-        .map_err(|_closed| nif_error!("broadcast consumer closed"))?;
+        .map_err(|_closed| nif_error!(atoms::moq_consumer_closed()))?;
 
     Ok(ok())
 }

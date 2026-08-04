@@ -74,7 +74,7 @@ async fn connect(
     publish: Consumer,
     subscribe: Producer,
     disable_tls_verify: bool,
-) -> Result<moq_native::moq_net::Session, moq_native::Error> {
+) -> Result<hang::moq_net::Session, moq_native::Error> {
     let mut config = ClientConfig::default();
     config.tls.disable_verify = Some(disable_tls_verify);
 

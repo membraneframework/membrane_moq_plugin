@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use hang::moq_net;
 
+use rustler::types::atom::ok;
 use rustler::{Atom, Binary, LocalPid, NifResult, Resource, ResourceArc};
+
 use url::Url;
 
 mod broadcast_consumer;
@@ -29,9 +31,6 @@ pub(crate) use nif_error;
 
 pub(crate) mod atoms {
     rustler::atoms! {
-        // TODO: these two are actually redundant
-        ok,
-        error,
         moq_missing_keyframe,
         moq_producer_poisoned,
         moq_track_already_exists,
@@ -76,13 +75,13 @@ fn create_session(
     let url = Url::parse(url).map_err(|e| nif_error!("invalid url: {e}"))?;
 
     let session = session::Session::connect(url, pid, disable_tls_verify);
-    Ok((atoms::ok(), ResourceArc::new(SessionResource(session))))
+    Ok((ok(), ResourceArc::new(SessionResource(session))))
 }
 
 #[rustler::nif]
 fn close_session(session: ResourceArc<SessionResource>) -> Atom {
     session.0.close();
-    atoms::ok()
+    ok()
 }
 
 #[rustler::nif]
@@ -94,7 +93,7 @@ fn create_broadcast_producer(
         broadcast_producer::Producer::new(&session.0, path).map_err(|e| nif_error!("{e}"))?;
 
     Ok((
-        atoms::ok(),
+        ok(),
         ResourceArc::new(BroadcastProducerResource(Mutex::new(producer))),
     ))
 }
@@ -111,7 +110,7 @@ fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) ->
         producer.finish();
     }
     producer.abort();
-    atoms::ok()
+    ok()
 }
 
 #[rustler::nif]
@@ -135,7 +134,7 @@ fn add_track(
             other => nif_error!("{other}"),
         })?;
 
-    Ok(atoms::ok())
+    Ok(ok())
 }
 
 #[rustler::nif]
@@ -153,7 +152,7 @@ fn update_track(
             other => nif_error!("{other}"),
         })?;
 
-    Ok(atoms::ok())
+    Ok(ok())
 }
 
 #[rustler::nif]
@@ -175,7 +174,7 @@ fn send_frame(
     };
 
     match lock_producer(&broadcast)?.write_frame(track, frame) {
-        Ok(()) => Ok(atoms::ok()),
+        Ok(()) => Ok(ok()),
         Err(WriteFrameError::MissingKeyframe) => Ok(atoms::moq_missing_keyframe()),
         Err(WriteFrameError::UnknownTrack) => Err(nif_error!(atoms::moq_unknown_track())),
         Err(e) => Err(nif_error!("{e}")),
@@ -189,7 +188,7 @@ fn remove_track(broadcast: ResourceArc<BroadcastProducerResource>, track: &str) 
         Err(poison) => (poison.into_inner(), true),
     };
     producer.remove_track(track, !poisoned);
-    atoms::ok()
+    ok()
 }
 
 #[rustler::nif]
@@ -202,10 +201,7 @@ fn create_broadcast_consumer(
     let latency = Duration::from_nanos(latency_ns);
 
     let consumer = broadcast_consumer::Consumer::spawn(&session.0, path, pid, latency);
-    (
-        atoms::ok(),
-        ResourceArc::new(BroadcastConsumerResource(consumer)),
-    )
+    (ok(), ResourceArc::new(BroadcastConsumerResource(consumer)))
 }
 
 #[rustler::nif]
@@ -230,19 +226,19 @@ fn subscribe_track(
         .subscribe(track, wire_container, token, priority)
         .map_err(|_closed| nif_error!("broadcast consumer closed"))?;
 
-    Ok(atoms::ok())
+    Ok(ok())
 }
 
 #[rustler::nif]
 fn unsubscribe_track(consumer: ResourceArc<BroadcastConsumerResource>, token: Token) -> Atom {
     consumer.0.unsubscribe(token);
-    atoms::ok()
+    ok()
 }
 
 #[rustler::nif]
 fn close_broadcast_consumer(consumer: ResourceArc<BroadcastConsumerResource>) -> Atom {
     consumer.0.close();
-    atoms::ok()
+    ok()
 }
 
 fn lock_producer(

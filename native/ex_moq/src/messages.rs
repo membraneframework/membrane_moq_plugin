@@ -10,8 +10,7 @@ pub(crate) struct PidDead;
 pub(crate) type Token = i64;
 
 pub(crate) fn send_connected(env: &mut OwnedEnv, pid: LocalPid) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| atoms::moq_connected().to_term(env))
-        .map_err(|_| PidDead)
+    send(env, pid, atoms::moq_connected())
 }
 
 pub(crate) fn send_setup_failed(
@@ -19,8 +18,7 @@ pub(crate) fn send_setup_failed(
     pid: LocalPid,
     reason: String,
 ) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| (atoms::moq_setup_failed(), reason).encode(env))
-        .map_err(|_| PidDead)
+    send(env, pid, (atoms::moq_setup_failed(), reason))
 }
 
 pub(crate) fn send_disconnected(
@@ -28,8 +26,7 @@ pub(crate) fn send_disconnected(
     pid: LocalPid,
     reason: String,
 ) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| (atoms::moq_disconnected(), reason).encode(env))
-        .map_err(|_| PidDead)
+    send(env, pid, (atoms::moq_disconnected(), reason))
 }
 
 pub(crate) fn send_broadcast_ready(
@@ -37,8 +34,7 @@ pub(crate) fn send_broadcast_ready(
     pid: LocalPid,
     path: &str,
 ) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| (atoms::moq_broadcast_ready(), path).encode(env))
-        .map_err(|_| PidDead)
+    send(env, pid, (atoms::moq_broadcast_ready(), path))
 }
 
 pub(crate) fn send_broadcast_closed(
@@ -47,14 +43,26 @@ pub(crate) fn send_broadcast_closed(
     path: &str,
     reason: String,
 ) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| {
-        (atoms::moq_broadcast_closed(), path, reason).encode(env)
-    })
-    .map_err(|_| PidDead)
+    send(env, pid, (atoms::moq_broadcast_closed(), path, reason))
 }
 
-/// Sends the full catalog snapshot as a list of
-/// `{name, {format, container}}` pairs, one per advertised rendition.
+pub(crate) fn send_track_finished(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    token: Token,
+) -> Result<(), PidDead> {
+    send(env, pid, (atoms::moq_track_finished(), token))
+}
+
+pub(crate) fn send_track_error(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    token: Token,
+    reason: String,
+) -> Result<(), PidDead> {
+    send(env, pid, (atoms::moq_track_error(), token, reason))
+}
+
 pub(crate) fn send_catalog(
     env: &mut OwnedEnv,
     pid: LocalPid,
@@ -65,24 +73,22 @@ pub(crate) fn send_catalog(
         let videos = catalog.video.renditions.iter().map(|(name, config)| {
             (
                 name,
-                (
-                    TrackFormat::from_video(env, config),
-                    Container::try_from(&config.container).ok(),
-                ),
+                TrackFormat::from_video(env, config),
+                &config.container,
             )
-                .encode(env)
         });
-        let audios = catalog.audio.renditions.iter().map(|(name, config)| {
-            (
-                name,
-                (
-                    TrackFormat::from_audio(config),
-                    Container::try_from(&config.container).ok(),
-                ),
-            )
-                .encode(env)
-        });
-        let renditions: Vec<Term> = videos.chain(audios).collect();
+
+        let audios = catalog
+            .audio
+            .renditions
+            .iter()
+            .map(|(name, config)| (name, TrackFormat::from_audio(config), &config.container));
+
+        let renditions: Vec<Term> = videos
+            .chain(audios)
+            .map(|(name, format, container)| (name, (format, Container::try_from(container).ok())))
+            .map(|tuple| tuple.encode(env))
+            .collect();
 
         (atoms::moq_catalog(), path, renditions).encode(env)
     })
@@ -108,7 +114,7 @@ pub(crate) fn send_frame(
         (
             atoms::moq_frame(),
             token,
-            Into::<Binary>::into(payload_binary),
+            Binary::from(payload_binary),
             timestamp.as_nanos() as u64,
             keyframe,
         )
@@ -117,23 +123,7 @@ pub(crate) fn send_frame(
     .map_err(|_| PidDead)
 }
 
-pub(crate) fn send_track_finished(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    token: Token,
-) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| (atoms::moq_track_finished(), token).encode(env))
+fn send(env: &mut OwnedEnv, pid: LocalPid, msg: impl Encoder) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| msg.encode(env))
         .map_err(|_| PidDead)
-}
-
-pub(crate) fn send_track_error(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    token: Token,
-    reason: String,
-) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| {
-        (atoms::moq_track_error(), token, reason).encode(env)
-    })
-    .map_err(|_| PidDead)
 }

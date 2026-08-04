@@ -58,12 +58,18 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
 }
 
 struct SessionResource(session::Session);
+
+#[rustler::resource_impl]
 impl Resource for SessionResource {}
 
 struct BroadcastProducerResource(Mutex<broadcast_producer::Producer>);
+
+#[rustler::resource_impl]
 impl Resource for BroadcastProducerResource {}
 
 struct BroadcastConsumerResource(broadcast_consumer::Consumer);
+
+#[rustler::resource_impl]
 impl Resource for BroadcastConsumerResource {}
 
 #[rustler::nif]
@@ -250,14 +256,4 @@ fn lock_producer(
         .map_err(|_poison| nif_error!(atoms::moq_producer_poisoned()))
 }
 
-fn load(env: rustler::Env, _info: rustler::Term) -> bool {
-    [
-        env.register::<SessionResource>(),
-        env.register::<BroadcastProducerResource>(),
-        env.register::<BroadcastConsumerResource>(),
-    ]
-    .iter()
-    .all(std::result::Result::is_ok)
-}
-
-rustler::init!("Elixir.ExMoQ.Native", load = load);
+rustler::init!("Elixir.ExMoQ.Native");

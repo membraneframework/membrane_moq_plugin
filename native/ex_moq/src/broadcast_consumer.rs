@@ -224,10 +224,8 @@ fn handle_event(
 async fn subscribe_catalog(
     path: &str,
     broadcast: &moq_net::broadcast::Consumer,
-) -> anyhow::Result<moq_mux::catalog::Consumer<()>> {
+) -> Result<moq_mux::catalog::Consumer<()>, moq_mux::Error> {
     let format = moq_mux::catalog::CatalogFormat::detect(path)
         .unwrap_or(moq_mux::catalog::CatalogFormat::DEFAULT);
-    moq_mux::catalog::Consumer::<()>::new(broadcast, format)
-        .await
-        .map_err(|e| anyhow::anyhow!("catalog subscribe ({format:?}) failed: {e}"))
+    moq_mux::catalog::Consumer::new(broadcast, format).await
 }

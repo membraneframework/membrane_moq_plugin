@@ -242,7 +242,7 @@ impl Producer {
             }
         };
 
-        let rendition = Rendition::new(&catalog, track, config, container);
+        let rendition = Rendition::new(catalog, track, config, container);
 
         Ok(LiveTrack {
             producer,

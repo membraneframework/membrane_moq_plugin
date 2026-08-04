@@ -194,16 +194,6 @@ impl TryFrom<TrackFormat<'_>> for ResolvedConfig {
     }
 }
 
-impl ResolvedConfig {
-    pub(crate) fn with_container(mut self, container: hang::catalog::Container) -> Self {
-        match &mut self {
-            Self::Video(config) => config.container = container,
-            Self::Audio(config) => config.container = container,
-        }
-        self
-    }
-}
-
 fn h264_video_config(
     video_params: &VideoTrackParams,
     dcr: &[u8],

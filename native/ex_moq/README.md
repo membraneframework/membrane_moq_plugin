@@ -29,7 +29,7 @@ format =
      codec: %Native.H264Codec{inline: false, profile: 100, constraints: 0, level: 31}
    }}
 
-{:ok, video_track} =
+:ok =
   Native.add_track(broadcast, "my_video_track", format, _priority = 60, :legacy, _latency_ns = 0)
 
 IO.puts("MoQ setup successful, you can start streaming frames to PID #{inspect(self())}")
@@ -37,7 +37,7 @@ IO.puts("MoQ setup successful, you can start streaming frames to PID #{inspect(s
 Stream.repeatedly(fn ->
   receive do
     {:video, buf, timestamp_ns, keyframe?} ->
-      Native.send_frame(video_track, timestamp_ns, keyframe?, buf)
+      Native.send_frame(broadcast, "my_video_track", timestamp_ns, keyframe?, buf)
   end
 end)
 |> Stream.run()
@@ -56,7 +56,7 @@ after
   2_000 -> raise "timeout"
 end
 
-{:ok, consumer} = Native.create_broadcast_consumer(session, "my_broadcast", self(), latency_ns)
+{:ok, consumer} = Native.create_broadcast_consumer(session, "my_broadcast", self(), _latency_ns = 0)
 
 {format, container} =
   receive do

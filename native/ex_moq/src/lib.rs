@@ -69,7 +69,7 @@ struct BroadcastProducerResource(Mutex<broadcast_producer::Producer>);
 #[rustler::resource_impl]
 impl Resource for BroadcastProducerResource {}
 
-struct BroadcastConsumerResource(broadcast_consumer::Consumer);
+struct BroadcastConsumerResource(broadcast_consumer::Handle);
 
 #[rustler::resource_impl]
 impl Resource for BroadcastConsumerResource {}
@@ -208,7 +208,7 @@ fn create_broadcast_consumer(
 ) -> (Atom, ResourceArc<BroadcastConsumerResource>) {
     let latency = Duration::from_nanos(latency_ns);
 
-    let consumer = broadcast_consumer::Consumer::spawn(&session.0, path, pid, latency);
+    let consumer = broadcast_consumer::spawn(&session.0, path, pid, latency);
     (ok(), ResourceArc::new(BroadcastConsumerResource(consumer)))
 }
 

@@ -1,10 +1,10 @@
 mod subscription_queue;
 
 use std::ops::ControlFlow;
+use std::task::Poll;
 use std::time::Duration;
 
 use rustler::{LocalPid, OwnedEnv};
-use tokio::sync::mpsc;
 
 use hang::moq_net;
 use hang::moq_net::kio;
@@ -17,6 +17,29 @@ use crate::track_format::WireContainer;
 
 use subscription_queue::{PollEventResult, SubscriptionQueue};
 
+type ExitReason = Option<String>;
+
+struct CloseGuard {
+    env: OwnedEnv,
+    pid: LocalPid,
+    path: String,
+    reason: ExitReason,
+    commands: kio::Queue<Command>,
+}
+
+impl Drop for CloseGuard {
+    fn drop(&mut self) {
+        self.commands.close();
+
+        let Some(reason) = self.reason.take() else {
+            return;
+        };
+        let _ = messages::send_broadcast_closed(&mut self.env, self.pid, &self.path, reason);
+    }
+}
+
+pub(crate) struct Closed;
+
 enum Command {
     Subscribe {
         track: String,
@@ -27,52 +50,20 @@ enum Command {
     Unsubscribe {
         token: Token,
     },
-    Close,
 }
 
-pub(crate) struct Closed;
-
-pub(crate) struct Consumer {
-    commands: mpsc::UnboundedSender<Command>,
+pub(crate) struct Handle {
+    commands: kio::Queue<Command>,
     task: tokio::task::AbortHandle,
 }
 
-impl Drop for Consumer {
+impl Drop for Handle {
     fn drop(&mut self) {
         self.task.abort();
     }
 }
 
-impl Consumer {
-    pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Duration) -> Self {
-        let origin = session.subscribe.consume();
-        let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
-
-        let task = runtime().spawn(async move {
-            let mut guard = CloseGuard {
-                env: OwnedEnv::new(),
-                pid,
-                path,
-                reason: Some("consumer task died unexpectedly".to_string()),
-            };
-
-            guard.reason = run_broadcast(
-                origin,
-                &guard.path,
-                &mut guard.env,
-                pid,
-                latency,
-                commands_rx,
-            )
-            .await;
-        });
-
-        Self {
-            commands: commands_tx,
-            task: task.abort_handle(),
-        }
-    }
-
+impl Handle {
     pub(crate) fn subscribe(
         &self,
         track: String,
@@ -81,152 +72,193 @@ impl Consumer {
         priority: u8,
     ) -> Result<(), Closed> {
         self.commands
-            .send(Command::Subscribe {
+            .try_push(Command::Subscribe {
                 track,
                 wire_container,
                 token,
                 priority,
             })
-            .map_err(|_send_error| Closed)
+            .map_err(|_push_error| Closed)
     }
 
     pub(crate) fn unsubscribe(&self, token: Token) {
-        let _ = self.commands.send(Command::Unsubscribe { token });
+        let _ = self.commands.try_push(Command::Unsubscribe { token });
     }
 
     pub(crate) fn close(&self) {
-        let _ = self.commands.send(Command::Close);
+        self.commands.close();
     }
 }
 
-type ExitReason = Option<String>;
+pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Duration) -> Handle {
+    let origin = session.subscribe.consume();
+    let commands = kio::Queue::new();
 
-struct CloseGuard {
+    let task = runtime().spawn({
+        let commands = commands.clone();
+        async move {
+            let mut guard = CloseGuard {
+                env: OwnedEnv::new(),
+                pid,
+                path: path.clone(),
+                reason: Some("consumer task died unexpectedly".to_string()),
+                commands: commands.clone(),
+            };
+
+            guard.reason = Driver::run_broadcast(origin, path, pid, latency, commands).await;
+        }
+    });
+
+    Handle {
+        commands,
+        task: task.abort_handle(),
+    }
+}
+
+enum Event {
+    Command(Result<Command, kio::Closed>),
+    Catalog(Result<Option<moq_mux::catalog::hang::Catalog>, moq_mux::Error>),
+    Track((Token, PollEventResult)),
+}
+
+struct Driver {
     env: OwnedEnv,
     pid: LocalPid,
     path: String,
-    reason: ExitReason,
+    commands: kio::Queue<Command>,
+    catalog: moq_mux::catalog::Consumer<()>,
+    subs: SubscriptionQueue,
 }
 
-impl Drop for CloseGuard {
-    fn drop(&mut self) {
-        let Some(reason) = self.reason.take() else {
-            return;
-        };
-        let _ = messages::send_broadcast_closed(&mut self.env, self.pid, &self.path, reason);
-    }
-}
-
-async fn run_broadcast(
-    origin: moq_net::origin::Consumer,
-    path: &str,
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    latency: Duration,
-    mut commands_rx: mpsc::UnboundedReceiver<Command>,
-) -> ExitReason {
-    let Some(broadcast) = origin.announced_broadcast(path).await else {
-        return Some(format!(
-            "broadcast {path:?} was not announced before the session closed"
-        ));
-    };
-
-    let mut catalog = match subscribe_catalog(path, &broadcast).await {
-        Ok(catalog) => catalog,
-        Err(e) => return Some(e.to_string()),
-    };
-
-    if messages::send_broadcast_ready(env, pid, path).is_err() {
-        return None;
-    }
-
-    let mut subs = SubscriptionQueue::new(broadcast, latency);
-
-    loop {
-        let result = tokio::select! {
-          command = commands_rx.recv() => handle_command(env, pid, &mut subs, command),
-          snapshot = catalog.next() => handle_new_catalog(env, pid, path, snapshot),
-          event = kio::wait(|waiter| subs.poll_event(waiter)) => handle_event(env, pid, event)
+impl Driver {
+    async fn run_broadcast(
+        origin: moq_net::origin::Consumer,
+        path: String,
+        pid: LocalPid,
+        latency: Duration,
+        commands: kio::Queue<Command>,
+    ) -> ExitReason {
+        let Some(broadcast) = origin.announced_broadcast(&path).await else {
+            return Some(format!(
+                "broadcast {path:?} was not announced before the session closed"
+            ));
         };
 
-        if let ControlFlow::Break(exit_reason) = result {
-            return exit_reason;
+        let format = moq_mux::catalog::CatalogFormat::detect(&path)
+            .unwrap_or(moq_mux::catalog::CatalogFormat::DEFAULT);
+        let catalog = match moq_mux::catalog::Consumer::new(&broadcast, format).await {
+            Ok(catalog) => catalog,
+            Err(e) => return Some(e.to_string()),
+        };
+
+        let mut env = OwnedEnv::new();
+        if messages::send_broadcast_ready(&mut env, pid, &path).is_err() {
+            return None;
         }
 
-        tokio::task::coop::consume_budget().await;
+        Self {
+            env,
+            pid,
+            path,
+            commands,
+            catalog,
+            subs: SubscriptionQueue::new(broadcast, latency),
+        }
+        .run()
+        .await
     }
-}
 
-fn handle_command(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    subs: &mut SubscriptionQueue,
-    command: Option<Command>,
-) -> ControlFlow<ExitReason> {
-    match command {
-        None | Some(Command::Close) => ControlFlow::Break(None),
-        Some(Command::Unsubscribe { token }) => {
-            subs.remove(token);
-            ControlFlow::Continue(())
+    async fn run(mut self) -> ExitReason {
+        loop {
+            let control_flow = match self.next_event().await {
+                Event::Command(command) => self.handle_command(command),
+                Event::Catalog(snapshot) => self.handle_catalog(snapshot),
+                Event::Track(event) => self.handle_track(event),
+            };
+
+            if let ControlFlow::Break(reason) = control_flow {
+                return reason;
+            }
+
+            // needed because kio primitives don't touch the budget.
+            // without this line the loop might not yield to the scheduler,
+            // starving other tasks.
+            tokio::task::coop::consume_budget().await;
         }
-        Some(Command::Subscribe {
-            track,
-            wire_container,
-            token,
-            priority,
-        }) => {
-            match subs
-                .insert(token, track, wire_container, priority)
-                .or_else(|e| messages::send_track_error(env, pid, token, e.to_string()))
-            {
-                Ok(()) => ControlFlow::Continue(()),
-                Err(_pid_dead) => ControlFlow::Break(None),
+    }
+
+    async fn next_event(&mut self) -> Event {
+        kio::wait(|waiter| {
+            if let Poll::Ready(command) = self.commands.poll_pop(waiter) {
+                return Poll::Ready(Event::Command(command));
+            }
+            if let Poll::Ready(snapshot) = self.catalog.poll_next(waiter) {
+                return Poll::Ready(Event::Catalog(snapshot));
+            }
+            self.subs.poll_event(waiter).map(Event::Track)
+        })
+        .await
+    }
+
+    fn handle_command(&mut self, command: Result<Command, kio::Closed>) -> ControlFlow<ExitReason> {
+        match command {
+            Err(kio::Closed) => ControlFlow::Break(None),
+            Ok(Command::Unsubscribe { token }) => {
+                self.subs.remove(token);
+                ControlFlow::Continue(())
+            }
+            Ok(Command::Subscribe {
+                track,
+                wire_container,
+                token,
+                priority,
+            }) => {
+                match self
+                    .subs
+                    .insert(token, track, wire_container, priority)
+                    .or_else(|e| {
+                        messages::send_track_error(&mut self.env, self.pid, token, e.to_string())
+                    }) {
+                    Ok(()) => ControlFlow::Continue(()),
+                    Err(_pid_dead) => ControlFlow::Break(None),
+                }
             }
         }
     }
-}
 
-fn handle_new_catalog(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    path: &str,
-    snapshot: Result<Option<moq_mux::catalog::hang::Catalog>, moq_mux::Error>,
-) -> ControlFlow<ExitReason> {
-    let close_reason = match snapshot {
-        Ok(Some(snapshot)) => match messages::send_catalog(env, pid, path, &snapshot) {
-            Ok(()) => return ControlFlow::Continue(()),
-            Err(messages::PidDead) => return ControlFlow::Break(None),
-        },
-        Ok(None) => "broadcast ended".to_owned(),
-        Err(e) => format!("catalog error: {e}"),
-    };
-    ControlFlow::Break(Some(close_reason))
-}
-
-fn handle_event(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    event: (Token, PollEventResult),
-) -> ControlFlow<ExitReason> {
-    let (token, result) = event;
-    let send_result = match result {
-        PollEventResult::Frame(frame) => messages::send_frame(env, pid, token, frame),
-        PollEventResult::TrackError(reason) => {
-            messages::send_track_error(env, pid, token, reason.to_string())
-        }
-        PollEventResult::TrackFinished => messages::send_track_finished(env, pid, token),
-    };
-    match send_result {
-        Ok(()) => ControlFlow::Continue(()),
-        Err(messages::PidDead) => ControlFlow::Break(None),
+    fn handle_catalog(
+        &mut self,
+        snapshot: Result<Option<moq_mux::catalog::hang::Catalog>, moq_mux::Error>,
+    ) -> ControlFlow<ExitReason> {
+        let close_reason = match snapshot {
+            Ok(Some(snapshot)) => {
+                match messages::send_catalog(&mut self.env, self.pid, &self.path, &snapshot) {
+                    Ok(()) => return ControlFlow::Continue(()),
+                    Err(messages::PidDead) => return ControlFlow::Break(None),
+                }
+            }
+            Ok(None) => "broadcast ended".to_owned(),
+            Err(e) => format!("catalog error: {e}"),
+        };
+        ControlFlow::Break(Some(close_reason))
     }
-}
 
-async fn subscribe_catalog(
-    path: &str,
-    broadcast: &moq_net::broadcast::Consumer,
-) -> Result<moq_mux::catalog::Consumer<()>, moq_mux::Error> {
-    let format = moq_mux::catalog::CatalogFormat::detect(path)
-        .unwrap_or(moq_mux::catalog::CatalogFormat::DEFAULT);
-    moq_mux::catalog::Consumer::new(broadcast, format).await
+    fn handle_track(&mut self, event: (Token, PollEventResult)) -> ControlFlow<ExitReason> {
+        let (token, result) = event;
+        let send_result = match result {
+            PollEventResult::Frame(frame) => {
+                messages::send_frame(&mut self.env, self.pid, token, frame)
+            }
+            PollEventResult::TrackError(reason) => {
+                messages::send_track_error(&mut self.env, self.pid, token, reason.to_string())
+            }
+            PollEventResult::TrackFinished => {
+                messages::send_track_finished(&mut self.env, self.pid, token)
+            }
+        };
+        match send_result {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(messages::PidDead) => ControlFlow::Break(None),
+        }
+    }
 }

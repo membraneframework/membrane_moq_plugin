@@ -44,7 +44,7 @@ impl Drop for Consumer {
 
 impl Consumer {
     pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Duration) -> Self {
-        let origin = session.consume.consume();
+        let origin = session.subscribe.consume();
         let (commands_tx, commands_rx) = mpsc::unbounded_channel::<Command>();
 
         let task = runtime().spawn(async move {

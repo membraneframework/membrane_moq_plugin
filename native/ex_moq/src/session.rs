@@ -12,29 +12,29 @@ use crate::{messages, runtime};
 
 pub(crate) struct Session {
     pub(crate) publish: Producer,
-    pub(crate) consume: Consumer,
+    pub(crate) subscribe: Consumer,
     abort: AbortHandle,
 }
 
 impl Session {
     pub(crate) fn connect(url: Url, pid: LocalPid, disable_tls_verify: bool) -> Self {
-        let outgoing = moq_net::Origin::random().produce();
-        let outgoing_consumer = outgoing.consume();
+        let publish = moq_net::Origin::random().produce();
+        let subscribe = moq_net::Origin::random().produce();
 
-        let incoming = moq_net::Origin::random().produce();
-        let incoming_consumer = incoming.consume();
+        let publish_consumer = publish.consume();
+        let subscribe_consumer = subscribe.consume();
 
         let task = runtime().spawn(run_session(
             url,
             pid,
-            outgoing_consumer,
-            incoming,
+            publish_consumer,
+            subscribe,
             disable_tls_verify,
         ));
 
         Self {
-            publish: outgoing,
-            consume: incoming_consumer,
+            publish,
+            subscribe: subscribe_consumer,
             abort: task.abort_handle(),
         }
     }
@@ -53,12 +53,12 @@ impl Drop for Session {
 async fn run_session(
     url: Url,
     pid: LocalPid,
-    outgoing_consumer: Consumer,
-    incoming: Producer,
+    publish: Consumer,
+    subscribe: Producer,
     disable_tls_verify: bool,
 ) -> Result<(), messages::PidDead> {
     let mut env = OwnedEnv::new();
-    match connect(url, outgoing_consumer, incoming, disable_tls_verify).await {
+    match connect(url, publish, subscribe, disable_tls_verify).await {
         Ok(session) => {
             messages::send_connected(&mut env, pid)?;
 

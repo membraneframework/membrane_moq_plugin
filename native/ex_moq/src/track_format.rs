@@ -1,6 +1,8 @@
 use bytes::Bytes;
 use rustler::{Binary, Env, NewBinary, NifResult, NifStruct, NifTaggedEnum, NifUnitEnum};
 
+pub(crate) struct UnrecognizedContainer;
+
 #[derive(NifUnitEnum, Clone, Copy)]
 pub(crate) enum Container {
     Legacy,
@@ -15,8 +17,6 @@ impl From<Container> for hang::catalog::Container {
         }
     }
 }
-
-pub(crate) struct UnrecognizedContainer;
 
 impl TryFrom<&hang::catalog::Container> for Container {
     type Error = UnrecognizedContainer;
@@ -38,11 +38,30 @@ pub(crate) struct VideoTrackParams {
     pub(crate) framerate: Option<f64>,
 }
 
+impl From<&hang::catalog::VideoConfig> for VideoTrackParams {
+    fn from(config: &hang::catalog::VideoConfig) -> Self {
+        Self {
+            width: config.coded_width,
+            height: config.coded_height,
+            framerate: config.framerate,
+        }
+    }
+}
+
 #[derive(NifStruct, Clone)]
 #[module = "ExMoQ.Native.AudioTrackParams"]
 pub(crate) struct AudioTrackParams {
     pub(crate) sample_rate: u32,
     pub(crate) channels: u32,
+}
+
+impl From<&hang::catalog::AudioConfig> for AudioTrackParams {
+    fn from(config: &hang::catalog::AudioConfig) -> Self {
+        Self {
+            sample_rate: config.sample_rate,
+            channels: config.channel_count,
+        }
+    }
 }
 
 #[derive(NifStruct, Clone)]
@@ -52,6 +71,28 @@ pub(crate) struct H264Codec {
     pub(crate) profile: u8,
     pub(crate) constraints: u8,
     pub(crate) level: u8,
+}
+
+impl From<&hang::catalog::H264> for H264Codec {
+    fn from(codec: &hang::catalog::H264) -> Self {
+        Self {
+            inline: codec.inline,
+            profile: codec.profile,
+            constraints: codec.constraints,
+            level: codec.level,
+        }
+    }
+}
+
+impl From<&H264Codec> for hang::catalog::H264 {
+    fn from(codec: &H264Codec) -> Self {
+        Self {
+            inline: codec.inline,
+            profile: codec.profile,
+            constraints: codec.constraints,
+            level: codec.level,
+        }
+    }
 }
 
 #[derive(NifStruct, Clone)]
@@ -64,6 +105,46 @@ pub(crate) struct H265Codec {
     pub(crate) tier_flag: bool,
     pub(crate) level_idc: u8,
     pub(crate) constraint_flags: Vec<u8>,
+}
+
+impl From<&hang::catalog::H265> for H265Codec {
+    fn from(codec: &hang::catalog::H265) -> Self {
+        Self {
+            in_band: codec.in_band,
+            profile_space: codec.profile_space,
+            profile_idc: codec.profile_idc,
+            profile_compatibility_flags: codec.profile_compatibility_flags.to_vec(),
+            tier_flag: codec.tier_flag,
+            level_idc: codec.level_idc,
+            constraint_flags: codec.constraint_flags.to_vec(),
+        }
+    }
+}
+
+impl TryFrom<H265Codec> for hang::catalog::H265 {
+    type Error = rustler::Error;
+
+    fn try_from(codec: H265Codec) -> NifResult<Self> {
+        let profile_compatibility_flags: [u8; 4] =
+            codec.profile_compatibility_flags.try_into().map_err(|_| {
+                crate::nif_error!("profile_compatibility_flags must be exactly 4 bytes")
+            })?;
+
+        let constraint_flags: [u8; 6] = codec
+            .constraint_flags
+            .try_into()
+            .map_err(|_| crate::nif_error!("constraint_flags must be exactly 6 bytes"))?;
+
+        Ok(Self {
+            in_band: codec.in_band,
+            profile_space: codec.profile_space,
+            profile_idc: codec.profile_idc,
+            profile_compatibility_flags,
+            tier_flag: codec.tier_flag,
+            level_idc: codec.level_idc,
+            constraint_flags,
+        })
+    }
 }
 
 #[derive(NifStruct, Clone)]
@@ -96,50 +177,29 @@ pub(crate) enum TrackFormat<'a> {
 
 impl<'a> TrackFormat<'a> {
     pub(crate) fn from_video(env: Env<'a>, config: &hang::catalog::VideoConfig) -> Self {
-        // Decoder configuration record (avcC/hvcC), empty when carried in-band.
         let dcr = config.description.as_deref().unwrap_or_default();
         let mut description = NewBinary::new(env, dcr.len());
         description.as_mut_slice().copy_from_slice(dcr);
-
-        let params = VideoTrackParams {
-            width: config.coded_width,
-            height: config.coded_height,
-            framerate: config.framerate,
-        };
+        let description = description.into();
+        let params = config.into();
 
         match &config.codec {
-            hang::catalog::VideoCodec::H264(h) => Self::H264 {
+            hang::catalog::VideoCodec::H264(codec) => Self::H264 {
                 params,
-                description: description.into(),
-                codec: H264Codec {
-                    inline: h.inline,
-                    profile: h.profile,
-                    constraints: h.constraints,
-                    level: h.level,
-                },
+                description,
+                codec: codec.into(),
             },
-            hang::catalog::VideoCodec::H265(h) => Self::H265 {
+            hang::catalog::VideoCodec::H265(codec) => Self::H265 {
                 params,
-                description: description.into(),
-                codec: H265Codec {
-                    in_band: h.in_band,
-                    profile_space: h.profile_space,
-                    profile_idc: h.profile_idc,
-                    profile_compatibility_flags: h.profile_compatibility_flags.to_vec(),
-                    tier_flag: h.tier_flag,
-                    level_idc: h.level_idc,
-                    constraint_flags: h.constraint_flags.to_vec(),
-                },
+                description,
+                codec: codec.into(),
             },
             _ => Self::Unrecognized,
         }
     }
 
     pub(crate) fn from_audio(config: &hang::catalog::AudioConfig) -> Self {
-        let params = AudioTrackParams {
-            sample_rate: config.sample_rate,
-            channels: config.channel_count,
-        };
+        let params = config.into();
 
         match &config.codec {
             hang::catalog::AudioCodec::AAC(aac) => Self::Aac {
@@ -194,20 +254,20 @@ impl TryFrom<TrackFormat<'_>> for TrackConfig {
                 params,
                 description,
                 codec,
-            } => Self::Video(VideoFormat(h264_video_config(
+            } => Self::Video(VideoFormat(video_config(
+                hang::catalog::VideoCodec::H264((&codec).into()),
                 &params,
                 description.as_slice(),
-                &codec,
             ))),
             TrackFormat::H265 {
                 params,
                 description,
                 codec,
-            } => Self::Video(VideoFormat(h265_video_config(
+            } => Self::Video(VideoFormat(video_config(
+                hang::catalog::VideoCodec::H265(codec.try_into()?),
                 &params,
                 description.as_slice(),
-                codec,
-            )?)),
+            ))),
             TrackFormat::Aac { params, codec } => Self::Audio(AudioFormat(aac_audio_config(
                 codec.profile,
                 params.sample_rate,
@@ -230,63 +290,18 @@ impl TryFrom<TrackFormat<'_>> for TrackConfig {
     }
 }
 
-fn h264_video_config(
-    video_params: &VideoTrackParams,
+fn video_config(
+    codec: hang::catalog::VideoCodec,
+    params: &VideoTrackParams,
     dcr: &[u8],
-    codec: &H264Codec,
 ) -> hang::catalog::VideoConfig {
-    let codec = hang::catalog::VideoCodec::H264(hang::catalog::H264 {
-        inline: codec.inline,
-        profile: codec.profile,
-        constraints: codec.constraints,
-        level: codec.level,
-    });
-
-    let description = (!dcr.is_empty()).then(|| Bytes::copy_from_slice(dcr));
-
-    create_video_config(
-        codec,
-        video_params.width,
-        video_params.height,
-        video_params.framerate,
-        description,
-    )
-}
-
-fn h265_video_config(
-    video_params: &VideoTrackParams,
-    dcr: &[u8],
-    codec: H265Codec,
-) -> NifResult<hang::catalog::VideoConfig> {
-    let profile_compatibility_flags: [u8; 4] = codec
-        .profile_compatibility_flags
-        .try_into()
-        .map_err(|_| crate::nif_error!("profile_compatibility_flags must be exactly 4 bytes"))?;
-
-    let constraint_flags: [u8; 6] = codec
-        .constraint_flags
-        .try_into()
-        .map_err(|_| crate::nif_error!("constraint_flags must be exactly 6 bytes"))?;
-
-    let codec = hang::catalog::VideoCodec::H265(hang::catalog::H265 {
-        in_band: codec.in_band,
-        profile_space: codec.profile_space,
-        profile_idc: codec.profile_idc,
-        profile_compatibility_flags,
-        tier_flag: codec.tier_flag,
-        level_idc: codec.level_idc,
-        constraint_flags,
-    });
-
-    let description = (!dcr.is_empty()).then(|| Bytes::copy_from_slice(dcr));
-
-    Ok(create_video_config(
-        codec,
-        video_params.width,
-        video_params.height,
-        video_params.framerate,
-        description,
-    ))
+    let mut config = hang::catalog::VideoConfig::new(codec);
+    config.description = (!dcr.is_empty()).then(|| Bytes::copy_from_slice(dcr));
+    config.coded_width = params.width;
+    config.coded_height = params.height;
+    config.framerate = params.framerate;
+    config.optimize_for_latency = Some(true);
+    config
 }
 
 fn aac_audio_config(profile: u8, sample_rate: u32, channels: u32) -> hang::catalog::AudioConfig {
@@ -304,21 +319,5 @@ fn aac_audio_config(profile: u8, sample_rate: u32, channels: u32) -> hang::catal
         .encode(),
     );
 
-    config
-}
-
-fn create_video_config(
-    codec: hang::catalog::VideoCodec,
-    width: Option<u32>,
-    height: Option<u32>,
-    framerate: Option<f64>,
-    description: Option<Bytes>,
-) -> hang::catalog::VideoConfig {
-    let mut config = hang::catalog::VideoConfig::new(codec);
-    config.description = description;
-    config.coded_width = width;
-    config.coded_height = height;
-    config.framerate = framerate;
-    config.optimize_for_latency = Some(true);
     config
 }

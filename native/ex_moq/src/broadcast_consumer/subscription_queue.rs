@@ -44,10 +44,10 @@ enum Step {
     Err(QueueError),
 }
 
-pub(super) enum PollEventResult {
+pub(super) enum TrackResult {
     Frame(Frame),
-    TrackFinished,
-    TrackError(TrackError),
+    Finished,
+    Err(TrackError),
 }
 
 struct Entry {
@@ -106,7 +106,7 @@ impl SubscriptionQueue {
         self.entries.retain(|entry| entry.token != target);
     }
 
-    pub(super) fn poll_event(&mut self, waiter: &kio::Waiter) -> Poll<(Token, PollEventResult)> {
+    pub(super) fn poll_event(&mut self, waiter: &kio::Waiter) -> Poll<(Token, TrackResult)> {
         for _ in 0..self.entries.len() {
             let entry = self.entries.pop_front().expect("Queue should be non-empty");
 
@@ -116,15 +116,15 @@ impl SubscriptionQueue {
                 }
                 Step::Yield(frame, state) => {
                     self.entries.push_back(Entry { state, ..entry });
-                    return Poll::Ready((entry.token, PollEventResult::Frame(frame)));
+                    return Poll::Ready((entry.token, TrackResult::Frame(frame)));
                 }
                 Step::Finished => {
-                    return Poll::Ready((entry.token, PollEventResult::TrackFinished));
+                    return Poll::Ready((entry.token, TrackResult::Finished));
                 }
                 Step::Err(source) => {
                     return Poll::Ready((
                         entry.token,
-                        PollEventResult::TrackError(TrackError {
+                        TrackResult::Err(TrackError {
                             track: entry.track,
                             source,
                         }),

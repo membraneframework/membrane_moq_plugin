@@ -15,7 +15,7 @@ use crate::runtime;
 use crate::session::Session;
 use crate::track_format::WireContainer;
 
-use subscription_queue::{PollEventResult, SubscriptionQueue};
+use subscription_queue::{SubscriptionQueue, TrackResult};
 
 type ExitReason = Option<String>;
 
@@ -117,7 +117,7 @@ pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Dur
 enum Event {
     Command(Result<Command, kio::Closed>),
     Catalog(Result<Option<moq_mux::catalog::hang::Catalog>, moq_mux::Error>),
-    Track((Token, PollEventResult)),
+    Track(Token, TrackResult),
 }
 
 struct Driver {
@@ -172,7 +172,7 @@ impl Driver {
             let control_flow = match self.next_event().await {
                 Event::Command(command) => self.handle_command(command),
                 Event::Catalog(snapshot) => self.handle_catalog(snapshot),
-                Event::Track(event) => self.handle_track(event),
+                Event::Track(token, result) => self.handle_track(token, result),
             };
 
             if let ControlFlow::Break(reason) = control_flow {
@@ -194,7 +194,9 @@ impl Driver {
             if let Poll::Ready(snapshot) = self.catalog.poll_next(waiter) {
                 return Poll::Ready(Event::Catalog(snapshot));
             }
-            self.subs.poll_event(waiter).map(Event::Track)
+            self.subs
+                .poll_event(waiter)
+                .map(|(token, result)| Event::Track(token, result))
         })
         .await
     }
@@ -242,18 +244,15 @@ impl Driver {
         ControlFlow::Break(Some(close_reason))
     }
 
-    fn handle_track(&mut self, event: (Token, PollEventResult)) -> ControlFlow<ExitReason> {
-        let (token, result) = event;
+    fn handle_track(&mut self, token: Token, result: TrackResult) -> ControlFlow<ExitReason> {
         let send_result = match result {
-            PollEventResult::Frame(frame) => {
+            TrackResult::Frame(frame) => {
                 messages::send_frame(&mut self.env, self.pid, token, frame)
             }
-            PollEventResult::TrackError(reason) => {
+            TrackResult::Err(reason) => {
                 messages::send_track_error(&mut self.env, self.pid, token, reason.to_string())
             }
-            PollEventResult::TrackFinished => {
-                messages::send_track_finished(&mut self.env, self.pid, token)
-            }
+            TrackResult::Finished => messages::send_track_finished(&mut self.env, self.pid, token),
         };
         match send_result {
             Ok(()) => ControlFlow::Continue(()),

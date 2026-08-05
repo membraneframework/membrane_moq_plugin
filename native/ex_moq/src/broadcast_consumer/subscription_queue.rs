@@ -25,9 +25,9 @@ enum Subscription {
 #[derive(Debug, thiserror::Error)]
 enum QueueError {
     #[error("subscribe failed: {0}")]
-    Pending(#[from] hang::moq_net::Error),
+    SubscribeFailed(#[from] hang::moq_net::Error),
     #[error("track read failed: {0}")]
-    Streaming(#[from] moq_mux::Error),
+    ReadFailed(#[from] moq_mux::Error),
 }
 
 #[derive(Debug, thiserror::Error)]

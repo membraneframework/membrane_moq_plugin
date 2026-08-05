@@ -1,6 +1,9 @@
 defmodule ExMoQ.Native do
   @moduledoc """
   Elixir bindings to moq-net's native Rust API
+
+  Producer NIFs return `{:error, :producer_poisoned}` when an earlier call
+  panicked mid-operation, leaving the broadcast producer unusable.
   """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "ex_moq"
 
@@ -105,12 +108,6 @@ defmodule ExMoQ.Native do
           | {:opus, %{params: WebCodecs.AudioTrackParams.t()}}
           | :unrecognized
 
-  @typedoc """
-  Error returned by producer NIFs when an earlier call panicked mid-operation,
-  leaving the broadcast producer unusable.
-  """
-  @type poisoned :: :producer_poisoned
-
   @doc """
   Adds a track of any supported codec to the given broadcast.
   Frames are then sent with `send_frame/5` under the same track name.
@@ -134,7 +131,7 @@ defmodule ExMoQ.Native do
           0..255,
           container(),
           non_neg_integer()
-        ) :: :ok | {:error, :track_already_exists | poisoned() | (reason :: String.t())}
+        ) :: :ok | {:error, :track_already_exists | :producer_poisoned | (reason :: String.t())}
   def add_track(_broadcast_producer, _track, _format, _priority, _container, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -147,7 +144,9 @@ defmodule ExMoQ.Native do
   The track's media kind (audio/video) cannot change.
   """
   @spec update_track(broadcast_producer(), track(), track_format()) ::
-          :ok | {:error, :unknown_track | :kind_mismatch | poisoned() | (reason :: String.t())}
+          :ok
+          | {:error,
+             :unknown_track | :kind_mismatch | :producer_poisoned | (reason :: String.t())}
   def update_track(_broadcast_producer, _track, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -162,7 +161,7 @@ defmodule ExMoQ.Native do
   @spec send_frame(broadcast_producer(), track(), non_neg_integer(), boolean(), binary()) ::
           :ok
           | :missing_keyframe
-          | {:error, :unknown_track | poisoned() | (reason :: String.t())}
+          | {:error, :unknown_track | :producer_poisoned | (reason :: String.t())}
   def send_frame(_broadcast_producer, _track, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -170,7 +169,7 @@ defmodule ExMoQ.Native do
   Closes the broadcast's track named `track`, removing its rendition from the
   catalog and finishing the underlying moq-lite track. Idempotent.
   """
-  @spec remove_track(broadcast_producer(), track()) :: :ok | {:error, poisoned()}
+  @spec remove_track(broadcast_producer(), track()) :: :ok | {:error, :producer_poisoned}
   def remove_track(_broadcast_producer, _track),
     do: :erlang.nif_error(:nif_not_loaded)
 

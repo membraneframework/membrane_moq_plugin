@@ -16,7 +16,7 @@ mod track_format;
 
 use broadcast_producer::{AddTrackError, UpdateTrackError, WriteFrameError};
 use messages::Token;
-use track_format::{Container, ContainerPair, TrackConfig, TrackFormat};
+use track_format::{Container, ContainerPair, PartialTrackConfig, TrackFormat};
 
 macro_rules! nif_error {
     ($fmt:literal $($arg:tt)*) => {
@@ -133,7 +133,7 @@ fn add_track(
     latency_ns: u64,
 ) -> NifResult<Atom> {
     let containers = ContainerPair::from(container);
-    let config = TrackConfig::try_from(format)?;
+    let config = PartialTrackConfig::try_from(format)?;
     let latency = Duration::from_nanos(latency_ns);
 
     lock_producer(&broadcast)?
@@ -152,7 +152,7 @@ fn update_track(
     track: &str,
     format: TrackFormat,
 ) -> NifResult<Atom> {
-    let config = TrackConfig::try_from(format)?;
+    let config = PartialTrackConfig::try_from(format)?;
 
     lock_producer(&broadcast)?
         .update_track(track, config)

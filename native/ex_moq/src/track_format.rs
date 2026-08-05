@@ -228,9 +228,9 @@ impl<'a> TrackFormat<'a> {
     }
 }
 
-pub(crate) struct VideoFormat(hang::catalog::VideoConfig);
+pub(crate) struct PartialVideoConfig(hang::catalog::VideoConfig);
 
-impl VideoFormat {
+impl PartialVideoConfig {
     pub(crate) fn with_container(
         self,
         container: hang::catalog::Container,
@@ -241,9 +241,9 @@ impl VideoFormat {
     }
 }
 
-pub(crate) struct AudioFormat(hang::catalog::AudioConfig);
+pub(crate) struct PartialAudioConfig(hang::catalog::AudioConfig);
 
-impl AudioFormat {
+impl PartialAudioConfig {
     pub(crate) fn with_container(
         self,
         container: hang::catalog::Container,
@@ -254,12 +254,24 @@ impl AudioFormat {
     }
 }
 
-pub(crate) enum TrackConfig {
-    Video(VideoFormat),
-    Audio(AudioFormat),
+// hang::catalog::*Config types contain both
+// track format (may change throughout track's lifetime)
+// and container (can't change),
+// while ex_moq tries to distinguish them.
+//
+// Unfortunately, the catalog API happily accepts a config
+// with a container different from the old one,
+// so we need to ensure it doesn't happen manually.
+//
+// These wrapper types are supposed to help with this,
+// only giving back a hang config when a container is supplied,
+// which the format update NIF omits deliberately.
+pub(crate) enum PartialTrackConfig {
+    Video(PartialVideoConfig),
+    Audio(PartialAudioConfig),
 }
 
-impl TryFrom<TrackFormat<'_>> for TrackConfig {
+impl TryFrom<TrackFormat<'_>> for PartialTrackConfig {
     type Error = rustler::Error;
 
     fn try_from(format: TrackFormat<'_>) -> NifResult<Self> {
@@ -268,7 +280,7 @@ impl TryFrom<TrackFormat<'_>> for TrackConfig {
                 params,
                 description,
                 codec,
-            } => Self::Video(VideoFormat(video_config(
+            } => Self::Video(PartialVideoConfig(video_config(
                 hang::catalog::VideoCodec::H264((&codec).into()),
                 &params,
                 description.as_slice(),
@@ -277,18 +289,16 @@ impl TryFrom<TrackFormat<'_>> for TrackConfig {
                 params,
                 description,
                 codec,
-            } => Self::Video(VideoFormat(video_config(
+            } => Self::Video(PartialVideoConfig(video_config(
                 hang::catalog::VideoCodec::H265(codec.try_into()?),
                 &params,
                 description.as_slice(),
             ))),
-            TrackFormat::Aac { params, codec } => Self::Audio(AudioFormat(aac_audio_config(
-                codec.profile,
-                params.sample_rate,
-                params.channels,
-            ))),
+            TrackFormat::Aac { params, codec } => Self::Audio(PartialAudioConfig(
+                aac_audio_config(codec.profile, params.sample_rate, params.channels),
+            )),
             TrackFormat::Opus { params } => {
-                Self::Audio(AudioFormat(hang::catalog::AudioConfig::new(
+                Self::Audio(PartialAudioConfig(hang::catalog::AudioConfig::new(
                     hang::catalog::AudioCodec::Opus,
                     params.sample_rate,
                     params.channels,

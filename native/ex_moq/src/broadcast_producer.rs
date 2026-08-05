@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::time::Duration;
 
-use crate::track_format::{ContainerPair, TrackConfig, WireContainer};
+use crate::track_format::{ContainerPair, PartialTrackConfig, WireContainer};
 use crate::{runtime, session::Session};
 
 struct KindMismatch;
@@ -18,30 +18,30 @@ impl Rendition {
     fn new(
         catalog: &moq_mux::catalog::Producer,
         name: &str,
-        config: TrackConfig,
+        config: PartialTrackConfig,
         container: hang::catalog::Container,
     ) -> Self {
         match config {
-            TrackConfig::Video(format) => {
+            PartialTrackConfig::Video(partial) => {
                 let mut handle = catalog.reserve().init(name);
-                handle.set(format.with_container(container));
+                handle.set(partial.with_container(container));
                 Self::Video(handle)
             }
-            TrackConfig::Audio(format) => {
+            PartialTrackConfig::Audio(partial) => {
                 let mut handle = catalog.reserve().init(name);
-                handle.set(format.with_container(container));
+                handle.set(partial.with_container(container));
                 Self::Audio(handle)
             }
         }
     }
 
-    fn set(&mut self, format: TrackConfig) -> Result<(), KindMismatch> {
-        match (self, format) {
-            (Self::Video(handle), TrackConfig::Video(format)) => {
-                handle.update(|config| *config = format.with_container(config.container.clone()));
+    fn set(&mut self, config: PartialTrackConfig) -> Result<(), KindMismatch> {
+        match (self, config) {
+            (Self::Video(handle), PartialTrackConfig::Video(partial)) => {
+                handle.update(|config| *config = partial.with_container(config.container.clone()));
             }
-            (Self::Audio(handle), TrackConfig::Audio(format)) => {
-                handle.update(|config| *config = format.with_container(config.container.clone()));
+            (Self::Audio(handle), PartialTrackConfig::Audio(partial)) => {
+                handle.update(|config| *config = partial.with_container(config.container.clone()));
             }
             (_, _) => return Err(KindMismatch),
         }
@@ -130,7 +130,7 @@ impl Producer {
     pub(crate) fn add_track(
         &mut self,
         track: String,
-        config: TrackConfig,
+        config: PartialTrackConfig,
         containers: ContainerPair,
         priority: u8,
         latency: Duration,
@@ -158,7 +158,7 @@ impl Producer {
     pub(crate) fn update_track(
         &mut self,
         track: &str,
-        config: TrackConfig,
+        config: PartialTrackConfig,
     ) -> Result<(), UpdateTrackError> {
         self.tracks
             .get_mut(track)
@@ -213,7 +213,7 @@ impl Producer {
         broadcast: &mut moq_net::broadcast::Producer,
         catalog: &moq_mux::catalog::Producer,
         track: &str,
-        config: TrackConfig,
+        config: PartialTrackConfig,
         containers: ContainerPair,
         priority: u8,
         latency: Duration,

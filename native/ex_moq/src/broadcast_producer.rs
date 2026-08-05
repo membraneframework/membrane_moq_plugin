@@ -63,7 +63,7 @@ pub(crate) enum CreateError {
         path: String,
         source: moq_net::Error,
     },
-    #[error("CatalogProducer::new failed: {0}")]
+    #[error("catalog::Producer::new failed: {0}")]
     Catalog(moq_net::Error),
 }
 

@@ -130,7 +130,6 @@ fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) ->
 fn add_track(
     producer: ResourceArc<BroadcastProducerResource>,
     track: String,
-    // TODO: these should be folded into a struct which may be extended in the future
     format: TrackFormat,
     priority: u8,
     container: Container,

@@ -31,10 +31,9 @@ impl Drop for CloseGuard {
     fn drop(&mut self) {
         self.commands.close();
 
-        let Some(reason) = self.reason.take() else {
-            return;
+        if let Some(reason) = self.reason.take() {
+            let _ = messages::send_broadcast_closed(&mut self.env, self.pid, &self.path, reason);
         };
-        let _ = messages::send_broadcast_closed(&mut self.env, self.pid, &self.path, reason);
     }
 }
 

@@ -96,11 +96,13 @@ defmodule ExMoQ.Native do
 
   Builds the origins synchronously so subsequent NIFs can
   create broadcast producers and consumers immediately.
-  The QUIC handshake completes asynchronously:
-  - `:moq_connected` is sent to `pid` once the session is up.
-  - `{:moq_setup_failed, reason :: String.t()}` is sent if establishing the
-    connection fails, e.g. due to timeout.
-  - `{:moq_disconnected, reason :: String.t()}` is sent if the session terminates unexpectedly.
+  The QUIC handshake completes asynchronously. Sends to `pid`:
+    * `:moq_connected`
+        once the session is up
+    * `{:moq_setup_failed, reason :: String.t()}`
+        if establishing the connection fails, e.g. due to timeout
+    * `{:moq_disconnected, reason :: String.t()}`
+        if the session terminates unexpectedly
   """
   @spec create_session(String.t(), pid(), boolean()) ::
           {:ok, session()} | {:error, reason :: String.t()}
@@ -232,13 +234,12 @@ defmodule ExMoQ.Native do
   `latency_ns` is how long each track buffers received frames before emitting
   them, in nanoseconds, trading delay for resilience to jitter and reordering.
 
-  Sends the following messages to `pid`:
+  Sends to `pid`:
     * `{:moq_broadcast_ready, path :: String.t()}`
         once the broadcast is announced and its catalog is subscribed
     * `{:moq_broadcast_closed, path :: String.t(), reason :: close_reason()}`
         when the broadcast ends, errors, or the session closes underneath it
-    * `{:moq_catalog, path :: String.t(),
-          renditions :: [{track(), rendition()}]}`
+    * `{:moq_catalog, path :: String.t(), renditions :: [{track(), rendition()}]}`
         with the full catalog snapshot, once the broadcast is announced
         and again on every catalog update.
         Diffing consecutive snapshots is the caller's job:
@@ -267,12 +268,13 @@ defmodule ExMoQ.Native do
   Waiting until the catalog advertises a track is the caller's job (watch `:moq_catalog`).
 
   Sends to the consumer's `pid`:
-    * `{:moq_frame, token(), payload :: binary(), timestamp_ns :: integer(), keyframe? :: boolean()}`
-      for every received frame
-    * `{:moq_track_finished, token()}` when the wire track finishes
+    * `{:moq_frame, token(), binary(), timestamp_ns :: non_neg_integer(), keyframe? :: boolean()}`
+        for every received frame
+    * `{:moq_track_finished, token()}`
+        when the wire track finishes
     * `{:moq_track_error, token(), reason :: String.t()}`
-      when the subscription fails on the native side
-      while the track may still be advertised in the catalog
+        when the subscription fails on the native side
+        while the track may still be advertised in the catalog
   """
   @spec subscribe_track(broadcast_consumer(), track(), container() | nil, token(), 0..255) ::
           :ok | {:error, :unrecognized_container | :consumer_closed}
@@ -289,6 +291,10 @@ defmodule ExMoQ.Native do
 
   @doc """
   Tears down a broadcast consumer and all its track subscriptions. Idempotent.
+
+  A broadcast consumer that is garbage-collected without an explicit close
+  is aborted instead, and a final `{:moq_broadcast_closed, path, reason}`
+  reports `:crashed` rather than a clean `:ended`.
   """
   @spec close_broadcast_consumer(broadcast_consumer()) :: :ok
   def close_broadcast_consumer(_broadcast_consumer), do: :erlang.nif_error(:nif_not_loaded)

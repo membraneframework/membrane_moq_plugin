@@ -149,12 +149,14 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_info({:moq_setup_failed, reason}, _ctx, _state),
-    do: raise("MoQ session setup failed with reason: #{inspect(reason)}")
+  def handle_info({:moq_setup_failed, reason}, _ctx, _state) do
+    raise "MoQ session setup failed with reason: #{inspect(reason)}"
+  end
 
   @impl true
-  def handle_info({:moq_disconnected, reason}, _ctx, %State{producer: nil}),
-    do: raise("MoQ session closed during setup with reason: #{inspect(reason)}")
+  def handle_info({:moq_disconnected, reason}, _ctx, %State{producer: nil}) do
+    raise "MoQ session closed during setup with reason: #{inspect(reason)}"
+  end
 
   @impl true
   def handle_info({:moq_disconnected, reason}, _ctx, state) do

@@ -43,6 +43,7 @@ pub(crate) mod atoms {
         moq_unrecognized_container,
         moq_track_already_exists,
         moq_unknown_track,
+        moq_kind_mismatch,
         moq_setup_failed,
         moq_disconnected,
         moq_track_error,
@@ -157,7 +158,7 @@ fn update_track(
         .update_track(track, config)
         .map_err(|e| match e {
             UpdateTrackError::UnknownTrack => nif_error!(atoms::moq_unknown_track()),
-            other => nif_error!("{other}"),
+            UpdateTrackError::KindMismatch => nif_error!(atoms::moq_kind_mismatch()),
         })?;
 
     Ok(ok())

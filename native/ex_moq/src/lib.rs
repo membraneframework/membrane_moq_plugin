@@ -31,22 +31,25 @@ pub(crate) use nif_error;
 
 pub(crate) mod atoms {
     rustler::atoms! {
+        // tagged atoms used in messages
         moq_connected,
         moq_broadcast_ready,
         moq_frame,
         moq_catalog,
         moq_track_finished,
-        moq_missing_keyframe,
         moq_broadcast_closed,
-        moq_producer_poisoned,
-        moq_consumer_closed,
-        moq_unrecognized_container,
-        moq_track_already_exists,
-        moq_unknown_track,
-        moq_kind_mismatch,
         moq_setup_failed,
         moq_disconnected,
         moq_track_error,
+
+        // atoms for synchronous error reports
+        missing_keyframe,
+        producer_poisoned,
+        consumer_closed,
+        unrecognized_container,
+        track_already_exists,
+        unknown_track,
+        kind_mismatch,
     }
 }
 
@@ -139,7 +142,7 @@ fn add_track(
     lock_producer(&broadcast)?
         .add_track(track, config, containers, priority, latency)
         .map_err(|e| match e {
-            AddTrackError::AlreadyExists => nif_error!(atoms::moq_track_already_exists()),
+            AddTrackError::AlreadyExists => nif_error!(atoms::track_already_exists()),
             other => nif_error!("{other}"),
         })?;
 
@@ -157,8 +160,8 @@ fn update_track(
     lock_producer(&broadcast)?
         .update_track(track, config)
         .map_err(|e| match e {
-            UpdateTrackError::UnknownTrack => nif_error!(atoms::moq_unknown_track()),
-            UpdateTrackError::KindMismatch => nif_error!(atoms::moq_kind_mismatch()),
+            UpdateTrackError::UnknownTrack => nif_error!(atoms::unknown_track()),
+            UpdateTrackError::KindMismatch => nif_error!(atoms::kind_mismatch()),
         })?;
 
     Ok(ok())
@@ -184,8 +187,8 @@ fn send_frame(
 
     match lock_producer(&broadcast)?.write_frame(track, frame) {
         Ok(()) => Ok(ok()),
-        Err(WriteFrameError::MissingKeyframe) => Ok(atoms::moq_missing_keyframe()),
-        Err(WriteFrameError::UnknownTrack) => Err(nif_error!(atoms::moq_unknown_track())),
+        Err(WriteFrameError::MissingKeyframe) => Ok(atoms::missing_keyframe()),
+        Err(WriteFrameError::UnknownTrack) => Err(nif_error!(atoms::unknown_track())),
         Err(e) => Err(nif_error!("{e}")),
     }
 }
@@ -221,13 +224,13 @@ fn subscribe_track(
     token: Token,
     priority: u8,
 ) -> NifResult<Atom> {
-    let container = container.ok_or_else(|| nif_error!(atoms::moq_unrecognized_container()))?;
+    let container = container.ok_or_else(|| nif_error!(atoms::unrecognized_container()))?;
     let containers = ContainerPair::from(container);
 
     consumer
         .0
         .subscribe(track, containers.wire, token, priority)
-        .map_err(|_closed| nif_error!(atoms::moq_consumer_closed()))?;
+        .map_err(|_closed| nif_error!(atoms::consumer_closed()))?;
 
     Ok(ok())
 }
@@ -250,7 +253,7 @@ fn lock_producer(
     resource
         .0
         .lock()
-        .map_err(|_poison| nif_error!(atoms::moq_producer_poisoned()))
+        .map_err(|_poison| nif_error!(atoms::producer_poisoned()))
 }
 
 rustler::init!("Elixir.ExMoQ.Native");

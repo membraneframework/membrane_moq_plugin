@@ -149,7 +149,7 @@ defmodule ExMoQ.Native do
   Error returned by producer NIFs when an earlier call panicked mid-operation,
   leaving the broadcast producer unusable.
   """
-  @type poisoned :: :moq_producer_poisoned
+  @type poisoned :: :producer_poisoned
 
   @doc """
   Adds a track of any supported codec to the given broadcast.
@@ -174,7 +174,7 @@ defmodule ExMoQ.Native do
           0..255,
           container(),
           non_neg_integer()
-        ) :: :ok | {:error, :moq_track_already_exists | poisoned() | (reason :: String.t())}
+        ) :: :ok | {:error, :track_already_exists | poisoned() | (reason :: String.t())}
   def add_track(_broadcast_producer, _track, _format, _priority, _container, _latency_ns),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -187,7 +187,7 @@ defmodule ExMoQ.Native do
   The track's media kind (audio/video) cannot change.
   """
   @spec update_track(broadcast_producer(), track(), track_format()) ::
-          :ok | {:error, :moq_unknown_track | poisoned() | (reason :: String.t())}
+          :ok | {:error, :unknown_track | :kind_mismatch | poisoned() | (reason :: String.t())}
   def update_track(_broadcast_producer, _track, _format),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -201,8 +201,8 @@ defmodule ExMoQ.Native do
   """
   @spec send_frame(broadcast_producer(), track(), non_neg_integer(), boolean(), binary()) ::
           :ok
-          | :moq_missing_keyframe
-          | {:error, :moq_unknown_track | poisoned() | (reason :: String.t())}
+          | :missing_keyframe
+          | {:error, :unknown_track | poisoned() | (reason :: String.t())}
   def send_frame(_broadcast_producer, _track, _timestamp_ns, _keyframe?, _data),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -257,6 +257,7 @@ defmodule ExMoQ.Native do
   `token` (see `t:token/0`) lets the caller route this track's messages
   to the originating subscription.
   Keep tokens unique across all broadcast consumers reporting to the same pid.
+  Don't reuse tokens.
 
   The subscription is immediate:
   a track the broadcast does not carry fails asynchronously with `:moq_track_error`.
@@ -271,7 +272,7 @@ defmodule ExMoQ.Native do
       while the track may still be advertised in the catalog
   """
   @spec subscribe_track(broadcast_consumer(), track(), container() | nil, token(), 0..255) ::
-          :ok | {:error, :moq_unrecognized_container | :moq_consumer_closed}
+          :ok | {:error, :unrecognized_container | :consumer_closed}
   def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)
 

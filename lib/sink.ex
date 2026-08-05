@@ -200,7 +200,7 @@ defmodule Membrane.MoQ.Sink do
         :ok ->
           state
 
-        :moq_missing_keyframe ->
+        :missing_keyframe ->
           if pad in state.missing_keyframe_logged? do
             state
           else

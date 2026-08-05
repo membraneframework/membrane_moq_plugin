@@ -1,7 +1,4 @@
-use hang::moq_net::{
-    self,
-    origin::{Consumer, Producer},
-};
+use hang::moq_net::{self, origin};
 
 use moq_native::ClientConfig;
 use rustler::{LocalPid, OwnedEnv};
@@ -11,8 +8,8 @@ use url::Url;
 use crate::{messages, runtime};
 
 pub(crate) struct Session {
-    pub(crate) publish: Producer,
-    pub(crate) subscribe: Consumer,
+    pub(crate) publish: origin::Producer,
+    pub(crate) subscribe: origin::Consumer,
     abort: AbortHandle,
 }
 
@@ -53,8 +50,8 @@ impl Drop for Session {
 async fn run_session(
     url: Url,
     pid: LocalPid,
-    publish: Consumer,
-    subscribe: Producer,
+    publish: origin::Consumer,
+    subscribe: origin::Producer,
     disable_tls_verify: bool,
 ) -> Result<(), messages::PidDead> {
     let mut env = OwnedEnv::new();
@@ -71,10 +68,10 @@ async fn run_session(
 
 async fn connect(
     url: Url,
-    publish: Consumer,
-    subscribe: Producer,
+    publish: origin::Consumer,
+    subscribe: origin::Producer,
     disable_tls_verify: bool,
-) -> Result<hang::moq_net::Session, moq_native::Error> {
+) -> Result<moq_net::Session, moq_native::Error> {
     let mut config = ClientConfig::default();
     config.tls.disable_verify = Some(disable_tls_verify);
 

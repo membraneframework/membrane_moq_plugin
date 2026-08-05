@@ -17,13 +17,19 @@ use crate::track_format::WireContainer;
 
 use subscription_queue::{SubscriptionQueue, TrackResult};
 
-type ExitReason = Option<String>;
+#[derive(rustler::NifTaggedEnum)]
+pub(crate) enum CloseReason {
+    Ended,
+    NotAnnounced,
+    Crashed,
+    CatalogError(String),
+}
 
 struct CloseGuard {
     env: OwnedEnv,
     pid: LocalPid,
     path: String,
-    reason: ExitReason,
+    reason: Option<CloseReason>,
     commands: kio::Queue<Command>,
 }
 
@@ -100,7 +106,8 @@ pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Dur
                 env: OwnedEnv::new(),
                 pid,
                 path: path.clone(),
-                reason: Some("consumer task died unexpectedly".to_string()),
+                // default exit reason that gets reported on Driver panic
+                reason: Some(CloseReason::Crashed),
                 commands: commands.clone(),
             };
 
@@ -136,18 +143,16 @@ impl Driver {
         pid: LocalPid,
         latency: Duration,
         commands: kio::Queue<Command>,
-    ) -> ExitReason {
+    ) -> Option<CloseReason> {
         let Some(broadcast) = origin.announced_broadcast(&path).await else {
-            return Some(format!(
-                "broadcast {path:?} was not announced before the session closed"
-            ));
+            return Some(CloseReason::NotAnnounced);
         };
 
         let format = moq_mux::catalog::CatalogFormat::detect(&path)
             .unwrap_or(moq_mux::catalog::CatalogFormat::DEFAULT);
         let catalog = match moq_mux::catalog::Consumer::new(&broadcast, format).await {
             Ok(catalog) => catalog,
-            Err(e) => return Some(e.to_string()),
+            Err(e) => return Some(CloseReason::CatalogError(e.to_string())),
         };
 
         let mut env = OwnedEnv::new();
@@ -167,7 +172,7 @@ impl Driver {
         .await
     }
 
-    async fn run(mut self) -> ExitReason {
+    async fn run(mut self) -> Option<CloseReason> {
         loop {
             let control_flow = match self.next_event().await {
                 Event::Command(command) => self.handle_command(command),
@@ -201,7 +206,10 @@ impl Driver {
         .await
     }
 
-    fn handle_command(&mut self, command: Result<Command, kio::Closed>) -> ControlFlow<ExitReason> {
+    fn handle_command(
+        &mut self,
+        command: Result<Command, kio::Closed>,
+    ) -> ControlFlow<Option<CloseReason>> {
         match command {
             Err(kio::Closed) => ControlFlow::Break(None),
             Ok(Command::Unsubscribe { token }) => {
@@ -230,7 +238,7 @@ impl Driver {
     fn handle_catalog(
         &mut self,
         snapshot: Result<Option<moq_mux::catalog::hang::Catalog>, moq_mux::Error>,
-    ) -> ControlFlow<ExitReason> {
+    ) -> ControlFlow<Option<CloseReason>> {
         let close_reason = match snapshot {
             Ok(Some(snapshot)) => {
                 match messages::send_catalog(&mut self.env, self.pid, &self.path, &snapshot) {
@@ -238,13 +246,17 @@ impl Driver {
                     Err(messages::PidDead) => return ControlFlow::Break(None),
                 }
             }
-            Ok(None) => "broadcast ended".to_owned(),
-            Err(e) => format!("catalog error: {e}"),
+            Ok(None) => CloseReason::Ended,
+            Err(e) => CloseReason::CatalogError(e.to_string()),
         };
         ControlFlow::Break(Some(close_reason))
     }
 
-    fn handle_track(&mut self, token: Token, result: TrackResult) -> ControlFlow<ExitReason> {
+    fn handle_track(
+        &mut self,
+        token: Token,
+        result: TrackResult,
+    ) -> ControlFlow<Option<CloseReason>> {
         let send_result = match result {
             TrackResult::Frame(frame) => {
                 messages::send_frame(&mut self.env, self.pid, token, frame)

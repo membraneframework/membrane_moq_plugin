@@ -30,6 +30,9 @@ defmodule ExMoQ.Native do
   """
   @type rendition :: {track_format(), container() | nil}
 
+  @typedoc "Reason a broadcast consumer closed."
+  @type close_reason :: :ended | :not_announced | :crashed | {:catalog_error, String.t()}
+
   defmodule VideoTrackParams do
     @moduledoc "Codec-agnostic parameters of a `hang` video track"
     @type t :: %__MODULE__{
@@ -210,7 +213,7 @@ defmodule ExMoQ.Native do
   Closes the broadcast's track named `track`, removing its rendition from the
   catalog and finishing the underlying moq-lite track. Idempotent.
   """
-  @spec remove_track(broadcast_producer(), track()) :: :ok
+  @spec remove_track(broadcast_producer(), track()) :: :ok | {:error, poisoned()}
   def remove_track(_broadcast_producer, _track),
     do: :erlang.nif_error(:nif_not_loaded)
 
@@ -232,7 +235,7 @@ defmodule ExMoQ.Native do
   Sends the following messages to `pid`:
     * `{:moq_broadcast_ready, path :: String.t()}`
         once the broadcast is announced and its catalog is subscribed
-    * `{:moq_broadcast_closed, path :: String.t(), reason :: String.t()}`
+    * `{:moq_broadcast_closed, path :: String.t(), reason :: close_reason()}`
         when the broadcast ends, errors, or the session closes underneath it
     * `{:moq_catalog, path :: String.t(),
           renditions :: [{track(), rendition()}]}`

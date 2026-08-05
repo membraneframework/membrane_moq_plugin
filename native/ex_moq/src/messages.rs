@@ -1,6 +1,7 @@
 use rustler::{Binary, Encoder, LocalPid, NewBinary, OwnedEnv, Term};
 
 use crate::atoms;
+use crate::broadcast_consumer::CloseReason;
 use crate::track_format::{Container, TrackFormat};
 
 pub(crate) struct PidDead;
@@ -41,7 +42,7 @@ pub(crate) fn send_broadcast_closed(
     env: &mut OwnedEnv,
     pid: LocalPid,
     path: &str,
-    reason: String,
+    reason: CloseReason,
 ) -> Result<(), PidDead> {
     send(env, pid, (atoms::moq_broadcast_closed(), path, reason))
 }

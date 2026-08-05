@@ -21,8 +21,8 @@ defmodule Membrane.MoQ.Source do
         when the native subscription feeding a pad fails while the track may still be
         advertised in the catalog. The source sends `:end_of_stream` to that pad;
         re-linking a pad for the track starts a fresh subscription.
-    * `{:disconnected, reason :: String.t()}`
-        when the broadcast goes away (the publisher left) or the session drops.
+    * `{:disconnected, reason :: String.t() | ExMoQ.Native.close_reason()}`
+        when the broadcast goes away or the session drops.
         The source sends `:end_of_stream` to all active pads.
   """
   use Membrane.Source
@@ -154,7 +154,7 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_pad_added(_pad, _ctx, %{status: :disconnected}) do
-    raise "Cannot link pads to #{inspect(__MODULE__)} after session disconnect"
+    raise "Cannot link pads to #{inspect(__MODULE__)} after session closed"
   end
 
   @impl true
@@ -305,8 +305,11 @@ defmodule Membrane.MoQ.Source do
     end
   end
 
-  @spec handle_closed(String.t(), Membrane.Element.CallbackContext.t(), State.t()) ::
-          {[Membrane.Element.Action.t()], State.t()}
+  @spec handle_closed(
+          String.t() | Native.close_reason(),
+          Membrane.Element.CallbackContext.t(),
+          State.t()
+        ) :: {[Membrane.Element.Action.t()], State.t()}
   defp handle_closed(reason, _ctx, %{status: :connecting}) do
     raise "MoQ subscriber setup failed: #{inspect(reason)}"
   end

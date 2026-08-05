@@ -186,14 +186,12 @@ impl Producer {
             })
     }
 
-    pub(crate) fn remove_track(&mut self, track: &str, finish: bool) {
+    pub(crate) fn remove_track(&mut self, track: &str) {
         let Some(mut live) = self.tracks.remove(track) else {
             return;
         };
 
-        if finish {
-            let _ = live.producer.finish();
-        }
+        let _ = live.producer.finish();
         let _ = self.broadcast.remove_track(track);
     }
 

@@ -112,22 +112,23 @@ fn create_broadcast_producer(
 
 #[rustler::nif]
 fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) -> Atom {
-    let (mut producer, poisoned) = match producer.0.lock() {
-        Ok(guard) => (guard, false),
-        Err(poison) => (poison.into_inner(), true),
-    };
+    let locked = producer.0.lock();
+    let poisoned = locked.is_err();
+    let mut producer = locked.unwrap_or_else(std::sync::PoisonError::into_inner);
+
     if !poisoned {
         // Flush frames inside the producers' internal cache.
         // We don't do this for a poisoned resource to avoid touching possibly inconsistent state.
         producer.finish();
     }
+
     producer.abort();
     ok()
 }
 
 #[rustler::nif]
 fn add_track(
-    broadcast: ResourceArc<BroadcastProducerResource>,
+    producer: ResourceArc<BroadcastProducerResource>,
     track: String,
     // TODO: these should be folded into a struct which may be extended in the future
     format: TrackFormat,
@@ -139,7 +140,7 @@ fn add_track(
     let config = PartialTrackConfig::try_from(format)?;
     let latency = Duration::from_nanos(latency_ns);
 
-    lock_producer(&broadcast)?
+    lock_producer(&producer)?
         .add_track(track, config, containers, priority, latency)
         .map_err(|e| match e {
             AddTrackError::AlreadyExists => nif_error!(atoms::track_already_exists()),
@@ -151,13 +152,13 @@ fn add_track(
 
 #[rustler::nif]
 fn update_track(
-    broadcast: ResourceArc<BroadcastProducerResource>,
+    producer: ResourceArc<BroadcastProducerResource>,
     track: &str,
     format: TrackFormat,
 ) -> NifResult<Atom> {
     let config = PartialTrackConfig::try_from(format)?;
 
-    lock_producer(&broadcast)?
+    lock_producer(&producer)?
         .update_track(track, config)
         .map_err(|e| match e {
             UpdateTrackError::UnknownTrack => nif_error!(atoms::unknown_track()),
@@ -169,7 +170,7 @@ fn update_track(
 
 #[rustler::nif]
 fn send_frame(
-    broadcast: ResourceArc<BroadcastProducerResource>,
+    producer: ResourceArc<BroadcastProducerResource>,
     track: &str,
     timestamp_ns: u64,
     keyframe: bool,
@@ -185,7 +186,7 @@ fn send_frame(
         duration: None,
     };
 
-    match lock_producer(&broadcast)?.write_frame(track, frame) {
+    match lock_producer(&producer)?.write_frame(track, frame) {
         Ok(()) => Ok(ok()),
         Err(WriteFrameError::MissingKeyframe) => Ok(atoms::missing_keyframe()),
         Err(WriteFrameError::UnknownTrack) => Err(nif_error!(atoms::unknown_track())),
@@ -194,13 +195,9 @@ fn send_frame(
 }
 
 #[rustler::nif]
-fn remove_track(broadcast: ResourceArc<BroadcastProducerResource>, track: &str) -> Atom {
-    let (mut producer, poisoned) = match broadcast.0.lock() {
-        Ok(guard) => (guard, false),
-        Err(poison) => (poison.into_inner(), true),
-    };
-    producer.remove_track(track, !poisoned);
-    ok()
+fn remove_track(producer: ResourceArc<BroadcastProducerResource>, track: &str) -> NifResult<Atom> {
+    lock_producer(&producer)?.remove_track(track);
+    Ok(ok())
 }
 
 #[rustler::nif]

@@ -6,6 +6,7 @@ defmodule ExMoQ.NativeTest do
   use ExUnit.Case, async: true
 
   alias ExMoQ.Native
+  alias ExMoQ.Native.WebCodecs
   alias Membrane.MoQ.Test.Relay
 
   @moduletag :integration
@@ -183,9 +184,9 @@ defmodule ExMoQ.NativeTest do
   defp h264_format(width \\ 1280) do
     {:h264,
      %{
-       params: %Native.VideoTrackParams{width: width, height: 720, framerate: 30.0},
+       params: %WebCodecs.VideoTrackParams{width: width, height: 720, framerate: 30.0},
        description: <<>>,
-       codec: %Native.H264Codec{inline: true, profile: 66, constraints: 0, level: 30}
+       codec: %WebCodecs.H264Codec{inline: true, profile: 66, constraints: 0, level: 30}
      }}
   end
 end

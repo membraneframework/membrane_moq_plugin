@@ -5,6 +5,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
   use ExUnit.Case, async: true
 
   alias ExMoQ.Native
+  alias ExMoQ.Native.WebCodecs
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
   alias Membrane.MoQ.TrackFormat
@@ -16,8 +17,8 @@ defmodule Membrane.MoQ.TrackFormatTest do
       assert {:aac, %{params: params, codec: codec}} =
                native = TrackFormat.from_stream_format(fmt)
 
-      assert %Native.AudioTrackParams{sample_rate: 44_100, channels: 2} = params
-      assert %Native.AACCodec{profile: AAC.profile_to_aot_id(:LC)} == codec
+      assert %WebCodecs.AudioTrackParams{sample_rate: 44_100, channels: 2} = params
+      assert %WebCodecs.AACCodec{profile: AAC.profile_to_aot_id(:LC)} == codec
 
       assert TrackFormat.to_stream_format(native) == fmt
     end
@@ -32,7 +33,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
       fmt = %Opus{channels: 2, self_delimiting?: false}
 
       assert {:opus, %{params: params}} = native = TrackFormat.from_stream_format(fmt)
-      assert %Native.AudioTrackParams{sample_rate: 48_000, channels: 2} = params
+      assert %WebCodecs.AudioTrackParams{sample_rate: 48_000, channels: 2} = params
 
       assert TrackFormat.to_stream_format(native) == fmt
     end
@@ -56,7 +57,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
 
         native = TrackFormat.from_stream_format(fmt)
         assert {:h264, %{params: params, description: ^dcr, codec: codec}} = native
-        assert %Native.VideoTrackParams{width: 1920, height: 1080, framerate: 30.0} = params
+        assert %WebCodecs.VideoTrackParams{width: 1920, height: 1080, framerate: 30.0} = params
         # avc1 carries parameter sets out-of-band, avc3 in-band.
         assert codec.inline == (unquote(tag) == :avc3)
         assert codec.profile == 100 and codec.level == 31
@@ -136,7 +137,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
 
         native = TrackFormat.from_stream_format(fmt)
         assert {:h265, %{params: params, description: ^dcr, codec: codec}} = native
-        assert %Native.VideoTrackParams{width: 3840, height: 2160, framerate: 60.0} = params
+        assert %WebCodecs.VideoTrackParams{width: 3840, height: 2160, framerate: 60.0} = params
         # hev1 carries parameter sets in-band, hvc1 out-of-band.
         assert codec.in_band == (unquote(tag) == :hev1)
         assert length(codec.profile_compatibility_flags) == 4

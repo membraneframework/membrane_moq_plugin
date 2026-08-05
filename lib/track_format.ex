@@ -4,6 +4,7 @@ defmodule Membrane.MoQ.TrackFormat do
   # and the native MoQ track-format term (`t:ExMoQ.Native.track_format/0`).
 
   alias ExMoQ.Native
+  alias ExMoQ.Native.WebCodecs
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
 
@@ -22,13 +23,13 @@ defmodule Membrane.MoQ.TrackFormat do
 
     {:h264,
      %{
-       params: %Native.VideoTrackParams{
+       params: %WebCodecs.VideoTrackParams{
          width: width,
          height: height,
          framerate: framerate_to_float(framerate)
        },
        description: dcr,
-       codec: %Native.H264Codec{
+       codec: %WebCodecs.H264Codec{
          inline:
            case tag do
              :avc1 -> false
@@ -51,13 +52,13 @@ defmodule Membrane.MoQ.TrackFormat do
 
     {:h265,
      %{
-       params: %Native.VideoTrackParams{
+       params: %WebCodecs.VideoTrackParams{
          width: width,
          height: height,
          framerate: framerate_to_float(framerate)
        },
        description: dcr,
-       codec: %Native.H265Codec{
+       codec: %WebCodecs.H265Codec{
          in_band:
            case tag do
              :hev1 -> true
@@ -78,15 +79,15 @@ defmodule Membrane.MoQ.TrackFormat do
     do:
       {:aac,
        %{
-         params: %Native.AudioTrackParams{
+         params: %WebCodecs.AudioTrackParams{
            sample_rate: sample_rate,
            channels: channels
          },
-         codec: %Native.AACCodec{profile: AAC.profile_to_aot_id(profile)}
+         codec: %WebCodecs.AACCodec{profile: AAC.profile_to_aot_id(profile)}
        }}
 
   def from_stream_format(%Opus{channels: channels}),
-    do: {:opus, %{params: %Native.AudioTrackParams{sample_rate: 48_000, channels: channels}}}
+    do: {:opus, %{params: %WebCodecs.AudioTrackParams{sample_rate: 48_000, channels: channels}}}
 
   @doc """
   Media type advertised by a native track-format term.

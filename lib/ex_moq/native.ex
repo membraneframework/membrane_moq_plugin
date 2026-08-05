@@ -4,6 +4,8 @@ defmodule ExMoQ.Native do
   """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "ex_moq"
 
+  alias ExMoQ.Native.WebCodecs
+
   @type session :: reference()
   @type broadcast_producer :: reference()
   @type broadcast_consumer :: reference()
@@ -32,64 +34,6 @@ defmodule ExMoQ.Native do
 
   @typedoc "Reason a broadcast consumer closed."
   @type close_reason :: :ended | :not_announced | :crashed | {:catalog_error, String.t()}
-
-  defmodule VideoTrackParams do
-    @moduledoc "Codec-agnostic parameters of a `hang` video track"
-    @type t :: %__MODULE__{
-            width: non_neg_integer() | nil,
-            height: non_neg_integer() | nil,
-            framerate: float() | nil
-          }
-
-    defstruct [:width, :height, :framerate]
-  end
-
-  defmodule AudioTrackParams do
-    @moduledoc "Codec-agnostic parameters of a `hang` audio track"
-    @type t :: %__MODULE__{
-            sample_rate: pos_integer(),
-            channels: pos_integer()
-          }
-    @enforce_keys [:sample_rate, :channels]
-    defstruct @enforce_keys
-  end
-
-  defmodule H264Codec do
-    @moduledoc "H264 parameters required by `hang`"
-    @type t :: %__MODULE__{inline: boolean(), profile: byte(), constraints: byte(), level: byte()}
-    @enforce_keys [:inline, :profile, :constraints, :level]
-    defstruct @enforce_keys
-  end
-
-  defmodule H265Codec do
-    @moduledoc "H265 parameters required by `hang`"
-    @type t :: %__MODULE__{
-            in_band: boolean(),
-            profile_space: byte(),
-            profile_idc: byte(),
-            profile_compatibility_flags: [byte()],
-            tier_flag: boolean(),
-            level_idc: byte(),
-            constraint_flags: [byte()]
-          }
-    @enforce_keys [
-      :in_band,
-      :profile_space,
-      :profile_idc,
-      :profile_compatibility_flags,
-      :tier_flag,
-      :level_idc,
-      :constraint_flags
-    ]
-    defstruct @enforce_keys
-  end
-
-  defmodule AACCodec do
-    @moduledoc "AAC parameters required by `hang`"
-    @type t :: %__MODULE__{profile: byte()}
-    @enforce_keys [:profile]
-    defstruct @enforce_keys
-  end
 
   @doc """
   Connect to a MoQ relay server and prepare a bidirectional session.
@@ -141,13 +85,24 @@ defmodule ExMoQ.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   @typedoc """
-  Codec configuration mirroring `hang`'s catalog config.
+  Codec configuration mirroring `hang`'s catalog config,
+  built from WebCodecs-style structs (see `ExMoQ.Native.WebCodecs`).
   """
   @type track_format() ::
-          {:h264, %{params: VideoTrackParams.t(), description: binary(), codec: H264Codec.t()}}
-          | {:h265, %{params: VideoTrackParams.t(), description: binary(), codec: H265Codec.t()}}
-          | {:aac, %{params: AudioTrackParams.t(), codec: AACCodec.t()}}
-          | {:opus, %{params: AudioTrackParams.t()}}
+          {:h264,
+           %{
+             params: WebCodecs.VideoTrackParams.t(),
+             description: binary(),
+             codec: WebCodecs.H264Codec.t()
+           }}
+          | {:h265,
+             %{
+               params: WebCodecs.VideoTrackParams.t(),
+               description: binary(),
+               codec: WebCodecs.H265Codec.t()
+             }}
+          | {:aac, %{params: WebCodecs.AudioTrackParams.t(), codec: WebCodecs.AACCodec.t()}}
+          | {:opus, %{params: WebCodecs.AudioTrackParams.t()}}
           | :unrecognized
 
   @typedoc """

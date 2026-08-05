@@ -13,6 +13,7 @@ mod broadcast_producer;
 mod messages;
 mod session;
 mod track_format;
+mod web_codecs;
 
 use broadcast_producer::{AddTrackError, UpdateTrackError, WriteFrameError};
 use messages::Token;

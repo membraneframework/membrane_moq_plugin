@@ -10,6 +10,7 @@ For details, see https://doc.moq.dev/concept/layer/moq-lite.html#terminology
 
 ```elixir
 alias ExMoQ.Native
+alias ExMoQ.Native.WebCodecs
 
 {:ok, session} = Native.create_session(url, self(), false)
 
@@ -24,9 +25,9 @@ end
 format =
   {:h264,
    %{
-     params: %Native.VideoTrackParams{width: 1280, height: 720, framerate: 30.0},
+     params: %WebCodecs.VideoTrackParams{width: 1280, height: 720, framerate: 30.0},
      description: avc_decoder_config_record,
-     codec: %Native.H264Codec{inline: false, profile: 100, constraints: 0, level: 31}
+     codec: %WebCodecs.H264Codec{inline: false, profile: 100, constraints: 0, level: 31}
    }}
 
 :ok =

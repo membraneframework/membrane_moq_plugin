@@ -44,7 +44,7 @@ defmodule Membrane.MoQ.Mixfile do
       {:membrane_h264_format, "~> 0.6.0"},
       {:membrane_h265_format, "~> 0.2.0"},
       {:membrane_aac_format, "~> 0.8.0"},
-      {:membrane_opus_format, "0.3.0"},
+      {:membrane_opus_format, "~> 0.3.0"},
       {:membrane_aac_plugin, "~> 0.19", only: :test},
       {:muontrap, "~> 1.8", only: :test},
       {:membrane_file_plugin, "~> 0.17", only: :test},

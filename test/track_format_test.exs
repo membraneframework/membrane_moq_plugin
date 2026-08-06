@@ -4,7 +4,6 @@ defmodule Membrane.MoQ.TrackFormatTest do
   """
   use ExUnit.Case, async: true
 
-  alias ExMoQ.Native
   alias ExMoQ.Native.WebCodecs
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}

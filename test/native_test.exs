@@ -186,7 +186,7 @@ defmodule ExMoQ.NativeTest do
      %{
        params: %WebCodecs.VideoTrackParams{width: width, height: 720, framerate: 30.0},
        description: <<>>,
-       codec: %WebCodecs.H264Codec{inline: true, profile: 66, constraints: 0, level: 30}
+       codec: %WebCodecs.H264Codec{in_band: true, profile: 66, constraints: 0, level: 30}
      }}
   end
 end

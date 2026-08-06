@@ -29,10 +29,15 @@ defmodule ExMoQ.Native.WebCodecs do
   defmodule H264Codec do
     @moduledoc """
     Components of the WebCodecs `avc1.PPCCLL` codec string;
-    `inline: true` selects `avc3` (in-band parameter sets) instead.
+    `in_band: true` selects `avc3` (in-band parameter sets) instead.
     """
-    @type t :: %__MODULE__{inline: boolean(), profile: byte(), constraints: byte(), level: byte()}
-    @enforce_keys [:inline, :profile, :constraints, :level]
+    @type t :: %__MODULE__{
+            in_band: boolean(),
+            profile: byte(),
+            constraints: byte(),
+            level: byte()
+          }
+    @enforce_keys [:in_band, :profile, :constraints, :level]
     defstruct @enforce_keys
   end
 

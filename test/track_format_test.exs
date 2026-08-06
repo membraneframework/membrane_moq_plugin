@@ -59,7 +59,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
         assert {:h264, %{params: params, description: ^dcr, codec: codec}} = native
         assert %WebCodecs.VideoTrackParams{width: 1920, height: 1080, framerate: 30.0} = params
         # avc1 carries parameter sets out-of-band, avc3 in-band.
-        assert codec.inline == (unquote(tag) == :avc3)
+        assert codec.in_band == (unquote(tag) == :avc3)
         assert codec.profile == 100 and codec.level == 31
 
         assert TrackFormat.to_stream_format(native) == fmt
@@ -75,15 +75,15 @@ defmodule Membrane.MoQ.TrackFormatTest do
     end
 
     # Upstream keys payload framing on description presence (WebCodecs semantics):
-    # no description means Annex B on the wire, whatever the inline flag says.
-    for inline <- [true, false] do
-      test "a track without a description (inline: #{inline}) maps to Annex B" do
+    # no description means Annex B on the wire, whatever the in_band flag says.
+    for in_band <- [true, false] do
+      test "a track without a description (in_band: #{in_band}) maps to Annex B" do
         native =
           {:h264,
            %{
              params: %{width: 1280, height: 720, framerate: 30.0},
              description: <<>>,
-             codec: %{inline: unquote(inline), profile: 100, constraints: 0, level: 31}
+             codec: %{in_band: unquote(in_band), profile: 100, constraints: 0, level: 31}
            }}
 
         assert %H264{stream_structure: :annexb} = TrackFormat.to_stream_format(native)
@@ -98,7 +98,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
            %{
              params: %{width: unquote(absent), height: unquote(absent), framerate: 30.0},
              description: avcc(100, 0, 31),
-             codec: %{inline: false, profile: 100, constraints: 0, level: 31}
+             codec: %{in_band: false, profile: 100, constraints: 0, level: 31}
            }}
 
         assert %H264{width: nil, height: nil} = TrackFormat.to_stream_format(native)
@@ -111,7 +111,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
          %{
            params: %{width: 1280, height: 720, framerate: 4.0e-4},
            description: avcc(100, 0, 31),
-           codec: %{inline: false, profile: 100, constraints: 0, level: 31}
+           codec: %{in_band: false, profile: 100, constraints: 0, level: 31}
          }}
 
       assert %H264{framerate: {num, den}} = TrackFormat.to_stream_format(native)

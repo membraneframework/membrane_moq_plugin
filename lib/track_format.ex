@@ -30,7 +30,7 @@ defmodule Membrane.MoQ.TrackFormat do
        },
        description: dcr,
        codec: %WebCodecs.H264Codec{
-         inline:
+         in_band:
            case tag do
              :avc1 -> false
              :avc3 -> true
@@ -122,14 +122,14 @@ defmodule Membrane.MoQ.TrackFormat do
          %{
            params: %{width: width, height: height, framerate: framerate},
            description: dcr,
-           codec: %{inline: inline}
+           codec: %{in_band: in_band}
          }}
       ) do
     %H264{
       width: dimension(width),
       height: dimension(height),
       framerate: framerate(framerate),
-      stream_structure: h264_stream_structure(dcr, inline)
+      stream_structure: h264_stream_structure(dcr, in_band)
     }
   end
 
@@ -189,7 +189,7 @@ defmodule Membrane.MoQ.TrackFormat do
   # carries Annex B with in-band parameter sets (regardless of the avc1/avc3
   # flag, which only describes where the parameter sets live).
   @spec h264_stream_structure(binary(), boolean()) :: H264.stream_structure()
-  defp h264_stream_structure(<<>>, _inline), do: :annexb
+  defp h264_stream_structure(<<>>, _in_band), do: :annexb
   defp h264_stream_structure(dcr, true), do: {:avc3, dcr}
   defp h264_stream_structure(dcr, false), do: {:avc1, dcr}
 

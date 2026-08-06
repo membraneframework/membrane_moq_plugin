@@ -37,7 +37,7 @@ impl From<&hang::catalog::AudioConfig> for AudioTrackParams {
 #[derive(NifStruct, Clone)]
 #[module = "ExMoQ.Native.WebCodecs.H264Codec"]
 pub(crate) struct H264Codec {
-    pub(crate) inline: bool,
+    pub(crate) in_band: bool,
     pub(crate) profile: u8,
     pub(crate) constraints: u8,
     pub(crate) level: u8,
@@ -46,7 +46,7 @@ pub(crate) struct H264Codec {
 impl From<&hang::catalog::H264> for H264Codec {
     fn from(codec: &hang::catalog::H264) -> Self {
         Self {
-            inline: codec.inline,
+            in_band: codec.inline,
             profile: codec.profile,
             constraints: codec.constraints,
             level: codec.level,
@@ -57,7 +57,7 @@ impl From<&hang::catalog::H264> for H264Codec {
 impl From<&H264Codec> for hang::catalog::H264 {
     fn from(codec: &H264Codec) -> Self {
         Self {
-            inline: codec.inline,
+            inline: codec.in_band,
             profile: codec.profile,
             constraints: codec.constraints,
             level: codec.level,

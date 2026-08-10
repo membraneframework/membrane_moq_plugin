@@ -17,7 +17,7 @@ mod web_codecs;
 
 use broadcast_producer::{AddTrackError, UpdateTrackError, WriteFrameError};
 use messages::Token;
-use track_format::{Container, ContainerPair, PartialTrackConfig, TrackFormat};
+use track_format::{Container, TrackFormat};
 
 macro_rules! nif_error {
     ($fmt:literal $($arg:tt)*) => {
@@ -47,7 +47,8 @@ pub(crate) mod atoms {
         missing_keyframe,
         producer_poisoned,
         consumer_closed,
-        unrecognized_container,
+        opus,
+        unrecognized,
         track_already_exists,
         unknown_track,
         kind_mismatch,
@@ -136,12 +137,10 @@ fn add_track(
     container: Container,
     latency_ns: u64,
 ) -> NifResult<Atom> {
-    let containers = ContainerPair::from(container);
-    let config = PartialTrackConfig::try_from(format)?;
     let latency = Duration::from_nanos(latency_ns);
 
     lock_producer(&producer)?
-        .add_track(track, config, containers, priority, latency)
+        .add_track(track, format, container, priority, latency)
         .map_err(|e| match e {
             AddTrackError::AlreadyExists => nif_error!(atoms::track_already_exists()),
             other => nif_error!("{other}"),
@@ -156,10 +155,8 @@ fn update_track(
     track: &str,
     format: TrackFormat,
 ) -> NifResult<Atom> {
-    let config = PartialTrackConfig::try_from(format)?;
-
     lock_producer(&producer)?
-        .update_track(track, config)
+        .update_track(track, format)
         .map_err(|e| match e {
             UpdateTrackError::UnknownTrack => nif_error!(atoms::unknown_track()),
             UpdateTrackError::KindMismatch => nif_error!(atoms::kind_mismatch()),
@@ -217,16 +214,12 @@ fn create_broadcast_consumer(
 fn subscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
     track: String,
-    container: Option<Container>,
     token: Token,
     priority: u8,
 ) -> NifResult<Atom> {
-    let container = container.ok_or_else(|| nif_error!(atoms::unrecognized_container()))?;
-    let containers = ContainerPair::from(container);
-
     consumer
         .0
-        .subscribe(track, containers.wire, token, priority)
+        .subscribe(track, token, priority)
         .map_err(|_closed| nif_error!(atoms::consumer_closed()))?;
 
     Ok(ok())

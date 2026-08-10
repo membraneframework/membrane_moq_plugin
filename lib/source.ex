@@ -344,7 +344,7 @@ defmodule Membrane.MoQ.Source do
     new_tracks =
       Stream.concat(diff.changed, diff.added)
       |> Stream.map(fn name ->
-        {format, _container} = Catalog.rendition(catalog, name)
+        format = Catalog.rendition(catalog, name)
         {:notify_parent, {:new_track, {name, TrackFormat.to_stream_format(format)}}}
       end)
 
@@ -385,9 +385,9 @@ defmodule Membrane.MoQ.Source do
   defp subscribe_pad(token, pad, track, ctx, state) do
     priority = ctx.pads[pad].options.priority
 
-    with {format, container} <- Catalog.rendition(state.catalog, track),
+    with format when format != nil <- Catalog.rendition(state.catalog, track),
          priority = priority || TrackFormat.default_priority(format),
-         :ok <- Native.subscribe_track(state.consumer, track, container, token, priority) do
+         :ok <- Native.subscribe_track(state.consumer, track, token, priority) do
       state = %{
         state
         | waiting: Map.delete(state.waiting, token),

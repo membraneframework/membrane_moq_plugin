@@ -4,7 +4,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
   """
   use ExUnit.Case, async: true
 
-  alias ExMoQ.Native.WebCodecs
+  alias ExMoQ.Native.{AudioTrackFormat, VideoTrackFormat, WebCodecs}
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
   alias Membrane.MoQ.TrackFormat
@@ -13,7 +13,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     test "round-trips through from/to stream_format" do
       fmt = %AAC{profile: :LC, sample_rate: 44_100, channels: 2}
 
-      assert {:aac, %{params: params, codec: codec}} =
+      assert %AudioTrackFormat{params: params, codec: codec} =
                native = TrackFormat.from_stream_format(fmt)
 
       assert %WebCodecs.AudioTrackParams{sample_rate: 44_100, channels: 2} = params
@@ -21,24 +21,18 @@ defmodule Membrane.MoQ.TrackFormatTest do
 
       assert TrackFormat.to_stream_format(native) == fmt
     end
-
-    test "media_type/1 is :audio" do
-      assert TrackFormat.media_type({:aac, %{}}) == :audio
-    end
   end
 
   describe "Opus" do
     test "round-trips through from/to stream_format" do
       fmt = %Opus{channels: 2, self_delimiting?: false}
 
-      assert {:opus, %{params: params}} = native = TrackFormat.from_stream_format(fmt)
+      assert %AudioTrackFormat{params: params, codec: :opus} =
+               native = TrackFormat.from_stream_format(fmt)
+
       assert %WebCodecs.AudioTrackParams{sample_rate: 48_000, channels: 2} = params
 
       assert TrackFormat.to_stream_format(native) == fmt
-    end
-
-    test "media_type/1 is :audio" do
-      assert TrackFormat.media_type({:opus, %{}}) == :audio
     end
   end
 
@@ -55,7 +49,11 @@ defmodule Membrane.MoQ.TrackFormatTest do
         }
 
         native = TrackFormat.from_stream_format(fmt)
-        assert {:h264, %{params: params, description: ^dcr, codec: codec}} = native
+
+        assert %VideoTrackFormat{params: params, description: ^dcr, codec: codec} =
+                 native
+
+        assert %WebCodecs.H264Codec{} = codec
         assert %WebCodecs.VideoTrackParams{width: 1920, height: 1080, framerate: 30.0} = params
         # avc1 carries parameter sets out-of-band, avc3 in-band.
         assert codec.in_band == (unquote(tag) == :avc3)
@@ -69,7 +67,9 @@ defmodule Membrane.MoQ.TrackFormatTest do
       dcr = avcc(100, 0, 31)
       fmt = %H264{width: 640, height: 480, framerate: nil, stream_structure: {:avc1, dcr}}
 
-      assert {:h264, %{params: %{framerate: nil}}} = native = TrackFormat.from_stream_format(fmt)
+      assert %VideoTrackFormat{params: %{framerate: nil}} =
+               native = TrackFormat.from_stream_format(fmt)
+
       assert TrackFormat.to_stream_format(native) == fmt
     end
 
@@ -77,13 +77,16 @@ defmodule Membrane.MoQ.TrackFormatTest do
     # no description means Annex B on the wire, whatever the in_band flag says.
     for in_band <- [true, false] do
       test "a track without a description (in_band: #{in_band}) maps to Annex B" do
-        native =
-          {:h264,
-           %{
-             params: %{width: 1280, height: 720, framerate: 30.0},
-             description: <<>>,
-             codec: %{in_band: unquote(in_band), profile: 100, constraints: 0, level: 31}
-           }}
+        native = %VideoTrackFormat{
+          params: %{width: 1280, height: 720, framerate: 30.0},
+          description: <<>>,
+          codec: %WebCodecs.H264Codec{
+            in_band: unquote(in_band),
+            profile: 100,
+            constraints: 0,
+            level: 31
+          }
+        }
 
         assert %H264{stream_structure: :annexb} = TrackFormat.to_stream_format(native)
       end
@@ -92,33 +95,25 @@ defmodule Membrane.MoQ.TrackFormatTest do
     # The NIF decodes absent dimensions as nil; a remote catalog may still say 0.
     for absent <- [nil, 0] do
       test "dimensions absent from the catalog as #{inspect(absent)} map to nil" do
-        native =
-          {:h264,
-           %{
-             params: %{width: unquote(absent), height: unquote(absent), framerate: 30.0},
-             description: avcc(100, 0, 31),
-             codec: %{in_band: false, profile: 100, constraints: 0, level: 31}
-           }}
+        native = %VideoTrackFormat{
+          params: %{width: unquote(absent), height: unquote(absent), framerate: 30.0},
+          description: avcc(100, 0, 31),
+          codec: %WebCodecs.H264Codec{in_band: false, profile: 100, constraints: 0, level: 31}
+        }
 
         assert %H264{width: nil, height: nil} = TrackFormat.to_stream_format(native)
       end
     end
 
     test "small fps values map to positive numerator/denominator pairs" do
-      native =
-        {:h264,
-         %{
-           params: %{width: 1280, height: 720, framerate: 4.0e-4},
-           description: avcc(100, 0, 31),
-           codec: %{in_band: false, profile: 100, constraints: 0, level: 31}
-         }}
+      native = %VideoTrackFormat{
+        params: %{width: 1280, height: 720, framerate: 4.0e-4},
+        description: avcc(100, 0, 31),
+        codec: %WebCodecs.H264Codec{in_band: false, profile: 100, constraints: 0, level: 31}
+      }
 
       assert %H264{framerate: {num, den}} = TrackFormat.to_stream_format(native)
       assert num > 0 and den > 0
-    end
-
-    test "media_type/1 is :video" do
-      assert TrackFormat.media_type({:h264, %{}}) == :video
     end
   end
 
@@ -135,7 +130,11 @@ defmodule Membrane.MoQ.TrackFormatTest do
         }
 
         native = TrackFormat.from_stream_format(fmt)
-        assert {:h265, %{params: params, description: ^dcr, codec: codec}} = native
+
+        assert %VideoTrackFormat{params: params, description: ^dcr, codec: codec} =
+                 native
+
+        assert %WebCodecs.H265Codec{} = codec
         assert %WebCodecs.VideoTrackParams{width: 3840, height: 2160, framerate: 60.0} = params
         # hev1 carries parameter sets in-band, hvc1 out-of-band.
         assert codec.in_band == (unquote(tag) == :hev1)
@@ -147,38 +146,29 @@ defmodule Membrane.MoQ.TrackFormatTest do
     end
 
     test "dimensions omitted from the catalog map to nil" do
-      native =
-        {:h265,
-         %{
-           params: %{width: nil, height: nil, framerate: 30.0},
-           description: hvcc(),
-           codec: %{in_band: false}
-         }}
+      native = %VideoTrackFormat{
+        params: %{width: nil, height: nil, framerate: 30.0},
+        description: hvcc(),
+        codec: h265_codec(false)
+      }
 
       assert %H265{width: nil, height: nil} = TrackFormat.to_stream_format(native)
     end
 
     test "a track without a description maps to Annex B" do
-      native =
-        {:h265,
-         %{
-           params: %{width: 1280, height: 720, framerate: 30.0},
-           description: <<>>,
-           codec: %{in_band: true}
-         }}
+      native = %VideoTrackFormat{
+        params: %{width: 1280, height: 720, framerate: 30.0},
+        description: <<>>,
+        codec: h265_codec(true)
+      }
 
       assert %H265{stream_structure: :annexb} = TrackFormat.to_stream_format(native)
-    end
-
-    test "media_type/1 is :video" do
-      assert TrackFormat.media_type({:h265, %{}}) == :video
     end
   end
 
   describe ":unrecognized" do
-    test "maps to a RemoteStream and an :unknown media type" do
+    test "maps to a RemoteStream" do
       assert TrackFormat.to_stream_format(:unrecognized) == %RemoteStream{type: :packetized}
-      assert TrackFormat.media_type(:unrecognized) == :unknown
     end
   end
 
@@ -213,6 +203,19 @@ defmodule Membrane.MoQ.TrackFormatTest do
   # `Membrane.H264.DecoderConfigurationRecord.parse/1` recovers profile/level.
   defp avcc(profile, constraints, level) do
     <<1, profile, constraints, level, 0b111111::6, 3::2, 0b111::3, 0::5, 0::8>>
+  end
+
+  # An H265 codec struct as decoded from the hvcc() record below.
+  defp h265_codec(in_band) do
+    %WebCodecs.H265Codec{
+      in_band: in_band,
+      profile_space: 0,
+      profile_idc: 1,
+      profile_compatibility_flags: [0x60, 0, 0, 0],
+      tier_flag: false,
+      level_idc: 93,
+      constraint_flags: [0x90, 0, 0, 0, 0, 0]
+    }
   end
 
   # Minimal valid hvcC (H265 decoder configuration record) with no NAL arrays.

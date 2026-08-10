@@ -4,44 +4,44 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::time::Duration;
 
-use crate::track_format::{ContainerPair, PartialTrackConfig, WireContainer};
+use crate::track_format::{Container, TrackFormat, WireContainer, audio_config, video_config};
 use crate::{runtime, session::Session};
 
 struct KindMismatch;
 
-enum Rendition {
+enum RenditionHandle {
     Video(moq_mux::catalog::VideoTrack),
     Audio(moq_mux::catalog::AudioTrack),
 }
 
-impl Rendition {
+impl RenditionHandle {
     fn new(
         catalog: &moq_mux::catalog::Producer,
         name: &str,
-        config: PartialTrackConfig,
-        container: hang::catalog::Container,
+        format: TrackFormat,
+        container: Container,
     ) -> Self {
-        match config {
-            PartialTrackConfig::Video(partial) => {
+        match format {
+            TrackFormat::Video(format) => {
                 let mut handle = catalog.reserve().init(name);
-                handle.set(partial.with_container(container));
+                handle.set(video_config(format, container.into()));
                 Self::Video(handle)
             }
-            PartialTrackConfig::Audio(partial) => {
+            TrackFormat::Audio(format) => {
                 let mut handle = catalog.reserve().init(name);
-                handle.set(partial.with_container(container));
+                handle.set(audio_config(format, container.into()));
                 Self::Audio(handle)
             }
         }
     }
 
-    fn set(&mut self, config: PartialTrackConfig) -> Result<(), KindMismatch> {
-        match (self, config) {
-            (Self::Video(handle), PartialTrackConfig::Video(partial)) => {
-                handle.update(|config| *config = partial.with_container(config.container.clone()));
+    fn set(&mut self, format: TrackFormat) -> Result<(), KindMismatch> {
+        match (self, format) {
+            (Self::Video(handle), TrackFormat::Video(format)) => {
+                handle.update(|live| *live = video_config(format, live.container.clone()));
             }
-            (Self::Audio(handle), PartialTrackConfig::Audio(partial)) => {
-                handle.update(|config| *config = partial.with_container(config.container.clone()));
+            (Self::Audio(handle), TrackFormat::Audio(format)) => {
+                handle.update(|live| *live = audio_config(format, live.container.clone()));
             }
             (_, _) => return Err(KindMismatch),
         }
@@ -53,7 +53,7 @@ type WireProducer = moq_mux::container::Producer<WireContainer>;
 
 struct LiveTrack {
     producer: WireProducer,
-    rendition: Rendition,
+    rendition: RenditionHandle,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -130,8 +130,8 @@ impl Producer {
     pub(crate) fn add_track(
         &mut self,
         track: String,
-        config: PartialTrackConfig,
-        containers: ContainerPair,
+        format: TrackFormat,
+        container: Container,
         priority: u8,
         latency: Duration,
     ) -> Result<(), AddTrackError> {
@@ -144,8 +144,8 @@ impl Producer {
             &mut self.broadcast,
             &self.catalog,
             entry.key(),
-            config,
-            containers,
+            format,
+            container,
             priority,
             latency,
         )?;
@@ -158,13 +158,15 @@ impl Producer {
     pub(crate) fn update_track(
         &mut self,
         track: &str,
-        config: PartialTrackConfig,
+        format: TrackFormat,
     ) -> Result<(), UpdateTrackError> {
-        self.tracks
+        let live = self
+            .tracks
             .get_mut(track)
-            .ok_or(UpdateTrackError::UnknownTrack)?
-            .rendition
-            .set(config)
+            .ok_or(UpdateTrackError::UnknownTrack)?;
+
+        live.rendition
+            .set(format)
             .map_err(|_kind_mismatch| UpdateTrackError::KindMismatch)
     }
 
@@ -211,8 +213,8 @@ impl Producer {
         broadcast: &mut moq_net::broadcast::Producer,
         catalog: &moq_mux::catalog::Producer,
         track: &str,
-        config: PartialTrackConfig,
-        containers: ContainerPair,
+        format: TrackFormat,
+        container: Container,
         priority: u8,
         latency: Duration,
     ) -> Result<LiveTrack, AddTrackError> {
@@ -223,7 +225,7 @@ impl Producer {
             )
             .map_err(AddTrackError::CreateTrack)?;
 
-        let producer = match catalog.media_producer(track_producer, containers.wire) {
+        let producer = match catalog.media_producer(track_producer, container.into()) {
             Ok(producer) => producer.with_latency(latency),
             Err(e) => {
                 let _ = broadcast.remove_track(track);
@@ -231,11 +233,11 @@ impl Producer {
             }
         };
 
-        let rendition = Rendition::new(catalog, track, config, containers.catalog);
+        let handle = RenditionHandle::new(catalog, track, format, container);
 
         Ok(LiveTrack {
             producer,
-            rendition,
+            rendition: handle,
         })
     }
 }

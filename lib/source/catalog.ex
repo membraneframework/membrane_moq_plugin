@@ -10,12 +10,12 @@ defmodule Membrane.MoQ.Source.Catalog do
         }
 
   @type t :: %__MODULE__{
-          renditions: %{Native.track() => Native.rendition()}
+          renditions: %{Native.track() => Native.track_format()}
         }
 
   defstruct renditions: %{}
 
-  @spec update(t(), [{Native.track(), Native.rendition()}]) :: {diff(), t()}
+  @spec update(t(), [{Native.track(), Native.track_format()}]) :: {diff(), t()}
   def update(catalog, renditions) do
     new = Map.new(renditions)
     old = catalog.renditions
@@ -33,6 +33,6 @@ defmodule Membrane.MoQ.Source.Catalog do
     {%{removed: removed, added: added, changed: changed}, %{catalog | renditions: new}}
   end
 
-  @spec rendition(t(), Native.track()) :: Native.rendition() | nil
+  @spec rendition(t(), Native.track()) :: Native.track_format() | nil
   def rendition(catalog, track), do: catalog.renditions[track]
 end

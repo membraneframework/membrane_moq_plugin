@@ -2,7 +2,7 @@ use rustler::{Binary, Encoder, LocalPid, NewBinary, OwnedEnv, Term};
 
 use crate::atoms;
 use crate::broadcast_consumer::CloseReason;
-use crate::track_format::{Container, TrackFormat};
+use crate::track_format::{AudioTrackFormat, VideoTrackFormat};
 
 pub(crate) struct PidDead;
 
@@ -74,22 +74,26 @@ pub(crate) fn send_catalog(
         let videos = catalog.video.renditions.iter().map(|(name, config)| {
             (
                 name,
-                TrackFormat::from_video(env, config),
-                &config.container,
+                match VideoTrackFormat::try_from(config) {
+                    Ok(format) => format.encode(env),
+                    Err(unrecognized) => unrecognized.encode(env),
+                },
             )
+                .encode(env)
         });
 
-        let audios = catalog
-            .audio
-            .renditions
-            .iter()
-            .map(|(name, config)| (name, TrackFormat::from_audio(config), &config.container));
+        let audios = catalog.audio.renditions.iter().map(|(name, config)| {
+            (
+                name,
+                match AudioTrackFormat::try_from(config) {
+                    Ok(format) => format.encode(env),
+                    Err(unrecognized) => unrecognized.encode(env),
+                },
+            )
+                .encode(env)
+        });
 
-        let renditions: Vec<Term> = videos
-            .chain(audios)
-            .map(|(name, format, container)| (name, (format, Container::try_from(container).ok())))
-            .map(|tuple| tuple.encode(env))
-            .collect();
+        let renditions: Vec<Term> = videos.chain(audios).collect();
 
         (atoms::moq_catalog(), path, renditions).encode(env)
     })

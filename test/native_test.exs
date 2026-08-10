@@ -6,7 +6,7 @@ defmodule ExMoQ.NativeTest do
   use ExUnit.Case, async: true
 
   alias ExMoQ.Native
-  alias ExMoQ.Native.WebCodecs
+  alias ExMoQ.Native.{VideoTrackFormat, WebCodecs}
   alias Membrane.MoQ.Test.Relay
 
   @moduletag :integration
@@ -35,7 +35,7 @@ defmodule ExMoQ.NativeTest do
     assert_receive {:moq_broadcast_ready, ^broadcast}, 10_000
 
     ghost_token = 1
-    :ok = Native.subscribe_track(consumer, "ghost", :legacy, ghost_token, 60)
+    :ok = Native.subscribe_track(consumer, "ghost", ghost_token, 60)
     assert_receive {:moq_track_error, ^ghost_token, _reason}, 10_000
 
     :ok = Native.close_broadcast_consumer(consumer)
@@ -78,7 +78,7 @@ defmodule ExMoQ.NativeTest do
     assert_receive {:moq_broadcast_ready, ^broadcast}, 10_000
 
     :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
-    await_renditions(broadcast, &match?([{@track, {_format, :legacy}}], &1))
+    await_renditions(broadcast, &match?([{@track, %VideoTrackFormat{}}], &1))
 
     # A name the broadcast already carries cannot be added again.
     assert {:error, _reason} = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
@@ -92,13 +92,13 @@ defmodule ExMoQ.NativeTest do
 
     # The name is free for reuse, and updates then target the successor track.
     :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
-    await_renditions(broadcast, &match?([{@track, {_format, :legacy}}], &1))
+    await_renditions(broadcast, &match?([{@track, %VideoTrackFormat{}}], &1))
 
     assert :ok = Native.update_track(producer, @track, h264_format(1920))
 
     await_renditions(
       broadcast,
-      &match?([{@track, {{:h264, %{params: %{width: 1920}}}, :legacy}}], &1)
+      &match?([{@track, %VideoTrackFormat{params: %{width: 1920}}}], &1)
     )
 
     :ok = Native.close_broadcast_consumer(consumer)
@@ -140,11 +140,10 @@ defmodule ExMoQ.NativeTest do
 
     :ok = Native.add_track(producer, @track, h264_format(), 60, :legacy, 0)
 
-    [{@track, {{:h264, _config}, container}}] =
-      await_renditions(broadcast, &match?([{@track, {_format, _container}}], &1))
+    await_renditions(broadcast, &match?([{@track, %VideoTrackFormat{}}], &1))
 
     early_token = 1
-    :ok = Native.subscribe_track(consumer, @track, container, early_token, 60)
+    :ok = Native.subscribe_track(consumer, @track, early_token, 60)
 
     :ok = Native.send_frame(producer, @track, 0, true, "before")
     assert_receive {:moq_frame, ^early_token, "before", _timestamp, true}, 10_000
@@ -154,7 +153,7 @@ defmodule ExMoQ.NativeTest do
     # Consumer commands are processed in order, so once a frame reaches this
     # later subscription the unsubscribe has been handled too.
     late_token = 2
-    :ok = Native.subscribe_track(consumer, @track, container, late_token, 60)
+    :ok = Native.subscribe_track(consumer, @track, late_token, 60)
 
     :ok = Native.send_frame(producer, @track, 40_000_000, true, "after")
 
@@ -182,11 +181,10 @@ defmodule ExMoQ.NativeTest do
   end
 
   defp h264_format(width \\ 1280) do
-    {:h264,
-     %{
-       params: %WebCodecs.VideoTrackParams{width: width, height: 720, framerate: 30.0},
-       description: <<>>,
-       codec: %WebCodecs.H264Codec{in_band: true, profile: 66, constraints: 0, level: 30}
-     }}
+    %VideoTrackFormat{
+      params: %WebCodecs.VideoTrackParams{width: width, height: 720, framerate: 30.0},
+      description: <<>>,
+      codec: %WebCodecs.H264Codec{in_band: true, profile: 66, constraints: 0, level: 30}
+    }
   end
 end

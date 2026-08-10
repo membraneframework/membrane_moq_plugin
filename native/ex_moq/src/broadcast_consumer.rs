@@ -1,5 +1,6 @@
 mod subscription_queue;
 
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::task::Poll;
 use std::time::Duration;
@@ -13,7 +14,7 @@ use moq_mux::catalog::Stream as _;
 use crate::messages::{self, Token};
 use crate::runtime;
 use crate::session::Session;
-use crate::track_format::WireContainer;
+use crate::track_format::{CatalogContainer, WireContainer};
 
 use subscription_queue::{SubscriptionQueue, TrackResult};
 
@@ -23,6 +24,25 @@ pub(crate) enum CloseReason {
     NotAnnounced,
     Crashed,
     CatalogError(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum TrackErrorKind {
+    #[error("not advertised in the catalog")]
+    NotAdvertised,
+    #[error(transparent)]
+    Container(moq_mux::Error),
+    #[error("subscribe failed: {0}")]
+    SubscribeFailed(#[from] moq_net::Error),
+    #[error("track read failed: {0}")]
+    ReadFailed(#[from] moq_mux::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("track({track}): {source}")]
+struct TrackError {
+    track: String,
+    source: TrackErrorKind,
 }
 
 struct CloseGuard {
@@ -48,7 +68,6 @@ pub(crate) struct Closed;
 enum Command {
     Subscribe {
         track: String,
-        wire_container: WireContainer,
         token: Token,
         priority: u8,
     },
@@ -72,14 +91,12 @@ impl Handle {
     pub(crate) fn subscribe(
         &self,
         track: String,
-        wire_container: WireContainer,
         token: Token,
         priority: u8,
     ) -> Result<(), Closed> {
         self.commands
             .try_push(Command::Subscribe {
                 track,
-                wire_container,
                 token,
                 priority,
             })
@@ -133,6 +150,7 @@ struct Driver {
     path: String,
     commands: kio::Queue<Command>,
     catalog: moq_mux::catalog::Consumer<()>,
+    containers: HashMap<String, CatalogContainer>,
     subs: SubscriptionQueue,
 }
 
@@ -166,6 +184,7 @@ impl Driver {
             path,
             commands,
             catalog,
+            containers: HashMap::new(),
             subs: SubscriptionQueue::new(broadcast, latency),
         }
         .run()
@@ -218,16 +237,26 @@ impl Driver {
             }
             Ok(Command::Subscribe {
                 track,
-                wire_container,
                 token,
                 priority,
             }) => {
-                match self
-                    .subs
-                    .insert(token, track, wire_container, priority)
-                    .or_else(|e| {
-                        messages::send_track_error(&mut self.env, self.pid, token, e.to_string())
-                    }) {
+                let result = match self.containers.get(&track) {
+                    None => Err(TrackError {
+                        track,
+                        source: TrackErrorKind::NotAdvertised,
+                    }),
+                    Some(container) => match WireContainer::try_from(container) {
+                        Err(e) => Err(TrackError {
+                            track,
+                            source: TrackErrorKind::Container(e),
+                        }),
+                        Ok(wire) => self.subs.insert(token, track, wire, priority),
+                    },
+                };
+
+                match result.or_else(|e| {
+                    messages::send_track_error(&mut self.env, self.pid, token, e.to_string())
+                }) {
                     Ok(()) => ControlFlow::Continue(()),
                     Err(_pid_dead) => ControlFlow::Break(None),
                 }
@@ -241,6 +270,8 @@ impl Driver {
     ) -> ControlFlow<Option<CloseReason>> {
         let close_reason = match snapshot {
             Ok(Some(snapshot)) => {
+                self.containers = advertised_containers(&snapshot);
+
                 match messages::send_catalog(&mut self.env, self.pid, &self.path, &snapshot) {
                     Ok(()) => return ControlFlow::Continue(()),
                     Err(messages::PidDead) => return ControlFlow::Break(None),
@@ -271,4 +302,22 @@ impl Driver {
             Err(messages::PidDead) => ControlFlow::Break(None),
         }
     }
+}
+
+fn advertised_containers(
+    catalog: &moq_mux::catalog::hang::Catalog,
+) -> HashMap<String, CatalogContainer> {
+    let videos = catalog
+        .video
+        .renditions
+        .iter()
+        .map(|(name, config)| (name.clone(), config.container.clone()));
+
+    let audios = catalog
+        .audio
+        .renditions
+        .iter()
+        .map(|(name, config)| (name.clone(), config.container.clone()));
+
+    videos.chain(audios).collect()
 }

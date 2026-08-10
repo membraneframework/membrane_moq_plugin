@@ -1,12 +1,13 @@
 use bytes::Bytes;
-use rustler::{Binary, Env, NewBinary, NifResult, NifTaggedEnum, NifUnitEnum};
+use rustler::{
+    Binary, Decoder, Encoder, Env, NewBinary, NifResult, NifStruct, NifUnitEnum, NifUntaggedEnum,
+    Term,
+};
 
-use crate::web_codecs::{AacCodec, AudioTrackParams, H264Codec, H265Codec, VideoTrackParams};
+use crate::web_codecs;
 
 pub(crate) type WireContainer = moq_mux::catalog::hang::Container;
 pub(crate) type CatalogContainer = hang::catalog::Container;
-
-pub(crate) struct UnrecognizedContainer;
 
 #[derive(NifUnitEnum, Clone, Copy)]
 pub(crate) enum Container {
@@ -14,213 +15,182 @@ pub(crate) enum Container {
     Loc,
 }
 
-impl TryFrom<&CatalogContainer> for Container {
-    type Error = UnrecognizedContainer;
-
-    fn try_from(container: &CatalogContainer) -> Result<Self, Self::Error> {
-        match container {
-            CatalogContainer::Legacy => Ok(Self::Legacy),
-            CatalogContainer::Loc => Ok(Self::Loc),
-            _ => Err(UnrecognizedContainer),
-        }
-    }
-}
-
-pub(crate) struct ContainerPair {
-    pub(crate) wire: WireContainer,
-    pub(crate) catalog: CatalogContainer,
-}
-
-impl From<Container> for ContainerPair {
+impl From<Container> for CatalogContainer {
     fn from(container: Container) -> Self {
         match container {
-            Container::Legacy => Self {
-                wire: WireContainer::Legacy,
-                catalog: CatalogContainer::Legacy,
-            },
-            Container::Loc => Self {
-                wire: WireContainer::Loc,
-                catalog: CatalogContainer::Loc,
-            },
+            Container::Legacy => Self::Legacy,
+            Container::Loc => Self::Loc,
         }
     }
 }
 
-#[derive(NifTaggedEnum)]
-pub(crate) enum TrackFormat<'a> {
-    H264 {
-        params: VideoTrackParams,
-        description: Binary<'a>,
-        codec: H264Codec,
-    },
-    H265 {
-        params: VideoTrackParams,
-        description: Binary<'a>,
-        codec: H265Codec,
-    },
-    Aac {
-        params: AudioTrackParams,
-        codec: AacCodec,
-    },
-    Opus {
-        params: AudioTrackParams,
-    },
-    Unrecognized,
-}
-
-impl<'a> TrackFormat<'a> {
-    pub(crate) fn from_video(env: Env<'a>, config: &hang::catalog::VideoConfig) -> Self {
-        let dcr = config.description.as_deref().unwrap_or_default();
-        let mut description = NewBinary::new(env, dcr.len());
-        description.as_mut_slice().copy_from_slice(dcr);
-        let description = description.into();
-        let params = config.into();
-
-        match &config.codec {
-            hang::catalog::VideoCodec::H264(codec) => Self::H264 {
-                params,
-                description,
-                codec: codec.into(),
-            },
-            hang::catalog::VideoCodec::H265(codec) => Self::H265 {
-                params,
-                description,
-                codec: codec.into(),
-            },
-            _ => Self::Unrecognized,
-        }
-    }
-
-    pub(crate) fn from_audio(config: &hang::catalog::AudioConfig) -> Self {
-        let params = config.into();
-
-        match &config.codec {
-            hang::catalog::AudioCodec::AAC(aac) => Self::Aac {
-                params,
-                codec: AacCodec {
-                    profile: aac.profile,
-                },
-            },
-            hang::catalog::AudioCodec::Opus => Self::Opus { params },
-            _ => Self::Unrecognized,
+impl From<Container> for WireContainer {
+    fn from(container: Container) -> Self {
+        match container {
+            Container::Legacy => Self::Legacy,
+            Container::Loc => Self::Loc,
         }
     }
 }
 
-pub(crate) struct PartialVideoConfig(hang::catalog::VideoConfig);
+pub(crate) struct Description(pub(crate) Bytes);
 
-impl PartialVideoConfig {
-    pub(crate) fn with_container(
-        self,
-        container: hang::catalog::Container,
-    ) -> hang::catalog::VideoConfig {
-        let mut config = self.0;
-        config.container = container;
-        config
+impl Encoder for Description {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        let mut binary = NewBinary::new(env, self.0.len());
+        binary.as_mut_slice().copy_from_slice(&self.0);
+        Binary::from(binary).encode(env)
     }
 }
 
-pub(crate) struct PartialAudioConfig(hang::catalog::AudioConfig);
-
-impl PartialAudioConfig {
-    pub(crate) fn with_container(
-        self,
-        container: hang::catalog::Container,
-    ) -> hang::catalog::AudioConfig {
-        let mut config = self.0;
-        config.container = container;
-        config
+impl<'a> Decoder<'a> for Description {
+    fn decode(term: Term<'a>) -> NifResult<Self> {
+        let binary: Binary = term.decode()?;
+        Ok(Self(Bytes::copy_from_slice(binary.as_slice())))
     }
 }
 
-// hang::catalog::*Config types contain both
-// track format (may change throughout track's lifetime)
-// and container (can't change),
-// while ex_moq tries to distinguish them.
-//
-// Unfortunately, the catalog API happily accepts a config
-// with a container different from the old one,
-// so we need to ensure it doesn't happen manually.
-//
-// These wrapper types are supposed to help with this,
-// only giving back a hang config when a container is supplied,
-// which the format update NIF omits deliberately.
-pub(crate) enum PartialTrackConfig {
-    Video(PartialVideoConfig),
-    Audio(PartialAudioConfig),
+#[derive(NifUntaggedEnum)]
+pub(crate) enum VideoCodec {
+    H264(web_codecs::H264Codec),
+    H265(web_codecs::H265Codec),
 }
 
-impl TryFrom<TrackFormat<'_>> for PartialTrackConfig {
-    type Error = rustler::Error;
+#[derive(NifUntaggedEnum)]
+pub(crate) enum AudioCodec {
+    Aac(web_codecs::AacCodec),
+    Opus(web_codecs::OpusCodec),
+}
 
-    fn try_from(format: TrackFormat<'_>) -> NifResult<Self> {
-        let config = match format {
-            TrackFormat::H264 {
-                params,
-                description,
-                codec,
-            } => Self::Video(PartialVideoConfig(video_config(
-                hang::catalog::VideoCodec::H264((&codec).into()),
-                &params,
-                description.as_slice(),
-            ))),
-            TrackFormat::H265 {
-                params,
-                description,
-                codec,
-            } => Self::Video(PartialVideoConfig(video_config(
-                hang::catalog::VideoCodec::H265(codec.try_into()?),
-                &params,
-                description.as_slice(),
-            ))),
-            TrackFormat::Aac { params, codec } => Self::Audio(PartialAudioConfig(
-                aac_audio_config(codec.profile, params.sample_rate, params.channels),
-            )),
-            TrackFormat::Opus { params } => {
-                Self::Audio(PartialAudioConfig(hang::catalog::AudioConfig::new(
-                    hang::catalog::AudioCodec::Opus,
-                    params.sample_rate,
-                    params.channels,
-                )))
+pub(crate) struct UnrecognizedFormat;
+
+impl Encoder for UnrecognizedFormat {
+    fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
+        crate::atoms::unrecognized().encode(env)
+    }
+}
+
+#[derive(NifStruct)]
+#[module = "ExMoQ.Native.VideoTrackFormat"]
+pub(crate) struct VideoTrackFormat {
+    pub(crate) params: web_codecs::VideoTrackParams,
+    pub(crate) description: Description,
+    pub(crate) codec: VideoCodec,
+}
+
+impl TryFrom<&hang::catalog::VideoConfig> for VideoTrackFormat {
+    type Error = UnrecognizedFormat;
+
+    fn try_from(config: &hang::catalog::VideoConfig) -> Result<Self, Self::Error> {
+        let codec = match &config.codec {
+            hang::catalog::VideoCodec::H264(codec) => {
+                VideoCodec::H264(web_codecs::H264Codec(codec.clone()))
             }
-            TrackFormat::Unrecognized => {
-                return Err(crate::nif_error!(
-                    "cannot publish an unrecognized track format"
-                ));
+            hang::catalog::VideoCodec::H265(codec) => {
+                VideoCodec::H265(web_codecs::H265Codec(codec.clone()))
             }
+            _ => return Err(UnrecognizedFormat),
         };
-        Ok(config)
+
+        Ok(Self {
+            params: web_codecs::VideoTrackParams {
+                width: config.coded_width,
+                height: config.coded_height,
+                framerate: config.framerate,
+            },
+            description: Description(config.description.clone().unwrap_or_default()),
+            codec,
+        })
     }
 }
 
-fn video_config(
-    codec: hang::catalog::VideoCodec,
-    params: &VideoTrackParams,
-    dcr: &[u8],
+pub(crate) fn video_config(
+    format: VideoTrackFormat,
+    container: CatalogContainer,
 ) -> hang::catalog::VideoConfig {
+    let codec = match format.codec {
+        VideoCodec::H264(codec) => hang::catalog::VideoCodec::H264(codec.0),
+        VideoCodec::H265(codec) => hang::catalog::VideoCodec::H265(codec.0),
+    };
+
     let mut config = hang::catalog::VideoConfig::new(codec);
-    config.description = (!dcr.is_empty()).then(|| Bytes::copy_from_slice(dcr));
-    config.coded_width = params.width;
-    config.coded_height = params.height;
-    config.framerate = params.framerate;
+    config.description = (!format.description.0.is_empty()).then_some(format.description.0);
+    config.coded_width = format.params.width;
+    config.coded_height = format.params.height;
+    config.framerate = format.params.framerate;
     config.optimize_for_latency = Some(true);
+    config.container = container;
     config
 }
 
-fn aac_audio_config(profile: u8, sample_rate: u32, channels: u32) -> hang::catalog::AudioConfig {
-    let codec = hang::catalog::AudioCodec::AAC(hang::catalog::AAC { profile });
-    let mut config = hang::catalog::AudioConfig::new(codec, sample_rate, channels);
+#[derive(NifStruct)]
+#[module = "ExMoQ.Native.AudioTrackFormat"]
+pub(crate) struct AudioTrackFormat {
+    pub(crate) params: web_codecs::AudioTrackParams,
+    pub(crate) codec: AudioCodec,
+}
 
-    // WebCodecs-convention decoders treat a description-less mp4a.40.x rendition as ADTS;
-    // MoQ requires raw AAC frames, so we include the AudioSpecificConfig in the catalog.
-    config.description = Some(
-        moq_mux::codec::aac::Config {
-            profile,
-            sample_rate,
-            channel_count: channels,
+impl TryFrom<&hang::catalog::AudioConfig> for AudioTrackFormat {
+    type Error = UnrecognizedFormat;
+
+    fn try_from(config: &hang::catalog::AudioConfig) -> Result<Self, Self::Error> {
+        let codec = match &config.codec {
+            hang::catalog::AudioCodec::AAC(codec) => {
+                AudioCodec::Aac(web_codecs::AacCodec(codec.clone()))
+            }
+            hang::catalog::AudioCodec::Opus => AudioCodec::Opus(web_codecs::OpusCodec),
+            _ => return Err(UnrecognizedFormat),
+        };
+
+        Ok(Self {
+            params: web_codecs::AudioTrackParams {
+                sample_rate: config.sample_rate,
+                channels: config.channel_count,
+            },
+            codec,
+        })
+    }
+}
+
+pub(crate) fn audio_config(
+    format: AudioTrackFormat,
+    container: CatalogContainer,
+) -> hang::catalog::AudioConfig {
+    let mut config = match format.codec {
+        AudioCodec::Aac(codec) => {
+            let profile = codec.0.profile;
+            let mut config = hang::catalog::AudioConfig::new(
+                codec.0,
+                format.params.sample_rate,
+                format.params.channels,
+            );
+
+            // WebCodecs-convention decoders treat a description-less mp4a.40.x rendition as ADTS;
+            // MoQ requires raw AAC frames, so we include the AudioSpecificConfig in the catalog.
+            config.description = Some(
+                moq_mux::codec::aac::Config {
+                    profile,
+                    sample_rate: format.params.sample_rate,
+                    channel_count: format.params.channels,
+                }
+                .encode(),
+            );
+
+            config
         }
-        .encode(),
-    );
+        AudioCodec::Opus(_codec) => hang::catalog::AudioConfig::new(
+            hang::catalog::AudioCodec::Opus,
+            format.params.sample_rate,
+            format.params.channels,
+        ),
+    };
 
+    config.container = container;
     config
+}
+
+#[derive(NifUntaggedEnum)]
+pub(crate) enum TrackFormat {
+    Video(VideoTrackFormat),
+    Audio(AudioTrackFormat),
 }

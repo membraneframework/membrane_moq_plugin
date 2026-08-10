@@ -7,7 +7,7 @@ defmodule ExMoQ.Native do
   """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "ex_moq"
 
-  alias ExMoQ.Native.WebCodecs
+  alias ExMoQ.Native.{AudioTrackFormat, VideoTrackFormat}
 
   @type session :: reference()
   @type broadcast_producer :: reference()
@@ -19,7 +19,7 @@ defmodule ExMoQ.Native do
   """
   @type track :: String.t()
 
-  @typedoc "Wire container a track's frames are encapsulated in."
+  @typedoc "Wire container a publisher encapsulates a track's frames in."
   @type container :: :legacy | :loc
 
   @typedoc """
@@ -27,13 +27,6 @@ defmodule ExMoQ.Native do
   echoed back in the subscription's messages.
   """
   @type token :: integer()
-
-  @typedoc """
-  Format and wire container of a track, as advertised in the broadcast's catalog.
-  The container is `nil` when the catalog advertises one this library
-  does not recognize.
-  """
-  @type rendition :: {track_format(), container() | nil}
 
   @typedoc "Reason a broadcast consumer closed."
   @type close_reason :: :ended | :not_announced | :crashed | {:catalog_error, String.t()}
@@ -92,21 +85,7 @@ defmodule ExMoQ.Native do
   built from WebCodecs-style structs (see `ExMoQ.Native.WebCodecs`).
   """
   @type track_format() ::
-          {:h264,
-           %{
-             params: WebCodecs.VideoTrackParams.t(),
-             description: binary(),
-             codec: WebCodecs.H264Codec.t()
-           }}
-          | {:h265,
-             %{
-               params: WebCodecs.VideoTrackParams.t(),
-               description: binary(),
-               codec: WebCodecs.H265Codec.t()
-             }}
-          | {:aac, %{params: WebCodecs.AudioTrackParams.t(), codec: WebCodecs.AACCodec.t()}}
-          | {:opus, %{params: WebCodecs.AudioTrackParams.t()}}
-          | :unrecognized
+          VideoTrackFormat.t() | AudioTrackFormat.t() | :unrecognized
 
   @doc """
   Adds a track of any supported codec to the given broadcast.
@@ -178,7 +157,7 @@ defmodule ExMoQ.Native do
 
   Multiple broadcast consumers may share one session.
   Each one independently waits for its broadcast to be announced.
-  Subscribe to individual tracks with `subscribe_track/5`.
+  Subscribe to individual tracks with `subscribe_track/4`.
 
   The catalog format is detected from the broadcast name's filename-style suffix:
     * `.msf`  -> MSF
@@ -193,7 +172,7 @@ defmodule ExMoQ.Native do
         once the broadcast is announced and its catalog is subscribed
     * `{:moq_broadcast_closed, path :: String.t(), reason :: close_reason()}`
         when the broadcast ends, errors, or the session closes underneath it
-    * `{:moq_catalog, path :: String.t(), renditions :: [{track(), rendition()}]}`
+    * `{:moq_catalog, path :: String.t(), renditions :: [{track(), track_format()}]}`
         with the full catalog snapshot, once the broadcast is announced
         and again on every catalog update.
         Diffing consecutive snapshots is the caller's job:
@@ -209,17 +188,10 @@ defmodule ExMoQ.Native do
   @doc """
   Subscribes to `track` within the broadcast consumed by the given consumer.
 
-  `container` selects the parser for the track's frames:
-  pass the value advertised for the track in the `:moq_catalog` message.
-
   `token` (see `t:token/0`) lets the caller route this track's messages
   to the originating subscription.
   Keep tokens unique across all broadcast consumers reporting to the same pid.
   Don't reuse tokens.
-
-  The subscription is immediate:
-  a track the broadcast does not carry fails asynchronously with `:moq_track_error`.
-  Waiting until the catalog advertises a track is the caller's job (watch `:moq_catalog`).
 
   Sends to the consumer's `pid`:
     * `{:moq_frame, token(), binary(), timestamp_ns :: non_neg_integer(), keyframe? :: boolean()}`
@@ -230,9 +202,9 @@ defmodule ExMoQ.Native do
         when the subscription fails on the native side
         while the track may still be advertised in the catalog
   """
-  @spec subscribe_track(broadcast_consumer(), track(), container() | nil, token(), 0..255) ::
-          :ok | {:error, :unrecognized_container | :consumer_closed}
-  def subscribe_track(_broadcast_consumer, _track, _container, _token, _priority),
+  @spec subscribe_track(broadcast_consumer(), track(), token(), 0..255) ::
+          :ok | {:error, :consumer_closed}
+  def subscribe_track(_broadcast_consumer, _track, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """

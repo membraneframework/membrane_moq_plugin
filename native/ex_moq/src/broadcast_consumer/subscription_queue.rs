@@ -10,6 +10,8 @@ use hang::moq_net::kio;
 use crate::messages::Token;
 use crate::track_format::WireContainer;
 
+use super::{TrackError, TrackErrorKind};
+
 type WireConsumer = moq_mux::container::Consumer<WireContainer>;
 
 struct PendingSub {
@@ -22,26 +24,11 @@ enum Subscription {
     Streaming(Box<WireConsumer>),
 }
 
-#[derive(Debug, thiserror::Error)]
-enum QueueError {
-    #[error("subscribe failed: {0}")]
-    SubscribeFailed(#[from] hang::moq_net::Error),
-    #[error("track read failed: {0}")]
-    ReadFailed(#[from] moq_mux::Error),
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("track({track}): {source}")]
-pub(super) struct TrackError {
-    track: String,
-    source: QueueError,
-}
-
 enum Step {
     Yield(Frame, Subscription),
     Wait(Subscription),
     Finished,
-    Err(QueueError),
+    Err(TrackErrorKind),
 }
 
 pub(super) enum TrackResult {

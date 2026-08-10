@@ -233,11 +233,9 @@ impl Producer {
             }
         };
 
-        let handle = RenditionHandle::new(catalog, track, format, container);
-
         Ok(LiveTrack {
             producer,
-            rendition: handle,
+            rendition: RenditionHandle::new(catalog, track, format, container),
         })
     }
 }

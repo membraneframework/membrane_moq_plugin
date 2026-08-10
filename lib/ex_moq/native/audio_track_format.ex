@@ -1,7 +1,6 @@
 defmodule ExMoQ.Native.AudioTrackFormat do
   @moduledoc """
   An audio track's format: codec-agnostic parameters and the per-codec fields
-  (`:opus` needs no parameters and stands alone).
   """
 
   alias ExMoQ.Native.WebCodecs

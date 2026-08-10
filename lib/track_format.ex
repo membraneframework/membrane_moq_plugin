@@ -91,7 +91,7 @@ defmodule Membrane.MoQ.TrackFormat do
   @doc """
   Default delivery priority for a track format, following hang's convention
   """
-  @spec default_priority(Native.track_format()) :: 0..255
+  @spec default_priority(Native.track_format() | :unrecognized) :: 0..255
   def default_priority(%AudioTrackFormat{}), do: 80
   def default_priority(%VideoTrackFormat{}), do: 60
   def default_priority(:unrecognized), do: 0
@@ -100,7 +100,7 @@ defmodule Membrane.MoQ.TrackFormat do
   Reconstruct a Membrane stream format from a native track-format term,
   or `RemoteStream.t()` if it is not recognized.
   """
-  @spec to_stream_format(Native.track_format()) ::
+  @spec to_stream_format(Native.track_format() | :unrecognized) ::
           H264.t() | H265.t() | AAC.t() | Opus.t() | RemoteStream.t()
   def to_stream_format(%VideoTrackFormat{
         params: %{width: width, height: height, framerate: framerate},

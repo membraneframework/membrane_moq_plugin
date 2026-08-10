@@ -84,8 +84,7 @@ defmodule ExMoQ.Native do
   Codec configuration mirroring `hang`'s catalog config,
   built from WebCodecs-style structs (see `ExMoQ.Native.WebCodecs`).
   """
-  @type track_format() ::
-          VideoTrackFormat.t() | AudioTrackFormat.t() | :unrecognized
+  @type track_format() :: VideoTrackFormat.t() | AudioTrackFormat.t()
 
   @doc """
   Adds a track of any supported codec to the given broadcast.
@@ -172,7 +171,7 @@ defmodule ExMoQ.Native do
         once the broadcast is announced and its catalog is subscribed
     * `{:moq_broadcast_closed, path :: String.t(), reason :: close_reason()}`
         when the broadcast ends, errors, or the session closes underneath it
-    * `{:moq_catalog, path :: String.t(), renditions :: [{track(), track_format()}]}`
+    * `{:moq_catalog, path :: String.t(), renditions :: [{track(), track_format() | :unrecognized}]}`
         with the full catalog snapshot, once the broadcast is announced
         and again on every catalog update.
         Diffing consecutive snapshots is the caller's job:
@@ -187,6 +186,8 @@ defmodule ExMoQ.Native do
 
   @doc """
   Subscribes to `track` within the broadcast consumed by the given consumer.
+
+  Fails asynchronously for tracks that are not currently announced by the catalog.
 
   `token` (see `t:token/0`) lets the caller route this track's messages
   to the originating subscription.

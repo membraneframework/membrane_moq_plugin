@@ -64,6 +64,39 @@ pub(crate) fn send_track_error(
     send(env, pid, (atoms::moq_track_error(), token, reason))
 }
 
+fn send(env: &mut OwnedEnv, pid: LocalPid, msg: impl Encoder) -> Result<(), PidDead> {
+    env.send_and_clear(&pid, |env| msg.encode(env))
+        .map_err(|_| PidDead)
+}
+
+pub(crate) fn send_frame(
+    env: &mut OwnedEnv,
+    pid: LocalPid,
+    token: Token,
+    frame: moq_mux::container::Frame,
+) -> Result<(), PidDead> {
+    let moq_mux::container::Frame {
+        payload,
+        timestamp,
+        keyframe,
+        duration: _,
+    } = frame;
+    env.send_and_clear(&pid, |env| {
+        let mut payload_binary = NewBinary::new(env, payload.len());
+        payload_binary.as_mut_slice().copy_from_slice(&payload);
+
+        (
+            atoms::moq_frame(),
+            token,
+            Binary::from(payload_binary),
+            timestamp.as_nanos() as u64,
+            keyframe,
+        )
+            .encode(env)
+    })
+    .map_err(|_| PidDead)
+}
+
 pub(crate) fn send_catalog(
     env: &mut OwnedEnv,
     pid: LocalPid,
@@ -98,37 +131,4 @@ pub(crate) fn send_catalog(
         (atoms::moq_catalog(), path, renditions).encode(env)
     })
     .map_err(|_| PidDead)
-}
-
-pub(crate) fn send_frame(
-    env: &mut OwnedEnv,
-    pid: LocalPid,
-    token: Token,
-    frame: moq_mux::container::Frame,
-) -> Result<(), PidDead> {
-    let moq_mux::container::Frame {
-        payload,
-        timestamp,
-        keyframe,
-        duration: _,
-    } = frame;
-    env.send_and_clear(&pid, |env| {
-        let mut payload_binary = NewBinary::new(env, payload.len());
-        payload_binary.as_mut_slice().copy_from_slice(&payload);
-
-        (
-            atoms::moq_frame(),
-            token,
-            Binary::from(payload_binary),
-            timestamp.as_nanos() as u64,
-            keyframe,
-        )
-            .encode(env)
-    })
-    .map_err(|_| PidDead)
-}
-
-fn send(env: &mut OwnedEnv, pid: LocalPid, msg: impl Encoder) -> Result<(), PidDead> {
-    env.send_and_clear(&pid, |env| msg.encode(env))
-        .map_err(|_| PidDead)
 }

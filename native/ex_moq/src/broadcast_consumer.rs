@@ -240,18 +240,9 @@ impl Driver {
                 token,
                 priority,
             }) => {
-                let result = match self.containers.get(&track) {
-                    None => Err(TrackError {
-                        track,
-                        source: TrackErrorKind::NotAdvertised,
-                    }),
-                    Some(container) => match WireContainer::try_from(container) {
-                        Err(e) => Err(TrackError {
-                            track,
-                            source: TrackErrorKind::Container(e),
-                        }),
-                        Ok(wire) => self.subs.insert(token, track, wire, priority),
-                    },
+                let result = match self.get_container(&track) {
+                    Ok(container) => self.subs.insert(token, track, container, priority),
+                    Err(source) => Err(TrackError { track, source }),
                 };
 
                 match result.or_else(|e| {
@@ -301,6 +292,14 @@ impl Driver {
             Ok(()) => ControlFlow::Continue(()),
             Err(messages::PidDead) => ControlFlow::Break(None),
         }
+    }
+
+    fn get_container(&self, track: &str) -> Result<WireContainer, TrackErrorKind> {
+        self.containers
+            .get(track)
+            .ok_or(TrackErrorKind::NotAdvertised)?
+            .try_into()
+            .map_err(|e| TrackErrorKind::Container(e))
     }
 }
 

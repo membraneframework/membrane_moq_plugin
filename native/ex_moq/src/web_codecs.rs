@@ -19,7 +19,7 @@ pub(crate) struct H264Codec(pub(crate) hang::catalog::H264);
 
 #[derive(NifStruct)]
 #[module = "ExMoQ.Native.WebCodecs.H264Codec"]
-struct H264CodecWire {
+struct H264CodecTerm {
     in_band: bool,
     profile: u8,
     constraints: u8,
@@ -28,7 +28,7 @@ struct H264CodecWire {
 
 impl Encoder for H264Codec {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
-        H264CodecWire {
+        H264CodecTerm {
             in_band: self.0.inline,
             profile: self.0.profile,
             constraints: self.0.constraints,
@@ -40,13 +40,13 @@ impl Encoder for H264Codec {
 
 impl<'a> Decoder<'a> for H264Codec {
     fn decode(term: Term<'a>) -> NifResult<Self> {
-        let wire: H264CodecWire = term.decode()?;
+        let codec: H264CodecTerm = term.decode()?;
 
         Ok(Self(hang::catalog::H264 {
-            inline: wire.in_band,
-            profile: wire.profile,
-            constraints: wire.constraints,
-            level: wire.level,
+            inline: codec.in_band,
+            profile: codec.profile,
+            constraints: codec.constraints,
+            level: codec.level,
         }))
     }
 }
@@ -55,7 +55,7 @@ pub(crate) struct H265Codec(pub(crate) hang::catalog::H265);
 
 #[derive(NifStruct)]
 #[module = "ExMoQ.Native.WebCodecs.H265Codec"]
-struct H265CodecWire {
+struct H265CodecTerm {
     in_band: bool,
     profile_space: u8,
     profile_idc: u8,
@@ -67,7 +67,7 @@ struct H265CodecWire {
 
 impl Encoder for H265Codec {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
-        H265CodecWire {
+        H265CodecTerm {
             in_band: self.0.in_band,
             profile_space: self.0.profile_space,
             profile_idc: self.0.profile_idc,
@@ -82,25 +82,25 @@ impl Encoder for H265Codec {
 
 impl<'a> Decoder<'a> for H265Codec {
     fn decode(term: Term<'a>) -> NifResult<Self> {
-        let wire: H265CodecWire = term.decode()?;
+        let codec: H265CodecTerm = term.decode()?;
 
         let profile_compatibility_flags: [u8; 4] =
-            wire.profile_compatibility_flags.try_into().map_err(|_| {
+            codec.profile_compatibility_flags.try_into().map_err(|_| {
                 crate::nif_error!("profile_compatibility_flags must be exactly 4 bytes")
             })?;
 
-        let constraint_flags: [u8; 6] = wire
+        let constraint_flags: [u8; 6] = codec
             .constraint_flags
             .try_into()
             .map_err(|_| crate::nif_error!("constraint_flags must be exactly 6 bytes"))?;
 
         Ok(Self(hang::catalog::H265 {
-            in_band: wire.in_band,
-            profile_space: wire.profile_space,
-            profile_idc: wire.profile_idc,
+            in_band: codec.in_band,
+            profile_space: codec.profile_space,
+            profile_idc: codec.profile_idc,
             profile_compatibility_flags,
-            tier_flag: wire.tier_flag,
-            level_idc: wire.level_idc,
+            tier_flag: codec.tier_flag,
+            level_idc: codec.level_idc,
             constraint_flags,
         }))
     }
@@ -110,13 +110,13 @@ pub(crate) struct AacCodec(pub(crate) hang::catalog::AAC);
 
 #[derive(NifStruct)]
 #[module = "ExMoQ.Native.WebCodecs.AACCodec"]
-struct AacCodecWire {
+struct AacCodecTerm {
     profile: u8,
 }
 
 impl Encoder for AacCodec {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
-        AacCodecWire {
+        AacCodecTerm {
             profile: self.0.profile,
         }
         .encode(env)
@@ -125,13 +125,14 @@ impl Encoder for AacCodec {
 
 impl<'a> Decoder<'a> for AacCodec {
     fn decode(term: Term<'a>) -> NifResult<Self> {
-        let wire: AacCodecWire = term.decode()?;
+        let codec: AacCodecTerm = term.decode()?;
 
         Ok(Self(hang::catalog::AAC {
-            profile: wire.profile,
+            profile: codec.profile,
         }))
     }
 }
+
 pub(crate) struct OpusCodec;
 
 impl Encoder for OpusCodec {

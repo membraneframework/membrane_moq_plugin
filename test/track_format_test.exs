@@ -4,7 +4,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
   """
   use ExUnit.Case, async: true
 
-  alias ExMoQ.Native.{AudioTrackFormat, VideoTrackFormat, WebCodecs}
+  alias ExMoQ.Native.WebCodecs
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
   alias Membrane.MoQ.TrackFormat
@@ -13,7 +13,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     test "round-trips through from/to stream_format" do
       fmt = %AAC{profile: :LC, sample_rate: 44_100, channels: 2}
 
-      assert %AudioTrackFormat{params: params, codec: codec} =
+      assert %WebCodecs.AudioTrackFormat{params: params, codec: codec} =
                native = TrackFormat.from_stream_format(fmt)
 
       assert %WebCodecs.AudioTrackParams{sample_rate: 44_100, channels: 2} = params
@@ -27,7 +27,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     test "round-trips through from/to stream_format" do
       fmt = %Opus{channels: 2, self_delimiting?: false}
 
-      assert %AudioTrackFormat{params: params, codec: :opus} =
+      assert %WebCodecs.AudioTrackFormat{params: params, codec: :opus} =
                native = TrackFormat.from_stream_format(fmt)
 
       assert %WebCodecs.AudioTrackParams{sample_rate: 48_000, channels: 2} = params
@@ -50,7 +50,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
 
         native = TrackFormat.from_stream_format(fmt)
 
-        assert %VideoTrackFormat{params: params, description: ^dcr, codec: codec} =
+        assert %WebCodecs.VideoTrackFormat{params: params, description: ^dcr, codec: codec} =
                  native
 
         assert %WebCodecs.H264Codec{} = codec
@@ -67,7 +67,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
       dcr = avcc(100, 0, 31)
       fmt = %H264{width: 640, height: 480, framerate: nil, stream_structure: {:avc1, dcr}}
 
-      assert %VideoTrackFormat{params: %{framerate: nil}} =
+      assert %WebCodecs.VideoTrackFormat{params: %{framerate: nil}} =
                native = TrackFormat.from_stream_format(fmt)
 
       assert TrackFormat.to_stream_format(native) == fmt
@@ -77,7 +77,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     # no description means Annex B on the wire, whatever the in_band flag says.
     for in_band <- [true, false] do
       test "a track without a description (in_band: #{in_band}) maps to Annex B" do
-        native = %VideoTrackFormat{
+        native = %WebCodecs.VideoTrackFormat{
           params: %{width: 1280, height: 720, framerate: 30.0},
           description: <<>>,
           codec: %WebCodecs.H264Codec{
@@ -95,7 +95,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     # The NIF decodes absent dimensions as nil; a remote catalog may still say 0.
     for absent <- [nil, 0] do
       test "dimensions absent from the catalog as #{inspect(absent)} map to nil" do
-        native = %VideoTrackFormat{
+        native = %WebCodecs.VideoTrackFormat{
           params: %{width: unquote(absent), height: unquote(absent), framerate: 30.0},
           description: avcc(100, 0, 31),
           codec: %WebCodecs.H264Codec{in_band: false, profile: 100, constraints: 0, level: 31}
@@ -106,7 +106,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     end
 
     test "small fps values map to positive numerator/denominator pairs" do
-      native = %VideoTrackFormat{
+      native = %WebCodecs.VideoTrackFormat{
         params: %{width: 1280, height: 720, framerate: 4.0e-4},
         description: avcc(100, 0, 31),
         codec: %WebCodecs.H264Codec{in_band: false, profile: 100, constraints: 0, level: 31}
@@ -131,7 +131,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
 
         native = TrackFormat.from_stream_format(fmt)
 
-        assert %VideoTrackFormat{params: params, description: ^dcr, codec: codec} =
+        assert %WebCodecs.VideoTrackFormat{params: params, description: ^dcr, codec: codec} =
                  native
 
         assert %WebCodecs.H265Codec{} = codec
@@ -146,7 +146,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     end
 
     test "dimensions omitted from the catalog map to nil" do
-      native = %VideoTrackFormat{
+      native = %WebCodecs.VideoTrackFormat{
         params: %{width: nil, height: nil, framerate: 30.0},
         description: hvcc(),
         codec: h265_codec(false)
@@ -156,7 +156,7 @@ defmodule Membrane.MoQ.TrackFormatTest do
     end
 
     test "a track without a description maps to Annex B" do
-      native = %VideoTrackFormat{
+      native = %WebCodecs.VideoTrackFormat{
         params: %{width: 1280, height: 720, framerate: 30.0},
         description: <<>>,
         codec: h265_codec(true)

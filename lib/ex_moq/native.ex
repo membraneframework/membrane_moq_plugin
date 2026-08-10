@@ -1,13 +1,10 @@
 defmodule ExMoQ.Native do
   @moduledoc """
   Elixir bindings to moq-net's native Rust API
-
-  Producer NIFs return `{:error, :producer_poisoned}` when an earlier call
-  panicked mid-operation, leaving the broadcast producer unusable.
   """
   use Rustler, otp_app: :membrane_moq_plugin, crate: "ex_moq"
 
-  alias ExMoQ.Native.{AudioTrackFormat, VideoTrackFormat}
+  alias ExMoQ.Native.WebCodecs
 
   @type session :: reference()
   @type broadcast_producer :: reference()
@@ -84,7 +81,7 @@ defmodule ExMoQ.Native do
   Codec configuration mirroring `hang`'s catalog config,
   built from WebCodecs-style structs (see `ExMoQ.Native.WebCodecs`).
   """
-  @type track_format() :: VideoTrackFormat.t() | AudioTrackFormat.t()
+  @type track_format() :: WebCodecs.VideoTrackFormat.t() | WebCodecs.AudioTrackFormat.t()
 
   @doc """
   Adds a track of any supported codec to the given broadcast.

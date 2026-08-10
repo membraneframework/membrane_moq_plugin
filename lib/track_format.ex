@@ -4,7 +4,7 @@ defmodule Membrane.MoQ.TrackFormat do
   # and the native MoQ track-format term (`t:ExMoQ.Native.track_format/0`).
 
   alias ExMoQ.Native
-  alias ExMoQ.Native.{AudioTrackFormat, VideoTrackFormat, WebCodecs}
+  alias ExMoQ.Native.WebCodecs
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
 
@@ -21,7 +21,7 @@ defmodule Membrane.MoQ.TrackFormat do
       }) do
     dcr_parsed = Membrane.H264.DecoderConfigurationRecord.parse(dcr)
 
-    %VideoTrackFormat{
+    %WebCodecs.VideoTrackFormat{
       params: %WebCodecs.VideoTrackParams{
         width: width,
         height: height,
@@ -49,7 +49,7 @@ defmodule Membrane.MoQ.TrackFormat do
       }) do
     dcr_parsed = Membrane.H265.DecoderConfigurationRecord.parse(dcr)
 
-    %VideoTrackFormat{
+    %WebCodecs.VideoTrackFormat{
       params: %WebCodecs.VideoTrackParams{
         width: width,
         height: height,
@@ -74,7 +74,7 @@ defmodule Membrane.MoQ.TrackFormat do
   end
 
   def from_stream_format(%AAC{profile: profile, sample_rate: sample_rate, channels: channels}),
-    do: %AudioTrackFormat{
+    do: %WebCodecs.AudioTrackFormat{
       params: %WebCodecs.AudioTrackParams{
         sample_rate: sample_rate,
         channels: channels
@@ -83,7 +83,7 @@ defmodule Membrane.MoQ.TrackFormat do
     }
 
   def from_stream_format(%Opus{channels: channels}),
-    do: %AudioTrackFormat{
+    do: %WebCodecs.AudioTrackFormat{
       params: %WebCodecs.AudioTrackParams{sample_rate: 48_000, channels: channels},
       codec: :opus
     }
@@ -92,8 +92,8 @@ defmodule Membrane.MoQ.TrackFormat do
   Default delivery priority for a track format, following hang's convention
   """
   @spec default_priority(Native.track_format() | :unrecognized) :: 0..255
-  def default_priority(%AudioTrackFormat{}), do: 80
-  def default_priority(%VideoTrackFormat{}), do: 60
+  def default_priority(%WebCodecs.AudioTrackFormat{}), do: 80
+  def default_priority(%WebCodecs.VideoTrackFormat{}), do: 60
   def default_priority(:unrecognized), do: 0
 
   @doc """
@@ -102,7 +102,7 @@ defmodule Membrane.MoQ.TrackFormat do
   """
   @spec to_stream_format(Native.track_format() | :unrecognized) ::
           H264.t() | H265.t() | AAC.t() | Opus.t() | RemoteStream.t()
-  def to_stream_format(%VideoTrackFormat{
+  def to_stream_format(%WebCodecs.VideoTrackFormat{
         params: %{width: width, height: height, framerate: framerate},
         description: dcr,
         codec: %WebCodecs.H264Codec{in_band: in_band}
@@ -115,7 +115,7 @@ defmodule Membrane.MoQ.TrackFormat do
     }
   end
 
-  def to_stream_format(%VideoTrackFormat{
+  def to_stream_format(%WebCodecs.VideoTrackFormat{
         params: %{width: width, height: height, framerate: framerate},
         description: dcr,
         codec: %WebCodecs.H265Codec{in_band: in_band}
@@ -128,7 +128,7 @@ defmodule Membrane.MoQ.TrackFormat do
     }
   end
 
-  def to_stream_format(%AudioTrackFormat{
+  def to_stream_format(%WebCodecs.AudioTrackFormat{
         params: %{sample_rate: sample_rate, channels: channels},
         codec: %WebCodecs.AACCodec{profile: profile}
       }) do
@@ -139,7 +139,7 @@ defmodule Membrane.MoQ.TrackFormat do
     }
   end
 
-  def to_stream_format(%AudioTrackFormat{params: %{channels: channels}, codec: :opus}) do
+  def to_stream_format(%WebCodecs.AudioTrackFormat{params: %{channels: channels}, codec: :opus}) do
     %Opus{channels: channels, self_delimiting?: false}
   end
 

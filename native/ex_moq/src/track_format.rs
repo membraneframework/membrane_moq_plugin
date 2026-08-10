@@ -71,7 +71,7 @@ impl Encoder for UnrecognizedFormat {
 }
 
 #[derive(NifStruct)]
-#[module = "ExMoQ.Native.VideoTrackFormat"]
+#[module = "ExMoQ.Native.WebCodecs.VideoTrackFormat"]
 pub(crate) struct VideoTrackFormat {
     pub(crate) params: web_codecs::VideoTrackParams,
     pub(crate) description: Description,
@@ -124,7 +124,7 @@ pub(crate) fn video_config(
 }
 
 #[derive(NifStruct)]
-#[module = "ExMoQ.Native.AudioTrackFormat"]
+#[module = "ExMoQ.Native.WebCodecs.AudioTrackFormat"]
 pub(crate) struct AudioTrackFormat {
     pub(crate) params: web_codecs::AudioTrackParams,
     pub(crate) codec: AudioCodec,

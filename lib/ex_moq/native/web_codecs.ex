@@ -73,4 +73,30 @@ defmodule ExMoQ.Native.WebCodecs do
     @enforce_keys [:profile]
     defstruct @enforce_keys
   end
+
+  defmodule VideoTrackFormat do
+    @moduledoc """
+    A video track's format: codec-agnostic parameters, the decoder
+    configuration record (empty binary when absent) and the per-codec fields.
+    """
+    @type t :: %__MODULE__{
+            params: VideoTrackParams.t(),
+            description: binary(),
+            codec: H264Codec.t() | H265Codec.t()
+          }
+    @enforce_keys [:params, :description, :codec]
+    defstruct @enforce_keys
+  end
+
+  defmodule AudioTrackFormat do
+    @moduledoc """
+    An audio track's format: codec-agnostic parameters and the per-codec fields
+    """
+    @type t :: %__MODULE__{
+            params: AudioTrackParams.t(),
+            codec: AACCodec.t() | :opus
+          }
+    @enforce_keys [:params, :codec]
+    defstruct @enforce_keys
+  end
 end

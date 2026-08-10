@@ -299,7 +299,7 @@ impl Driver {
             .get(track)
             .ok_or(TrackErrorKind::NotAdvertised)?
             .try_into()
-            .map_err(|e| TrackErrorKind::Container(e))
+            .map_err(TrackErrorKind::Container)
     }
 }
 

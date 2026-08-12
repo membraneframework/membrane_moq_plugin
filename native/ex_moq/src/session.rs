@@ -7,43 +7,43 @@ use url::Url;
 
 use crate::{messages, runtime};
 
-pub(crate) struct Session {
+pub(crate) struct Handle {
     pub(crate) publish: origin::Producer,
     pub(crate) subscribe: origin::Consumer,
     abort: AbortHandle,
 }
 
-impl Session {
-    pub(crate) fn connect(url: Url, pid: LocalPid, disable_tls_verify: bool) -> Self {
-        let publish = moq_net::Origin::random().produce();
-        let subscribe = moq_net::Origin::random().produce();
-
-        let publish_consumer = publish.consume();
-        let subscribe_consumer = subscribe.consume();
-
-        let task = runtime().spawn(run_session(
-            url,
-            pid,
-            publish_consumer,
-            subscribe,
-            disable_tls_verify,
-        ));
-
-        Self {
-            publish,
-            subscribe: subscribe_consumer,
-            abort: task.abort_handle(),
-        }
-    }
-
+impl Handle {
     pub(crate) fn close(&self) {
         self.abort.abort();
     }
 }
 
-impl Drop for Session {
+impl Drop for Handle {
     fn drop(&mut self) {
         self.abort.abort();
+    }
+}
+
+pub(crate) fn create(url: Url, pid: LocalPid, disable_tls_verify: bool) -> Handle {
+    let publish = moq_net::Origin::random().produce();
+    let subscribe = moq_net::Origin::random().produce();
+
+    let publish_consumer = publish.consume();
+    let subscribe_consumer = subscribe.consume();
+
+    let task = runtime().spawn(run_session(
+        url,
+        pid,
+        publish_consumer,
+        subscribe,
+        disable_tls_verify,
+    ));
+
+    Handle {
+        publish,
+        subscribe: subscribe_consumer,
+        abort: task.abort_handle(),
     }
 }
 

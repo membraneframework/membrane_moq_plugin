@@ -65,7 +65,7 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-struct SessionResource(session::Session);
+struct SessionResource(session::Handle);
 
 #[rustler::resource_impl]
 impl Resource for SessionResource {}
@@ -88,7 +88,7 @@ fn create_session(
 ) -> NifResult<(Atom, ResourceArc<SessionResource>)> {
     let url = Url::parse(url).map_err(|e| nif_error!("invalid url: {e}"))?;
 
-    let session = session::Session::connect(url, pid, disable_tls_verify);
+    let session = session::create(url, pid, disable_tls_verify);
     Ok((ok(), ResourceArc::new(SessionResource(session))))
 }
 
@@ -114,17 +114,15 @@ fn create_broadcast_producer(
 
 #[rustler::nif]
 fn close_broadcast_producer(producer: ResourceArc<BroadcastProducerResource>) -> Atom {
-    let locked = producer.0.lock();
-    let poisoned = locked.is_err();
-    let mut producer = locked.unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    if !poisoned {
-        // Flush frames inside the producers' internal cache.
-        // We don't do this for a poisoned resource to avoid touching possibly inconsistent state.
-        producer.finish();
+    match producer.0.lock() {
+        Ok(mut producer) => {
+            producer.finish();
+            producer.abort();
+        }
+        Err(poisoned) => {
+            poisoned.into_inner().abort();
+        }
     }
-
-    producer.abort();
     ok()
 }
 

@@ -13,7 +13,6 @@ use moq_mux::catalog::Stream as _;
 
 use crate::messages::{self, Token};
 use crate::runtime;
-use crate::session::Session;
 use crate::track_format::{CatalogContainer, WireContainer};
 
 use subscription_queue::{SubscriptionQueue, TrackResult};
@@ -112,7 +111,12 @@ impl Handle {
     }
 }
 
-pub(crate) fn spawn(session: &Session, path: String, pid: LocalPid, latency: Duration) -> Handle {
+pub(crate) fn spawn(
+    session: &crate::session::Handle,
+    path: String,
+    pid: LocalPid,
+    latency: Duration,
+) -> Handle {
     let origin = session.subscribe.consume();
     let commands = kio::Queue::new();
 

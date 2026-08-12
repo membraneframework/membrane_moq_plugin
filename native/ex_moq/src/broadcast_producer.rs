@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::time::Duration;
 
+use crate::runtime;
 use crate::track_format::{Container, TrackFormat, WireContainer, audio_config, video_config};
-use crate::{runtime, session::Session};
 
 struct KindMismatch;
 
@@ -102,7 +102,7 @@ pub(crate) struct Producer {
 }
 
 impl Producer {
-    pub(crate) fn new(session: &Session, path: &str) -> Result<Self, CreateError> {
+    pub(crate) fn new(session: &crate::session::Handle, path: &str) -> Result<Self, CreateError> {
         let mut broadcast = {
             // from moq_net::model::Producer::create_broadcast:
             // must be called with a runtime available

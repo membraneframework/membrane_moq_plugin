@@ -629,6 +629,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns-lookup"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e39034cee21a2f5bbb66ba0e3689819c4bb5d00382a282006e802a7ffa6c41d"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "socket2",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1013,9 +1025,9 @@ dependencies = [
 
 [[package]]
 name = "http-body-util"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f41fd6a08e4d4ec69df65976da761afd5ad5e58a9d4acb46bd1c953a9e3ff2"
+checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
 dependencies = [
  "bytes",
  "futures-core",
@@ -1648,9 +1660,9 @@ dependencies = [
 
 [[package]]
 name = "moq-mux"
-version = "0.9.5"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dccf516a451836933235626bf9d6d11532edb91b99ce0cf56d76f586c8accf80"
+checksum = "e97222979f86465011cd9c0f8ae3633c163da82cc484c1b43b9aa7c4918c588e"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1680,11 +1692,12 @@ dependencies = [
 
 [[package]]
 name = "moq-native"
-version = "0.19.9"
+version = "0.19.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e559090c9cdeaa4ad8d76ad3755647bec0d85503b21e81ee5022f1da2ba7d33d"
+checksum = "bd3181bcac8d943056fedc95174e2b274301b9e3859327aae7635280428d10be"
 dependencies = [
  "clap",
+ "dns-lookup",
  "futures",
  "hex",
  "humantime",
@@ -1720,9 +1733,9 @@ dependencies = [
 
 [[package]]
 name = "moq-net"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "367533e5edef353d87571fe6f0dfb8cc1c87522c7690861a57285358aa751075"
+checksum = "83015765d329175530717c6588f97d6433a3446da327361e8f6df4280af459ff"
 dependencies = [
  "bytes",
  "futures",
@@ -1738,9 +1751,9 @@ dependencies = [
 
 [[package]]
 name = "mp4-atom"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3144b10c48a9707a4e8526a0371eebf4a46e2cb703748b0d83bbdc77421bc16f"
+checksum = "f3d7433df407a636db7047600422af07145adf6ee25e0622745b0131516dbc3c"
 dependencies = [
  "bytes",
  "derive_more",

@@ -35,7 +35,7 @@ enum TrackError {
     #[error("subscribe failed: {0}")]
     SubscribeFailed(#[from] moq_net::Error),
     #[error("track read failed: {0}")]
-    ReadFailed(#[from] moq_mux::Error),
+    ReadFailed(moq_mux::Error),
     #[error(transparent)]
     Panicked(tokio::task::JoinError),
 }

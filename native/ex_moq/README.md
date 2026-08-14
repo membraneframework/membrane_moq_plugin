@@ -22,16 +22,15 @@ end
 
 {:ok, broadcast} = Native.create_broadcast_producer(session, "my_broadcast")
 
-format =
-  {:h264,
-   %{
-     params: %WebCodecs.VideoTrackParams{width: 1280, height: 720, framerate: 30.0},
-     description: avc_decoder_config_record,
-     codec: %WebCodecs.H264Codec{inline: false, profile: 100, constraints: 0, level: 31}
-   }}
+format = %WebCodecs.VideoTrackFormat{
+  params: %WebCodecs.VideoTrackParams{width: 1280, height: 720, framerate: 30.0},
+  description: avc_decoder_config_record,
+  codec: %WebCodecs.H264Codec{in_band: false, profile: 100, constraints: 0, level: 31}
+}
 
+# `priority: nil` uses hang's default for the track's media kind.
 :ok =
-  Native.add_track(broadcast, "my_video_track", format, _priority = 60, :legacy, _latency_ns = 0)
+  Native.add_track(broadcast, "my_video_track", format, _priority = nil, :legacy, _latency_ns = 0)
 
 IO.puts("MoQ setup successful, you can start streaming frames to PID #{inspect(self())}")
 
@@ -59,17 +58,17 @@ end
 
 {:ok, consumer} = Native.create_broadcast_consumer(session, "my_broadcast", self(), _latency_ns = 0)
 
-{format, container} =
+format =
   receive do
     {:moq_catalog, "my_broadcast", renditions} ->
-      {"my_video_track", rendition} = List.keyfind!(renditions, "my_video_track", 0)
-      rendition
+      {"my_video_track", format} = List.keyfind!(renditions, "my_video_track", 0)
+      format
   after
     10_000 -> raise "broadcast was not announced"
   end
 
 # `token` is any integer you choose; it tags this subscription's messages.
-:ok = Native.subscribe_track(consumer, "my_video_track", container, _token = 1, _priority = 60)
+:ok = Native.subscribe_track(consumer, "my_video_track", _token = 1, _priority = nil)
 
 Stream.repeatedly(fn ->
   receive do
@@ -80,10 +79,10 @@ Stream.repeatedly(fn ->
       IO.puts("track finished")
 
     {:moq_track_error, 1, reason} ->
-      raise "subscription failed: #{reason}"
+      raise "subscription failed: #{inspect(reason)}"
 
     {:moq_broadcast_closed, "my_broadcast", reason} ->
-      raise "broadcast closed: #{reason}"
+      raise "broadcast closed: #{inspect(reason)}"
   end
 end)
 |> Stream.run()

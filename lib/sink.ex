@@ -107,11 +107,11 @@ defmodule Membrane.MoQ.Sink do
             disable_tls_verify?: boolean(),
             session: Native.session() | nil,
             producer: Native.broadcast_producer() | nil,
-            missing_keyframe_logged?: MapSet.t(Membrane.Pad.ref())
+            missing_keyframe_logged: MapSet.t(Membrane.Pad.ref())
           }
 
     @enforce_keys [:url, :broadcast, :container, :latency, :disable_tls_verify?]
-    defstruct @enforce_keys ++ [:session, :producer, missing_keyframe_logged?: MapSet.new()]
+    defstruct @enforce_keys ++ [:session, :producer, missing_keyframe_logged: MapSet.new()]
   end
 
   @impl true
@@ -203,7 +203,7 @@ defmodule Membrane.MoQ.Sink do
           state
 
         :missing_keyframe ->
-          if pad in state.missing_keyframe_logged? do
+          if pad in state.missing_keyframe_logged do
             state
           else
             Membrane.Logger.info("""
@@ -211,7 +211,7 @@ defmodule Membrane.MoQ.Sink do
             Starting a MoQ group requires a keyframe to be sent first.
             """)
 
-            %{state | missing_keyframe_logged?: MapSet.put(state.missing_keyframe_logged?, pad)}
+            %{state | missing_keyframe_logged: MapSet.put(state.missing_keyframe_logged, pad)}
           end
 
         {:error, reason} ->
@@ -271,6 +271,6 @@ defmodule Membrane.MoQ.Sink do
 
   defp close_pad(pad, ctx, state) do
     :ok = Native.remove_track(state.producer, ctx.pads[pad].options.track)
-    %{state | missing_keyframe_logged?: MapSet.delete(state.missing_keyframe_logged?, pad)}
+    %{state | missing_keyframe_logged: MapSet.delete(state.missing_keyframe_logged, pad)}
   end
 end

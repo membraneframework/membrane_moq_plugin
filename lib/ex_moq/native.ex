@@ -94,6 +94,7 @@ defmodule ExMoQ.Native do
     * `format` - codec format, see `t:track_format/0`.
     * `priority` - the track's delivery priority:
       under congestion, tracks with a higher value are sent first.
+      When `nil`, hang's default for the track's media kind is used.
     * `container` - the wire container, see `t:container/0`.
       Stamped into the track's catalog rendition so consumers pick the matching parser.
     * `latency_ns` - how long the track buffers frames
@@ -103,7 +104,7 @@ defmodule ExMoQ.Native do
           broadcast_producer(),
           track(),
           track_format(),
-          0..255,
+          0..255 | nil,
           container(),
           non_neg_integer()
         ) :: :ok | {:error, :track_already_exists | :producer_poisoned | (reason :: String.t())}
@@ -191,6 +192,10 @@ defmodule ExMoQ.Native do
   Keep tokens unique across all broadcast consumers reporting to the same pid.
   Don't reuse tokens.
 
+  `priority` is the subscription's delivery priority:
+  under congestion, tracks with a higher value are sent first.
+  When `nil`, hang's default for the track's media kind is used.
+
   Sends to the consumer's `pid`:
     * `{:moq_frame, token(), binary(), timestamp_ns :: non_neg_integer(), keyframe? :: boolean()}`
         for every received frame
@@ -200,7 +205,7 @@ defmodule ExMoQ.Native do
         when the subscription fails on the native side
         while the track may still be advertised in the catalog
   """
-  @spec subscribe_track(broadcast_consumer(), track(), token(), 0..255) ::
+  @spec subscribe_track(broadcast_consumer(), track(), token(), 0..255 | nil) ::
           :ok | {:error, :consumer_closed}
   def subscribe_track(_broadcast_consumer, _track, _token, _priority),
     do: :erlang.nif_error(:nif_not_loaded)

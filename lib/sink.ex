@@ -234,13 +234,11 @@ defmodule Membrane.MoQ.Sink do
           State.t()
         ) :: :ok
   defp add_track(pad, %{track: track, priority: priority}, fmt, state) do
-    track_fmt = TrackFormat.from_stream_format(fmt)
-
     Native.add_track(
       state.producer,
       track,
-      track_fmt,
-      priority || TrackFormat.default_priority(track_fmt),
+      TrackFormat.from_stream_format(fmt),
+      priority,
       state.container,
       Membrane.Time.as_nanoseconds(state.latency, :round)
     )

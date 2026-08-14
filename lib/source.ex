@@ -367,7 +367,6 @@ defmodule Membrane.MoQ.Source do
     %{track: track, priority: priority} = ctx.pads[pad].options
 
     with format when format != nil <- Catalog.rendition(state.catalog, track),
-         priority = priority || TrackFormat.default_priority(format),
          token = state.next_token,
          :ok <- Native.subscribe_track(state.consumer, track, token, priority) do
       state = %{

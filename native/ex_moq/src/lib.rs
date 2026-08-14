@@ -131,11 +131,12 @@ fn add_track(
     producer: ResourceArc<BroadcastProducerResource>,
     track: String,
     format: TrackFormat,
-    priority: u8,
+    priority: Option<u8>,
     container: Container,
     latency_ns: u64,
 ) -> NifResult<Atom> {
     let latency = Duration::from_nanos(latency_ns);
+    let priority = priority.unwrap_or_else(|| format.default_priority());
 
     lock_producer(&producer)?
         .add_track(track, format, container, priority, latency)
@@ -213,7 +214,7 @@ fn subscribe_track(
     consumer: ResourceArc<BroadcastConsumerResource>,
     track: String,
     token: Token,
-    priority: u8,
+    priority: Option<u8>,
 ) -> NifResult<Atom> {
     consumer
         .0

@@ -194,3 +194,12 @@ pub(crate) enum TrackFormat {
     Video(VideoTrackFormat),
     Audio(AudioTrackFormat),
 }
+
+impl TrackFormat {
+    pub(crate) fn default_priority(&self) -> u8 {
+        match self {
+            Self::Video(_) => hang::catalog::PRIORITY.video,
+            Self::Audio(_) => hang::catalog::PRIORITY.audio,
+        }
+    }
+}

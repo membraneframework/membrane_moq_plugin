@@ -57,11 +57,31 @@ impl Drop for CloseGuard {
 
 pub(crate) struct Closed;
 
+#[derive(Clone, Copy)]
+enum Kind {
+    Video,
+    Audio,
+}
+
+impl Kind {
+    fn default_priority(self) -> u8 {
+        match self {
+            Self::Video => hang::catalog::PRIORITY.video,
+            Self::Audio => hang::catalog::PRIORITY.audio,
+        }
+    }
+}
+
+struct Rendition {
+    kind: Kind,
+    container: CatalogContainer,
+}
+
 enum Command {
     Subscribe {
         track: String,
         token: Token,
-        priority: u8,
+        priority: Option<u8>,
     },
     Unsubscribe {
         token: Token,
@@ -85,7 +105,7 @@ impl Handle {
         &self,
         track: String,
         token: Token,
-        priority: u8,
+        priority: Option<u8>,
     ) -> Result<(), Closed> {
         self.commands
             .send(Command::Subscribe {
@@ -140,7 +160,7 @@ struct Driver {
     path: String,
     commands: mpsc::UnboundedReceiver<Command>,
     catalog: moq_mux::catalog::Consumer<()>,
-    containers: HashMap<String, CatalogContainer>,
+    renditions: HashMap<String, Rendition>,
     subs: Subscriptions,
 }
 
@@ -174,7 +194,7 @@ impl Driver {
             path,
             commands,
             catalog,
-            containers: HashMap::new(),
+            renditions: HashMap::new(),
             subs: Subscriptions::new(broadcast, latency),
         }
         .run()
@@ -211,7 +231,8 @@ impl Driver {
                 token,
                 priority,
             }) => {
-                let result = self.get_container(&track).and_then(|container| {
+                let result = self.get_rendition(&track).and_then(|(kind, container)| {
+                    let priority = priority.unwrap_or(kind.default_priority());
                     self.subs
                         .subscribe(token, self.pid, track, container, priority)
                 });
@@ -232,7 +253,7 @@ impl Driver {
     ) -> ControlFlow<Option<CloseReason>> {
         let close_reason = match snapshot {
             Ok(Some(snapshot)) => {
-                self.containers = advertised_containers(&snapshot);
+                self.renditions = advertised_renditions(&snapshot);
 
                 match messages::send_catalog(&mut self.env, self.pid, &self.path, &snapshot) {
                     Ok(()) => return ControlFlow::Continue(()),
@@ -260,29 +281,36 @@ impl Driver {
         }
     }
 
-    fn get_container(&self, track: &str) -> Result<WireContainer, TrackError> {
-        self.containers
+    fn get_rendition(&self, track: &str) -> Result<(Kind, WireContainer), TrackError> {
+        let rendition = self
+            .renditions
             .get(track)
-            .ok_or(TrackError::NotAdvertised)?
+            .ok_or(TrackError::NotAdvertised)?;
+
+        let container = (&rendition.container)
             .try_into()
-            .map_err(TrackError::Container)
+            .map_err(TrackError::Container)?;
+
+        Ok((rendition.kind, container))
     }
 }
 
-fn advertised_containers(
-    catalog: &moq_mux::catalog::hang::Catalog,
-) -> HashMap<String, CatalogContainer> {
-    let videos = catalog
-        .video
-        .renditions
-        .iter()
-        .map(|(name, config)| (name.clone(), config.container.clone()));
+fn advertised_renditions(catalog: &moq_mux::catalog::hang::Catalog) -> HashMap<String, Rendition> {
+    let videos = catalog.video.renditions.iter().map(|(name, config)| {
+        let rendition = Rendition {
+            kind: Kind::Video,
+            container: config.container.clone(),
+        };
+        (name.clone(), rendition)
+    });
 
-    let audios = catalog
-        .audio
-        .renditions
-        .iter()
-        .map(|(name, config)| (name.clone(), config.container.clone()));
+    let audios = catalog.audio.renditions.iter().map(|(name, config)| {
+        let rendition = Rendition {
+            kind: Kind::Audio,
+            container: config.container.clone(),
+        };
+        (name.clone(), rendition)
+    });
 
     videos.chain(audios).collect()
 }

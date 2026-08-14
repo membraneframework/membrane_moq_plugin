@@ -338,17 +338,17 @@ defmodule Membrane.MoQ.Source do
         ]
   defp track_notifications(diff, catalog) do
     tracks_removed =
-      Stream.concat(diff.removed, diff.changed)
-      |> Stream.map(fn name -> {:notify_parent, {:track_removed, name}} end)
+      Enum.map(diff.removed ++ diff.changed, fn name ->
+        {:notify_parent, {:track_removed, name}}
+      end)
 
     new_tracks =
-      Stream.concat(diff.changed, diff.added)
-      |> Stream.map(fn name ->
+      Enum.map(diff.changed ++ diff.added, fn name ->
         format = Catalog.rendition(catalog, name)
         {:notify_parent, {:new_track, {name, TrackFormat.to_stream_format(format)}}}
       end)
 
-    Enum.concat(tracks_removed, new_tracks)
+    tracks_removed ++ new_tracks
   end
 
   @spec end_subscriptions([Native.track()], State.t()) ::

@@ -97,8 +97,6 @@ defmodule Membrane.MoQ.Source do
   defmodule State do
     @moduledoc false
 
-    @type subscription :: {Membrane.Pad.ref(), Native.track()}
-
     @type t :: %__MODULE__{
             url: String.t(),
             broadcast: String.t(),
@@ -109,10 +107,10 @@ defmodule Membrane.MoQ.Source do
             next_token: Native.token(),
             # subscriptions waiting for playback to start
             # and the track to be announced by the catalog
-            waiting: %{Native.token() => subscription()},
+            waiting: MapSet.t(Membrane.Pad.ref()),
             # subscriptions for which a native task forwarding frames exists,
             # entries only move from `waiting` to `active`
-            active: %{Native.token() => subscription()},
+            active: %{Native.token() => {Membrane.Pad.ref(), Native.track()}},
             catalog: Catalog.t(),
             status: :connecting | :ready | :disconnect_pending | :disconnected
           }
@@ -123,7 +121,7 @@ defmodule Membrane.MoQ.Source do
                   :session,
                   :consumer,
                   next_token: 0,
-                  waiting: %{},
+                  waiting: MapSet.new(),
                   active: %{},
                   catalog: %Catalog{},
                   status: :connecting
@@ -159,17 +157,10 @@ defmodule Membrane.MoQ.Source do
 
   @impl true
   def handle_pad_added(pad, ctx, state) do
-    track = ctx.pads[pad].options.track
-    token = state.next_token
-
-    state = %{
-      state
-      | next_token: token + 1,
-        waiting: Map.put(state.waiting, token, {pad, track})
-    }
+    state = %{state | waiting: MapSet.put(state.waiting, pad)}
 
     case ctx.playback do
-      :playing -> subscribe_pad(token, pad, track, ctx, state)
+      :playing -> subscribe_pad(pad, ctx, state)
       :stopped -> {[], state}
     end
   end
@@ -288,21 +279,18 @@ defmodule Membrane.MoQ.Source do
   end
 
   @impl true
-  def handle_pad_removed(pad, ctx, state) do
-    track = ctx.pads[pad].options.track
-    same_sub? = fn {_token, sub} -> sub == {pad, track} end
+  def handle_pad_removed(pad, _ctx, state) do
+    state =
+      case Enum.find(state.active, fn {_token, {p, _track}} -> p == pad end) do
+        {token, _sub} ->
+          Native.unsubscribe_track(state.consumer, token)
+          %{state | active: Map.delete(state.active, token)}
 
-    case {Enum.find(state.active, same_sub?), Enum.find(state.waiting, same_sub?)} do
-      {{token, _sub}, nil} ->
-        Native.unsubscribe_track(state.consumer, token)
-        {[], %{state | active: Map.delete(state.active, token)}}
+        nil ->
+          %{state | waiting: MapSet.delete(state.waiting, pad)}
+      end
 
-      {nil, {token, _sub}} ->
-        {[], %{state | waiting: Map.delete(state.waiting, token)}}
-
-      {nil, nil} ->
-        {[], state}
-    end
+    {[], state}
   end
 
   @spec handle_closed(
@@ -369,28 +357,24 @@ defmodule Membrane.MoQ.Source do
   @spec subscribe_ready(Membrane.Element.CallbackContext.t(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
   defp subscribe_ready(ctx, state) do
-    Enum.flat_map_reduce(state.waiting, state, fn {token, {pad, track}}, state ->
-      subscribe_pad(token, pad, track, ctx, state)
+    Enum.flat_map_reduce(state.waiting, state, fn pad, state ->
+      subscribe_pad(pad, ctx, state)
     end)
   end
 
-  @spec subscribe_pad(
-          integer(),
-          Membrane.Pad.ref(),
-          Native.track(),
-          Membrane.Element.CallbackContext.t(),
-          State.t()
-        ) ::
+  @spec subscribe_pad(Membrane.Pad.ref(), Membrane.Element.CallbackContext.t(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
-  defp subscribe_pad(token, pad, track, ctx, state) do
-    priority = ctx.pads[pad].options.priority
+  defp subscribe_pad(pad, ctx, state) do
+    %{track: track, priority: priority} = ctx.pads[pad].options
 
     with format when format != nil <- Catalog.rendition(state.catalog, track),
          priority = priority || TrackFormat.default_priority(format),
+         token = state.next_token,
          :ok <- Native.subscribe_track(state.consumer, track, token, priority) do
       state = %{
         state
-        | waiting: Map.delete(state.waiting, token),
+        | next_token: token + 1,
+          waiting: MapSet.delete(state.waiting, pad),
           active: Map.put(state.active, token, {pad, track})
       }
 
@@ -406,7 +390,7 @@ defmodule Membrane.MoQ.Source do
         reason: #{inspect(reason)}
         """)
 
-        {[end_of_stream: pad], %{state | waiting: Map.delete(state.waiting, token)}}
+        {[end_of_stream: pad], %{state | waiting: MapSet.delete(state.waiting, pad)}}
     end
   end
 
@@ -414,6 +398,8 @@ defmodule Membrane.MoQ.Source do
           {[Membrane.Element.Action.t()], State.t()}
   defp become_disconnected(ctx, %State{} = state) do
     actions = for {pad, %{end_of_stream?: false}} <- ctx.pads, do: {:end_of_stream, pad}
-    {actions, %{state | status: :disconnected, waiting: %{}, active: %{}, catalog: %Catalog{}}}
+
+    {actions,
+     %{state | status: :disconnected, waiting: MapSet.new(), active: %{}, catalog: %Catalog{}}}
   end
 end

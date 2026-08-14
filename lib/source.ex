@@ -105,8 +105,7 @@ defmodule Membrane.MoQ.Source do
             session: Native.session() | nil,
             consumer: Native.broadcast_consumer() | nil,
             next_token: Native.token(),
-            # subscriptions waiting for playback to start
-            # and the track to be announced by the catalog
+            # pads waiting for their track to be announced
             waiting: MapSet.t(Membrane.Pad.ref()),
             # subscriptions for which a native task forwarding frames exists,
             # entries only move from `waiting` to `active`

@@ -24,11 +24,10 @@ defmodule Membrane.MoQ.Source.Catalog do
     added = for {name, _rendition} <- new, not is_map_key(old, name), do: name
 
     changed =
-      Map.intersect(new, old, fn _name, new_rendition, old_rendition ->
-        new_rendition != old_rendition
-      end)
-      |> Map.filter(fn {_name, changed?} -> changed? end)
-      |> Map.keys()
+      for {name, new_rendition} <- new,
+          is_map_key(old, name),
+          old[name] != new_rendition,
+          do: name
 
     {%{removed: removed, added: added, changed: changed}, %{catalog | renditions: new}}
   end

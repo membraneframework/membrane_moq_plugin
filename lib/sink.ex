@@ -202,12 +202,7 @@ defmodule Membrane.MoQ.Sink do
           if pad in state.missing_keyframe_logged do
             state
           else
-            Membrane.Logger.info("""
-            Buffer rejected because it is not a keyframe.
-            Starting a MoQ group requires a keyframe to be sent first.
-            """)
-
-            %{state | missing_keyframe_logged: MapSet.put(state.missing_keyframe_logged, pad)}
+            log_missing_keyframe_once(pad, state)
           end
 
         {:error, reason} ->
@@ -266,5 +261,15 @@ defmodule Membrane.MoQ.Sink do
   defp close_pad(pad, ctx, state) do
     :ok = Native.remove_track(state.producer, ctx.pads[pad].options.track)
     %{state | missing_keyframe_logged: MapSet.delete(state.missing_keyframe_logged, pad)}
+  end
+
+  @spec log_missing_keyframe_once(Membrane.Pad.ref(), State.t()) :: State.t()
+  defp log_missing_keyframe_once(pad, state) do
+    Membrane.Logger.info("""
+    Buffer rejected on pad #{inspect(pad)} because it is not a keyframe.
+    Starting a MoQ group requires a keyframe to be sent first.
+    """)
+
+    %{state | missing_keyframe_logged: MapSet.put(state.missing_keyframe_logged, pad)}
   end
 end

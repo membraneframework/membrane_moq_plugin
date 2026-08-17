@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
 
-members = ["native/moq"]
+members = ["native/ex_moq"]

@@ -3,7 +3,7 @@ Mix.install([
   {:membrane_realtimer_plugin, "~> 0.11.0"},
   {:membrane_aac_plugin, "~> 0.19.2"},
   {:membrane_h26x_plugin, "~> 0.10.7"},
-  {:membrane_hackney_plugin, "~> 0.11.1"},
+  {:membrane_hackney_plugin, "0.11.1"},
   {:membrane_mp4_plugin, "~> 0.36.5"},
   {:membrane_h264_ffmpeg_plugin, "~> 0.32.6"}
 ])
@@ -13,16 +13,12 @@ defmodule Example do
 
   @input_url "https://raw.githubusercontent.com/membraneframework/static/gh-pages/samples/big-buck-bunny/bun33s.mp4"
 
-  def start_link() do
-    Membrane.Pipeline.start_link(__MODULE__)
-  end
-
   @impl true
-  def handle_init(_ctx, _opts) do
+  def handle_init(_ctx, broadcast) do
     spec = [
       child(:sink, %Membrane.MoQ.Sink{
-        url: "http://localhost:4443/anon",
-        broadcast: "bbb",
+        url: "https://localhost:4443/anon",
+        broadcast: broadcast,
         disable_tls_verify?: true
       }),
       child(:source, %Membrane.Hackney.Source{
@@ -33,7 +29,7 @@ defmodule Example do
       get_child(:demuxer)
       |> via_out(:output, options: [kind: :audio])
       |> child(:audio_parser, %Membrane.AAC.Parser{
-        out_encapsulation: :ADTS
+        out_encapsulation: :none
       })
       |> child(:audio_rt, Membrane.Realtimer)
       |> via_in(Pad.ref(:input, :audio1), options: [track: "audio"])
@@ -60,10 +56,31 @@ defmodule Example do
   end
 end
 
-{:ok, _supervisor_pid, pipeline_pid} = Example.start_link()
+broadcast =
+  case System.argv() do
+    [broadcast | _rest] ->
+      if String.ends_with?(broadcast, [".hang", ".msf"]) do
+        broadcast
+      else
+        IO.puts(:stderr, "Broadcast name must end with .hang or .msf, got: #{broadcast}")
+        System.halt(1)
+      end
+
+    [] ->
+      IO.puts(:stderr, """
+      Usage: elixir #{Path.relative_to_cwd(__ENV__.file)} <broadcast>
+
+      <broadcast> is the name of the MoQ broadcast to publish; it must end with
+      .hang or .msf (e.g. bbb.hang).
+      """)
+
+      System.halt(1)
+  end
+
+{:ok, _supervisor_pid, pipeline_pid} = Membrane.Pipeline.start_link(Example, broadcast)
 ref = Process.monitor(pipeline_pid)
 
 receive do
-  {:DOWN, ^ref, :process, _pipeline_pid, _reason} ->
+  {:DOWN, ^ref, :process, ^pipeline_pid, _reason} ->
     :ok
 end

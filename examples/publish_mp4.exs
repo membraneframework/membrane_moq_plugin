@@ -17,7 +17,7 @@ defmodule Example do
   def handle_init(_ctx, broadcast) do
     spec = [
       child(:sink, %Membrane.MoQ.Sink{
-        url: "http://localhost:4443/anon",
+        url: "https://localhost:4443/anon",
         broadcast: broadcast,
         disable_tls_verify?: true
       }),

@@ -102,7 +102,7 @@ defmodule Membrane.MoQ.TrackFormat do
     %H264{
       width: dimension(width),
       height: dimension(height),
-      framerate: framerate(framerate),
+      framerate: float_to_framerate(framerate),
       stream_structure: h264_stream_structure(dcr, in_band)
     }
   end
@@ -115,7 +115,7 @@ defmodule Membrane.MoQ.TrackFormat do
     %H265{
       width: dimension(width),
       height: dimension(height),
-      framerate: framerate(framerate),
+      framerate: float_to_framerate(framerate),
       stream_structure: h265_stream_structure(dcr, in_band)
     }
   end
@@ -179,12 +179,12 @@ defmodule Membrane.MoQ.TrackFormat do
   defp dimension(size) when is_integer(size) and size > 0, do: size
   defp dimension(_absent), do: nil
 
-  @spec framerate(float() | nil) :: {pos_integer(), pos_integer()} | nil
-  defp framerate(fps) when is_number(fps) and fps > 0 do
+  @spec float_to_framerate(float() | nil) :: {pos_integer(), pos_integer()} | nil
+  defp float_to_framerate(fps) when is_number(fps) and fps > 0 do
     fps
     |> Ratio.new()
     |> then(&{&1.numerator, &1.denominator})
   end
 
-  defp framerate(_fps), do: nil
+  defp float_to_framerate(_fps), do: nil
 end

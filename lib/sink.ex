@@ -258,7 +258,16 @@ defmodule Membrane.MoQ.Sink do
   defp close_pad(_pad, _ctx, %State{producer: nil} = state), do: state
 
   defp close_pad(pad, ctx, state) do
-    :ok = Native.remove_track(state.producer, ctx.pads[pad].options.track)
+    track = ctx.pads[pad].options.track
+
+    case Native.remove_track(state.producer, track) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise "Failed to remove track #{inspect(track)} from producer resource, reason: #{inspect(reason)}"
+    end
+
     %{state | missing_keyframe_logged: MapSet.delete(state.missing_keyframe_logged, pad)}
   end
 

@@ -28,10 +28,6 @@ defmodule Membrane.MoQ.Sink do
   alias ExMoQ.Native
   alias Membrane.MoQ.TrackFormat
 
-  # MoQ explicitly expects raw AAC/Opus frames:
-  # https://github.com/moq-dev/moq/blob/21da717b92c73d8b3643a0028e7554b8b1149943/rs/moq-mux/src/codec/aac/mod.rs#L4
-  # https://github.com/moq-dev/moq/blob/21da717b92c73d8b3643a0028e7554b8b1149943/rs/moq-mux/src/codec/opus/mod.rs#L4
-
   def_input_pad :input,
     availability: :on_request,
     accepted_format:

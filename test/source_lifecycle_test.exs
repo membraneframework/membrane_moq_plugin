@@ -8,9 +8,11 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.{Relay, RestartingSubscriber, Take}
+  alias Membrane.MoQ.Test.{RestartingSubscriber, Take}
   alias Membrane.Pad
   alias Membrane.Testing
+
+  alias ExMoQ.Test.Relay
 
   @moduletag :integration
 

@@ -11,7 +11,7 @@ defmodule Membrane.MoQ.SinkDisconnectTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.Relay
+  alias ExMoQ.Test.Relay
   alias Membrane.Pad
   alias Membrane.Testing
 

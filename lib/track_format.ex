@@ -4,7 +4,7 @@ defmodule Membrane.MoQ.TrackFormat do
   # and the native MoQ track-format term (`t:ExMoQ.Native.track_format/0`).
 
   alias ExMoQ.Native
-  alias ExMoQ.Native.WebCodecs
+  alias ExMoQ.WebCodecs
 
   alias Membrane.{AAC, H264, H265, Opus, RemoteStream}
 

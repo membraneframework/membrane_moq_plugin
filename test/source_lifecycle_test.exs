@@ -82,7 +82,7 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     subscriber = start_subscriber!(relay, broadcast)
 
     publisher = start_publisher!(relay, broadcast)
-    assert_pipeline_notified(subscriber, {:source, 0}, {:new_track, {_track, _format}}, 15_000)
+    assert_pipeline_receive(subscriber, {:generation_landed, 0, @track}, 15_000)
     assert_sink_buffer(subscriber, {:sink, 0}, %Membrane.Buffer{}, 10_000)
 
     assert_end_of_stream(publisher, :sink, Pad.ref(:input, :video), 15_000)
@@ -90,8 +90,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     assert_pipeline_notified(subscriber, {:source, 0}, {:disconnected, _reason}, 10_000)
 
     _second_publisher = start_publisher!(relay, broadcast)
-    assert_pipeline_notified(subscriber, {:source, 1}, {:new_track, {_track, _format}}, 15_000)
-    assert_sink_buffer(subscriber, {:sink, 1}, %Membrane.Buffer{}, 10_000)
+    assert_pipeline_receive(subscriber, {:generation_landed, gen, @track}, 15_000)
+    assert gen > 0
+    assert_sink_buffer(subscriber, {:sink, gen}, %Membrane.Buffer{}, 10_000)
   end
 
   test "a catalog received before playback defers subscription until handle_playing", %{

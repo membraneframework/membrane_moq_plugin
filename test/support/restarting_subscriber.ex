@@ -22,11 +22,11 @@ defmodule Membrane.MoQ.Test.RestartingSubscriber do
         disable_tls_verify?: opts[:disable_tls_verify?],
         latency: Membrane.Time.milliseconds(200)
       },
-      gen: 0,
-      current: nil
+      generation: 0,
+      track: nil
     }
 
-    {[spec: source_spec(state)], state}
+    {[spec: child({:source, state.generation}, state.source_spec)], state}
   end
 
   @impl true
@@ -34,7 +34,7 @@ defmodule Membrane.MoQ.Test.RestartingSubscriber do
         {:new_track, {track, %module{} = stream_format}},
         {:source, gen},
         _ctx,
-        %{gen: gen, current: nil} = state
+        %{generation: gen, track: nil} = state
       )
       when module in [Membrane.H264, Membrane.H265] do
     spec =
@@ -43,30 +43,28 @@ defmodule Membrane.MoQ.Test.RestartingSubscriber do
       |> child({:parser, gen}, parser_for(stream_format))
       |> child({:sink, gen}, Testing.Sink)
 
-    {[spec: spec], %{state | current: track}}
+    send(self(), {:generation_landed, gen, track})
+
+    {[spec: spec], %{state | track: track}}
   end
 
   def handle_child_notification(
         {:disconnected, _reason},
         {:source, gen},
-        _ctx,
-        %{gen: gen} = state
+        ctx,
+        %{generation: gen} = state
       ) do
     teardown =
-      case state.current do
+      case state.track do
         nil -> [{:source, gen}]
-        _track -> [{:source, gen}, {:parser, gen}, {:sink, gen}]
+        _track -> for {child, _spec} <- ctx.children, do: child
       end
 
-    state = %{state | gen: gen + 1, current: nil}
-    {[remove_children: teardown, spec: source_spec(state)], state}
+    state = %{state | generation: gen + 1, track: nil}
+    {[remove_children: teardown, spec: child({:source, state.generation}, state.source_spec)], state}
   end
 
   def handle_child_notification(_notification, _child, _ctx, state), do: {[], state}
-
-  defp source_spec(state) do
-    child({:source, state.gen}, state.source_spec)
-  end
 
   defp parser_for(%Membrane.H264{}), do: %Membrane.H264.Parser{}
   defp parser_for(%Membrane.H265{}), do: %Membrane.H265.Parser{}

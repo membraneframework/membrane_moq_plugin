@@ -21,6 +21,14 @@ defmodule Membrane.MoQ.IntegrationTest do
   @track "video"
   @audio_track "audio"
 
+  # The frame-accounting tests lose leading groups when a starved runner lets the
+  # relay outrun the Source's jitter budget (upstream load-sensitive group skips,
+  # relay commit 7671feb8), so their Sources get a wider budget on CI. EOS flushes
+  # the buffer, so the wider budget does not slow a healthy run down.
+  @source_latency if System.get_env("CI"),
+                    do: Membrane.Time.seconds(5),
+                    else: Membrane.Time.seconds(1)
+
   defmodule EndOfStreamSource do
     use Membrane.Source
 
@@ -124,7 +132,7 @@ defmodule Membrane.MoQ.IntegrationTest do
     broadcast: broadcast,
     relay: relay
   } do
-    receiver = start_receiver!(relay, broadcast, @audio_track)
+    receiver = start_receiver!(relay, broadcast, @audio_track, @source_latency)
     sender = start_audio_sender!(relay, broadcast)
     assert_sink_playing(receiver, :sink, 10_000)
 
@@ -154,7 +162,7 @@ defmodule Membrane.MoQ.IntegrationTest do
         %Membrane.Buffer{payload: <<i, 255 - i>>, pts: Membrane.Time.milliseconds(20 * i)}
       end
 
-    receiver = start_receiver!(relay, broadcast, @audio_track)
+    receiver = start_receiver!(relay, broadcast, @audio_track, @source_latency)
 
     sender =
       Testing.Pipeline.start_link_supervised!(
@@ -192,7 +200,8 @@ defmodule Membrane.MoQ.IntegrationTest do
           child(:source, %Membrane.MoQ.Source{
             url: relay.url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: relay.disable_tls_verify?,
+            latency: @source_latency
           })
           |> via_out(Pad.ref(:output, :video), options: [track: @track])
           |> child(:video_sink, Testing.Sink),
@@ -387,7 +396,7 @@ defmodule Membrane.MoQ.IntegrationTest do
        %{broadcast: broadcast, relay: relay} do
     relay_broadcast = broadcast <> "-relay"
 
-    receiver = start_receiver!(relay, relay_broadcast)
+    receiver = start_receiver!(relay, relay_broadcast, @track, @source_latency)
 
     relay_pipeline =
       Testing.Pipeline.start_link_supervised!(
@@ -395,7 +404,8 @@ defmodule Membrane.MoQ.IntegrationTest do
           child(:source, %Membrane.MoQ.Source{
             url: relay.url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: relay.disable_tls_verify?,
+            latency: @source_latency
           })
           |> via_out(Pad.ref(:output, :video), options: [track: @track])
           |> child(:tee, Membrane.Tee)
@@ -449,13 +459,14 @@ defmodule Membrane.MoQ.IntegrationTest do
     {expected, drain_buffers(receiver, :sink)}
   end
 
-  defp start_receiver!(relay, broadcast, track \\ @track) do
+  defp start_receiver!(relay, broadcast, track \\ @track, latency \\ Membrane.Time.seconds(1)) do
     Testing.Pipeline.start_link_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
           url: relay.url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?
+          disable_tls_verify?: relay.disable_tls_verify?,
+          latency: latency
         })
         |> via_out(Pad.ref(:output, track), options: [track: track])
         |> child(:sink, Testing.Sink)

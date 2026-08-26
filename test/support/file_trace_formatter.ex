@@ -35,8 +35,16 @@ defmodule Membrane.MoQ.Test.FileTraceFormatter do
   end
 
   def handle_cast({:test_finished, %ExUnit.Test{state: {:failed, failures}} = test}, state) do
+    # format_test_failure can raise on hostile failure content (it took down both
+    # this formatter and the CLI one on CI) — fall back to a bounded raw dump.
     failure =
-      ExUnit.Formatter.format_test_failure(test, failures, 1, 120, fn _type, msg -> msg end)
+      try do
+        ExUnit.Formatter.format_test_failure(test, failures, 1, 120, fn _type, msg -> msg end)
+      rescue
+        e ->
+          "format_test_failure raised: #{inspect(e)}\n" <>
+            "raw failures: #{inspect(failures, limit: 200, printable_limit: 4096)}"
+      end
 
     append("FAILED #{test.module} #{test.name}\n#{failure}")
     {:noreply, state}

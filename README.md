@@ -9,9 +9,8 @@ Membrane plugin for [Media over QUIC](https://moq.dev) (MoQ) streams:
 * `Membrane.MoQ.Source` subscribes to a broadcast's tracks
   and emits their frames, notifying its parent as tracks come and go.
 
-The MoQ session, catalog and wire handling are implemented natively
-on top of the [moq](https://github.com/moq-dev/moq) Rust stack
-(`moq-native`, `moq-mux`, `hang`), bound via Rustler NIFs.
+The MoQ session, catalog and wire handling come from
+[ex_moq](https://github.com/membraneframework/ex_moq).
 
 Published broadcasts advertise both the
 [hang](https://doc.moq.dev/concept/layer/hang.html) catalog and the IETF
@@ -38,7 +37,7 @@ def deps do
 end
 ```
 
-Building requires a Rust toolchain (the NIF is compiled by [rustler](https://hex.pm/packages/rustler))
+Building requires a Rust toolchain, as the `ex_moq` dependency compiles its NIFs from source.
 
 ## Usage
 

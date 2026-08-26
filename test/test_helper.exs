@@ -1,4 +1,9 @@
-ExUnit.start(capture_log: true)
+formatters =
+  if System.get_env("CI") == "true",
+    do: [ExUnit.CLIFormatter, Membrane.MoQ.Test.FileTraceFormatter],
+    else: [ExUnit.CLIFormatter]
+
+ExUnit.start(capture_log: true, formatters: formatters)
 
 cond do
   ExMoQ.Test.Relay.find_binary() ->

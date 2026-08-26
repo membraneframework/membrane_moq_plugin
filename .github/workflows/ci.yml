@@ -15,7 +15,7 @@ jobs:
   test:
     uses: membraneframework/membrane_actions/.github/workflows/test.yml@main
     with:
-      test-flags: '--warnings-as-errors --seed 117675 > /tmp/mix_test.log 2>&1 || code=$?; cat /tmp/mix_test.log; exit ${code:-0}'
+      test-flags: '--warnings-as-errors --seed 117675 > /tmp/mix_test.log 2>&1 || code=$?; cat /tmp/mix_test.log; echo ==== exunit trace ====; cat /tmp/exunit_trace.log || true; exit ${code:-0}'
       setup-commands: |
         VERSION=0.14.12
         curl -fsSL "https://github.com/kixelated/moq/releases/download/moq-relay-v${VERSION}/moq-relay-${VERSION}-x86_64-unknown-linux-gnu.tar.gz" \

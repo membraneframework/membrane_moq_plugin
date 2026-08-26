@@ -42,8 +42,11 @@ defmodule Membrane.MoQ.Test.FileTraceFormatter do
         ExUnit.Formatter.format_test_failure(test, failures, 1, 120, fn _type, msg -> msg end)
       rescue
         e ->
-          "format_test_failure raised: #{inspect(e)}\n" <>
-            "raw failures: #{inspect(failures, limit: 200, printable_limit: 4096)}"
+          "format_test_failure raised:\n" <>
+            Exception.format(:error, e, __STACKTRACE__) <>
+            "\nraw failures: #{inspect(failures, limit: 200, printable_limit: 4096)}\n" <>
+            "replay term (base64 term_to_binary): " <>
+            Base.encode64(:erlang.term_to_binary({test, failures}))
       end
 
     append("FAILED #{test.module} #{test.name}\n#{failure}")

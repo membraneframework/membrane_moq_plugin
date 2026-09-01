@@ -39,15 +39,16 @@ defmodule Membrane.MoQ.Mixfile do
   defp deps do
     [
       {:membrane_core, "~> 1.3"},
-      {:rustler, "~> 0.38"},
       {:ratio, "~> 4.0.1"},
       {:membrane_h26x_plugin, "~> 0.10.7"},
       {:membrane_h264_format, "~> 0.6.0"},
       {:membrane_h265_format, "~> 0.2.0"},
       {:membrane_aac_format, "~> 0.8.0"},
       {:membrane_opus_format, "~> 0.3.0"},
+      # TODO: change to released version once it's public
+      {:ex_moq, github: "membraneframework/ex_moq", branch: "kidq330/group_loss_fixed"},
+      {:muontrap, ">= 0.0.0", only: :test},
       {:membrane_aac_plugin, "~> 0.19", only: :test},
-      {:muontrap, "~> 1.8", only: :test},
       {:membrane_file_plugin, "~> 0.17", only: :test},
       {:membrane_realtimer_plugin, "~> 0.9", only: :test},
       {:ex_doc, ">= 0.40.0", only: :dev, runtime: false},

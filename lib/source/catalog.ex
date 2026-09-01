@@ -15,9 +15,8 @@ defmodule Membrane.MoQ.Source.Catalog do
 
   defstruct renditions: %{}
 
-  @spec update(t(), [{Native.track(), Native.track_format()}]) :: {diff(), t()}
-  def update(catalog, renditions) do
-    new = Map.new(renditions)
+  @spec update(t(), %{Native.track() => Native.track_format()}) :: {diff(), t()}
+  def update(catalog, new) do
     old = catalog.renditions
 
     removed = for {name, _rendition} <- old, not is_map_key(new, name), do: name

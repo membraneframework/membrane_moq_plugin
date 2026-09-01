@@ -11,7 +11,3 @@ cond do
     IO.puts("moq-relay not found — excluding :integration tests")
     ExUnit.configure(exclude: [:integration])
 end
-
-if System.get_env("CI") == "true" do
-  ExUnit.configure(exclude: [:flaky])
-end

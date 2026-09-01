@@ -63,7 +63,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     [broadcast: broadcast]
   end
 
-  @tag :flaky
   test "frames sent through the Sink are received unchanged by the Source", %{
     broadcast: broadcast,
     relay: relay
@@ -73,7 +72,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
-  @tag :flaky
   test "a .msf broadcast name selects the MSF catalog for the Source", %{
     broadcast: broadcast,
     relay: relay
@@ -83,7 +81,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
-  @tag :flaky
   test "avc3 frames (in-band parameter sets) round-trip unchanged through the Source", %{
     broadcast: broadcast,
     relay: relay
@@ -93,7 +90,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
-  @tag :flaky
   test "LOC frames round-trip unchanged with keyframe flags intact", %{
     broadcast: broadcast,
     relay: relay
@@ -110,7 +106,6 @@ defmodule Membrane.MoQ.IntegrationTest do
              Enum.map(expected, & &1.metadata.h264.key_frame?)
   end
 
-  @tag :flaky
   test "frames buffered with the latency option all arrive, unchanged and in order", %{
     broadcast: broadcast,
     relay: relay
@@ -125,7 +120,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert Enum.map(received, & &1.payload) == Enum.map(expected, & &1.payload)
   end
 
-  @tag :flaky
   test "AAC frames round-trip unchanged through the Sink and Source", %{
     broadcast: broadcast,
     relay: relay
@@ -149,7 +143,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert drain_payloads(receiver, :sink) == expected_payloads
   end
 
-  @tag :flaky
   test "Opus frames round-trip unchanged through the Sink and Source", %{
     broadcast: broadcast,
     relay: relay
@@ -189,7 +182,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert drain_payloads(receiver, :sink) == Enum.map(buffers, & &1.payload)
   end
 
-  @tag :flaky
   test "a two-pad A/V broadcast through one Sink is consumed by a two-pad Source", %{
     broadcast: broadcast,
     relay: relay
@@ -391,7 +383,6 @@ defmodule Membrane.MoQ.IntegrationTest do
     assert_end_of_stream(sender, :moq_sink, Pad.ref(:input, :video), 30_000)
   end
 
-  @tag :flaky
   test "Source emits parser-convention keyframe metadata, preserving grouping across a Source-to-Sink relay",
        %{broadcast: broadcast, relay: relay} do
     relay_broadcast = broadcast <> "-relay"

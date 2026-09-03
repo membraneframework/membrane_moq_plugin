@@ -59,7 +59,7 @@ defmodule Membrane.MoQ.SinkDisconnectTest do
       )
 
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 15_000)
-    stop_supervised!(Relay)
+    Relay.stop_supervised!(relay)
 
     assert_pipeline_notified(publisher, :sink, {:disconnected, _reason}, 10_000)
     assert_pipeline_notified(receiver, :source, {:disconnected, _reason}, 10_000)

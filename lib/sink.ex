@@ -150,11 +150,6 @@ defmodule Membrane.MoQ.Sink do
   end
 
   @impl true
-  def handle_info({:moq_disconnected, reason}, _ctx, %State{producer: nil}) do
-    raise "MoQ session closed during setup with reason: #{inspect(reason)}"
-  end
-
-  @impl true
   def handle_info({:moq_disconnected, reason}, _ctx, state) do
     Membrane.Logger.warning("MoQ session disconnected: #{inspect(reason)}")
     {[notify_parent: {:disconnected, reason}], state}

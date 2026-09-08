@@ -45,8 +45,7 @@ defmodule Membrane.MoQ.Mixfile do
       {:membrane_h265_format, "~> 0.2.0"},
       {:membrane_aac_format, "~> 0.8.0"},
       {:membrane_opus_format, "~> 0.3.0"},
-      # TODO: change to released version once it's public
-      {:ex_moq, github: "membraneframework/ex_moq", branch: "kidq330/initial"},
+      {:ex_moq, "~> 0.1.0"},
       {:muontrap, "~> 1.8", only: :test},
       {:membrane_aac_plugin, "~> 0.19", only: :test},
       {:membrane_file_plugin, "~> 0.17", only: :test},

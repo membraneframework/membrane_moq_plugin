@@ -4,7 +4,7 @@ defmodule Membrane.MoQ.SinkTest do
   use ExUnit.Case, async: true
   import Membrane.ChildrenSpec
   import Membrane.Testing.Assertions
-  alias Membrane.MoQ.Test.Relay
+  alias ExMoQ.Test.Relay
   alias Membrane.Testing
 
   test "sink crashes during setup when given a malformed url" do

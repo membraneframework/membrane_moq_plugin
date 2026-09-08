@@ -297,8 +297,11 @@ defmodule Membrane.MoQ.Source do
           Membrane.Element.CallbackContext.t(),
           State.t()
         ) :: {[Membrane.Element.Action.t()], State.t()}
-  defp handle_closed(reason, _ctx, %{status: :connecting}) do
-    raise "MoQ subscriber setup failed: #{inspect(reason)}"
+  defp handle_closed(reason, _ctx, %{status: :connecting} = state) do
+    Membrane.Logger.debug("MoQ subscriber closed while connecting: #{inspect(reason)}")
+
+    {[setup: :complete, notify_parent: {:disconnected, reason}],
+     %{state | status: :disconnect_pending}}
   end
 
   defp handle_closed(_reason, _ctx, %{status: status} = state)

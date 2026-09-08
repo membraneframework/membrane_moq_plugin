@@ -10,9 +10,11 @@ defmodule Membrane.MoQ.FormatChangeTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.{Concatenator, Relay}
+  alias Membrane.MoQ.Test.Concatenator
   alias Membrane.Pad
   alias Membrane.Testing
+
+  alias ExMoQ.Test.Relay
 
   @moduletag :integration
 

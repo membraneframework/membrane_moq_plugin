@@ -10,9 +10,11 @@ defmodule Membrane.MoQ.IntegrationTest do
 
   require Membrane.Pad
 
-  alias Membrane.MoQ.Test.{Relay, Take}
+  alias Membrane.MoQ.Test.Take
   alias Membrane.Pad
   alias Membrane.Testing
+
+  alias ExMoQ.Test.Relay
 
   @moduletag :integration
 

@@ -1,7 +1,7 @@
 defmodule Membrane.MoQ.Mixfile do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @github_url "https://github.com/membraneframework/membrane_moq_plugin"
 
   def project do
@@ -77,7 +77,7 @@ defmodule Membrane.MoQ.Mixfile do
         "GitHub" => @github_url,
         "Membrane Framework Homepage" => "https://membrane.stream"
       },
-      files: ["lib", "native", "mix.exs", "README*", "LICENSE*", ".formatter.exs"]
+      files: ["lib", "mix.exs", "README*", "LICENSE*", ".formatter.exs"]
     ]
   end
 

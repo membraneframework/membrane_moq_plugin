@@ -32,7 +32,7 @@ dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:membrane_moq_plugin, "~> 0.1.0"}
+    {:membrane_moq_plugin, "~> 0.2.0"}
   ]
 end
 ```

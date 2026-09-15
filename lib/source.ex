@@ -52,13 +52,12 @@ defmodule Membrane.MoQ.Source do
         see `Track` at https://doc.moq.dev/concept/layer/moq-lite.html#terminology
         """
       ],
-      priority: [
-        spec: 0..255 | nil,
-        default: nil,
+      subscription: [
+        spec: ExMoQ.Subscription.t(),
+        default: %ExMoQ.Subscription{},
         description: """
-        Delivery priority of this subscription.
-        Under congestion, tracks with a higher value are sent first.
-        When nil, hang defaults for the track's media kind are used.
+        Parameters configuring the subscriber for this track.
+        For more info, see `ExMoQ.Subscription.t()`
         """
       ]
     ]
@@ -367,11 +366,11 @@ defmodule Membrane.MoQ.Source do
   @spec subscribe_pad(Membrane.Pad.ref(), Membrane.Element.CallbackContext.t(), State.t()) ::
           {[Membrane.Element.Action.t()], State.t()}
   defp subscribe_pad(pad, ctx, state) do
-    %{track: track, priority: priority} = ctx.pads[pad].options
+    %{track: track, subscription: subscription} = ctx.pads[pad].options
 
     with format when format != nil <- Catalog.rendition(state.catalog, track),
          token = state.next_token,
-         :ok <- Native.subscribe_track(state.consumer, track, token, priority) do
+         :ok <- Native.subscribe_track(state.consumer, track, token, subscription) do
       state = %{
         state
         | next_token: token + 1,

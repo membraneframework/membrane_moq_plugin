@@ -21,6 +21,8 @@ defmodule Membrane.MoQ.IntegrationTest do
   @track "video"
   @audio_track "audio"
 
+  @subscription %ExMoQ.Subscription{group_start: 0, latency_ns: Membrane.Time.seconds(5)}
+
   defmodule EndOfStreamSource do
     use Membrane.Source
 
@@ -194,10 +196,14 @@ defmodule Membrane.MoQ.IntegrationTest do
             broadcast: broadcast,
             disable_tls_verify?: relay.disable_tls_verify?
           })
-          |> via_out(Pad.ref(:output, :video), options: [track: @track])
+          |> via_out(Pad.ref(:output, :video),
+            options: [track: @track, subscription: @subscription]
+          )
           |> child(:video_sink, Testing.Sink),
           get_child(:source)
-          |> via_out(Pad.ref(:output, :audio), options: [track: @audio_track])
+          |> via_out(Pad.ref(:output, :audio),
+            options: [track: @audio_track, subscription: @subscription]
+          )
           |> child(:audio_sink, Testing.Sink)
         ]
       )
@@ -397,7 +403,9 @@ defmodule Membrane.MoQ.IntegrationTest do
             broadcast: broadcast,
             disable_tls_verify?: relay.disable_tls_verify?
           })
-          |> via_out(Pad.ref(:output, :video), options: [track: @track])
+          |> via_out(Pad.ref(:output, :video),
+            options: [track: @track, subscription: @subscription]
+          )
           |> child(:tee, Membrane.Tee)
           |> via_in(Pad.ref(:input, :video), options: [track: @track])
           |> child(:moq_sink, %Membrane.MoQ.Sink{
@@ -457,7 +465,7 @@ defmodule Membrane.MoQ.IntegrationTest do
           broadcast: broadcast,
           disable_tls_verify?: relay.disable_tls_verify?
         })
-        |> via_out(Pad.ref(:output, track), options: [track: track])
+        |> via_out(Pad.ref(:output, track), options: [track: track, subscription: @subscription])
         |> child(:sink, Testing.Sink)
     )
   end

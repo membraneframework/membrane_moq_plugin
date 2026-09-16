@@ -49,6 +49,8 @@ defmodule Subscriber do
                 [:current_track, available_tracks: %{}, generation: 0, moq_disconnected?: false]
   end
 
+  @subscription %ExMoQ.Subscription{latency_ns: Membrane.Time.milliseconds(200)}
+
   @impl true
   def handle_init(_ctx, opts) do
     state = %State{url: opts[:url], broadcast: opts[:broadcast]}
@@ -57,8 +59,7 @@ defmodule Subscriber do
       child(:source, %Membrane.MoQ.Source{
         url: state.url,
         broadcast: state.broadcast,
-        disable_tls_verify?: true,
-        latency: Membrane.Time.milliseconds(200)
+        disable_tls_verify?: true
       })
 
     {[spec: source_spec], state}
@@ -147,7 +148,9 @@ defmodule Subscriber do
   defp track_spec(name, generation, %Membrane.H264{framerate: framerate}),
     do:
       get_child(:source)
-      |> via_out(Pad.ref(:output, generation), options: [track: name])
+      |> via_out(Pad.ref(:output, generation),
+        options: [track: name, subscription: @subscription]
+      )
       |> child({:parser, generation}, %Membrane.H264.Parser{
         generate_best_effort_timestamps: %{framerate: framerate || {30, 1}},
         output_stream_structure: :annexb
@@ -159,7 +162,9 @@ defmodule Subscriber do
   defp track_spec(name, generation, %Membrane.H265{framerate: framerate}),
     do:
       get_child(:source)
-      |> via_out(Pad.ref(:output, generation), options: [track: name])
+      |> via_out(Pad.ref(:output, generation),
+        options: [track: name, subscription: @subscription]
+      )
       |> child({:parser, generation}, %Membrane.H265.Parser{
         generate_best_effort_timestamps: %{framerate: framerate || {30, 1}},
         output_stream_structure: :annexb

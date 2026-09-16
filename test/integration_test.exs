@@ -21,9 +21,6 @@ defmodule Membrane.MoQ.IntegrationTest do
   @track "video"
   @audio_track "audio"
 
-  # Round-trip subscriptions start at the first group and tolerate a window
-  # wider than any fixture, so every published group arrives instead of the
-  # consumer catching up to the live edge and dropping the head.
   @subscription %ExMoQ.Subscription{group_start: 0, latency_ns: Membrane.Time.seconds(5)}
 
   defmodule EndOfStreamSource do

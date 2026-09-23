@@ -49,7 +49,7 @@ defmodule Subscriber do
                 [:current_track, available_tracks: %{}, generation: 0, moq_disconnected?: false]
   end
 
-  @subscription %ExMoQ.Subscription{latency_ns: Membrane.Time.milliseconds(200)}
+  @subscription %ExMoQ.Subscription{latency_ns: 200_000_000}
 
   @impl true
   def handle_init(_ctx, opts) do

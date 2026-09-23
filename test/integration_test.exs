@@ -21,7 +21,7 @@ defmodule Membrane.MoQ.IntegrationTest do
   @track "video"
   @audio_track "audio"
 
-  @subscription %ExMoQ.Subscription{group_start: 0, latency_ns: Membrane.Time.seconds(5)}
+  @subscription %ExMoQ.Subscription{group_start: 0, latency_ns: 5_000_000_000}
 
   defmodule EndOfStreamSource do
     use Membrane.Source

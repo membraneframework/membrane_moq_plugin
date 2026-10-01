@@ -172,9 +172,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
         spec: [
           child(:gate, SetupGate),
           child(:source, %Membrane.MoQ.Source{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?,
+            disable_tls_verify?: false,
             latency: Membrane.Time.milliseconds(200)
           })
           |> via_out(Pad.ref(:output, :video), options: [track: @track])
@@ -202,9 +202,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
       Testing.Pipeline.start_supervised!(
         spec:
           child(:source, %Membrane.MoQ.Source{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
       )
 
@@ -252,9 +252,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
           |> child(:audio_realtimer, Membrane.Realtimer)
           |> via_in(Pad.ref(:input, :audio), options: [track: "audio"])
           |> child(:sink, %Membrane.MoQ.Sink{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
       )
 
@@ -262,9 +262,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
       Testing.Pipeline.start_link_supervised!(
         spec:
           child(:source, %Membrane.MoQ.Source{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
           |> via_out(Pad.ref(:output, :video), options: [track: @track])
           |> child(:video_sink, Testing.Sink)
@@ -354,9 +354,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
         |> child(:realtimer, Membrane.Realtimer)
         |> via_in(Pad.ref(:input, :video), options: [track: @track])
         |> child(:sink, %Membrane.MoQ.Sink{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?
+          disable_tls_verify?: false
         })
     )
   end
@@ -365,9 +365,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     Testing.Pipeline.start_link_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?,
+          disable_tls_verify?: false,
           latency: Membrane.Time.milliseconds(200)
         })
         |> via_out(Pad.ref(:output, :video), options: [track: @track])
@@ -381,9 +381,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     Testing.Pipeline.start_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?,
+          disable_tls_verify?: false,
           latency: Membrane.Time.milliseconds(200)
         })
         |> via_out(Pad.ref(:output, :video), options: [track: @track])
@@ -395,9 +395,9 @@ defmodule Membrane.MoQ.SourceLifecycleTest do
     Testing.Pipeline.start_link_supervised!(
       module: RestartingSubscriber,
       custom_args: [
-        url: relay.url,
+        url: relay.tcp_url,
         broadcast: broadcast,
-        disable_tls_verify?: relay.disable_tls_verify?
+        disable_tls_verify?: false
       ]
     )
   end

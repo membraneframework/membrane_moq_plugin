@@ -21,7 +21,11 @@ defmodule Membrane.MoQ.SinkDisconnectTest do
   @fixture "test/fixtures/format_change/h264_1280x720_25.h264"
 
   test "buffers after :moq_disconnected are ignored so the parent can unlink the sink" do
-    relay = Relay.start_supervised!()
+    relay =
+      {ExMoQ.Relay, Relay.options()}
+      |> start_supervised!(id: :relay)
+      |> ExMoQ.Relay.info()
+
     broadcast = "membrane/sink-disconnect-#{System.unique_integer([:positive])}"
 
     # Unlinked from the test process so a sink crash is observed via the
@@ -37,9 +41,9 @@ defmodule Membrane.MoQ.SinkDisconnectTest do
           |> child(:realtimer, Membrane.Realtimer)
           |> via_in(Pad.ref(:input, @track), options: [track: @track])
           |> child(:sink, %Membrane.MoQ.Sink{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
       )
 
@@ -49,9 +53,9 @@ defmodule Membrane.MoQ.SinkDisconnectTest do
       Testing.Pipeline.start_link_supervised!(
         spec:
           child(:source, %Membrane.MoQ.Source{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?,
+            disable_tls_verify?: false,
             latency: Membrane.Time.milliseconds(200)
           })
           |> via_out(Pad.ref(:output, @track), options: [track: @track])
@@ -59,7 +63,7 @@ defmodule Membrane.MoQ.SinkDisconnectTest do
       )
 
     assert_sink_buffer(receiver, :sink, %Membrane.Buffer{}, 15_000)
-    Relay.stop_supervised!(relay)
+    stop_supervised!(:relay)
 
     assert_pipeline_notified(publisher, :sink, {:disconnected, _reason}, 10_000)
     assert_pipeline_notified(receiver, :source, {:disconnected, _reason}, 10_000)

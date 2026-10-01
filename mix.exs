@@ -46,8 +46,9 @@ defmodule Membrane.MoQ.Mixfile do
       {:membrane_aac_format, "~> 0.8.0"},
       {:membrane_opus_format, "~> 0.3.0"},
       # TODO: switch to released ex_moq once it gets merged
-      {:ex_moq, github: "membraneframework/ex_moq", branch: "kidq330/add_sub_params"},
-      {:muontrap, "~> 1.8", only: :test},
+      {:ex_moq, github: "membraneframework/ex_moq", branch: "kidq330/bump_moq_deps"},
+      {:ex_moq_relay,
+       github: "membraneframework/ex_moq_relay", branch: "kidq330/initial", only: :test},
       {:membrane_aac_plugin, "~> 0.19", only: :test},
       {:membrane_file_plugin, "~> 0.17", only: :test},
       {:membrane_realtimer_plugin, "~> 0.9", only: :test},

@@ -26,9 +26,9 @@ defmodule Membrane.MoQ.SinkTest do
       Testing.Pipeline.start_link_supervised!(
         spec:
           child(:sink, %Membrane.MoQ.Sink{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: "membrane/sink-disconnect-#{System.unique_integer([:positive])}",
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
       )
 

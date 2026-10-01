@@ -160,9 +160,9 @@ defmodule Membrane.MoQ.FormatChangeTest do
         |> child(:realtimer, Membrane.Realtimer)
         |> via_in(Pad.ref(:input, :video), options: [track: @track])
         |> child(:sink, %Membrane.MoQ.Sink{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?,
+          disable_tls_verify?: false,
           container: container
         })
         | Enum.map(inputs, fn {id, path, parser} ->
@@ -179,9 +179,9 @@ defmodule Membrane.MoQ.FormatChangeTest do
     Testing.Pipeline.start_link_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?,
+          disable_tls_verify?: false,
           latency: Membrane.Time.milliseconds(200)
         })
     )

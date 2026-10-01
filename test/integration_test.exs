@@ -168,9 +168,9 @@ defmodule Membrane.MoQ.IntegrationTest do
           |> child(:realtimer, Membrane.Realtimer)
           |> via_in(Pad.ref(:input, :audio), options: [track: @audio_track])
           |> child(:moq_sink, %Membrane.MoQ.Sink{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
       )
 
@@ -192,9 +192,9 @@ defmodule Membrane.MoQ.IntegrationTest do
       Testing.Pipeline.start_link_supervised!(
         spec: [
           child(:source, %Membrane.MoQ.Source{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
           |> via_out(Pad.ref(:output, :video),
             options: [track: @track, subscription: @subscription]
@@ -209,9 +209,9 @@ defmodule Membrane.MoQ.IntegrationTest do
       )
 
     sink = %Membrane.MoQ.Sink{
-      url: relay.url,
+      url: relay.tcp_url,
       broadcast: broadcast,
-      disable_tls_verify?: relay.disable_tls_verify?
+      disable_tls_verify?: false
     }
 
     sender =
@@ -287,9 +287,9 @@ defmodule Membrane.MoQ.IntegrationTest do
           |> child(:realtimer, Membrane.Realtimer)
           |> via_in(Pad.ref(:input, :audio), options: [track: @audio_track])
           |> child(:moq_sink, %Membrane.MoQ.Sink{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
       )
 
@@ -324,9 +324,9 @@ defmodule Membrane.MoQ.IntegrationTest do
       child(:source, EndOfStreamSource)
       |> via_in(Pad.ref(:input, :video), options: [track: @track])
       |> child(:moq_sink, %Membrane.MoQ.Sink{
-        url: relay.url,
+        url: relay.tcp_url,
         broadcast: broadcast,
-        disable_tls_verify?: relay.disable_tls_verify?
+        disable_tls_verify?: false
       })
 
     pipeline = Testing.Pipeline.start_supervised!(spec: spec)
@@ -379,9 +379,9 @@ defmodule Membrane.MoQ.IntegrationTest do
       |> child(:mid_stream_join, MidStreamJoin)
       |> via_in(Pad.ref(:input, :video), options: [track: @track])
       |> child(:moq_sink, %Membrane.MoQ.Sink{
-        url: relay.url,
+        url: relay.tcp_url,
         broadcast: broadcast,
-        disable_tls_verify?: relay.disable_tls_verify?
+        disable_tls_verify?: false
       })
 
     sender = Testing.Pipeline.start_link_supervised!(spec: spec)
@@ -399,9 +399,9 @@ defmodule Membrane.MoQ.IntegrationTest do
       Testing.Pipeline.start_link_supervised!(
         spec: [
           child(:source, %Membrane.MoQ.Source{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           })
           |> via_out(Pad.ref(:output, :video),
             options: [track: @track, subscription: @subscription]
@@ -409,9 +409,9 @@ defmodule Membrane.MoQ.IntegrationTest do
           |> child(:tee, Membrane.Tee)
           |> via_in(Pad.ref(:input, :video), options: [track: @track])
           |> child(:moq_sink, %Membrane.MoQ.Sink{
-            url: relay.url,
+            url: relay.tcp_url,
             broadcast: relay_broadcast,
-            disable_tls_verify?: relay.disable_tls_verify?
+            disable_tls_verify?: false
           }),
           get_child(:tee)
           |> child(:probe, Testing.Sink)
@@ -461,9 +461,9 @@ defmodule Membrane.MoQ.IntegrationTest do
     Testing.Pipeline.start_link_supervised!(
       spec:
         child(:source, %Membrane.MoQ.Source{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?
+          disable_tls_verify?: false
         })
         |> via_out(Pad.ref(:output, track), options: [track: track, subscription: @subscription])
         |> child(:sink, Testing.Sink)
@@ -480,9 +480,9 @@ defmodule Membrane.MoQ.IntegrationTest do
         |> child(:realtimer, Membrane.Realtimer)
         |> via_in(Pad.ref(:input, :audio), options: [track: @audio_track])
         |> child(:moq_sink, %Membrane.MoQ.Sink{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?
+          disable_tls_verify?: false
         }),
         get_child(:tee)
         |> child(:expected_sink, Testing.Sink)
@@ -497,9 +497,9 @@ defmodule Membrane.MoQ.IntegrationTest do
     sink =
       struct!(
         %Membrane.MoQ.Sink{
-          url: relay.url,
+          url: relay.tcp_url,
           broadcast: broadcast,
-          disable_tls_verify?: relay.disable_tls_verify?
+          disable_tls_verify?: false
         },
         Keyword.get(opts, :sink_opts, [])
       )

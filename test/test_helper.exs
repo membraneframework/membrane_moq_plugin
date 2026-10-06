@@ -1,5 +1,9 @@
 ExUnit.start(capture_log: true)
 
-# Integration tests talk to a real MoQ relay.
-# Opt in with `mix test --include integration`.
-ExUnit.configure(exclude: [:integration])
+IO.puts("""
+Some tests assume a moq-relay binary is available in your PATH.
+To disable them, run:
+
+  mix test --exclude integration
+
+""")

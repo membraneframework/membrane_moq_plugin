@@ -75,7 +75,9 @@ defmodule Player do
         broadcast: opts[:broadcast],
         disable_tls_verify?: true
       })
-      |> via_out(Pad.ref(:output, :video), options: [track: opts[:track]])
+      |> via_out(Pad.ref(:output, :video),
+        options: [track: opts[:track], subscription: %ExMoQ.Subscription{group_start: 0}]
+      )
       # `MoQ.Source` emits frames in decode order carrying their presentation
       # PTS but no DTS, so the decoder has no monotonic decode timeline to
       # reorder against and would emit frames still in decode order — which the

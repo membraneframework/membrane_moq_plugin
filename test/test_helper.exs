@@ -1,9 +1,13 @@
 ExUnit.start(capture_log: true)
 
-IO.puts("""
-Some tests assume a moq-relay binary is available in your PATH.
-To disable them, run:
+cond do
+  ExMoQ.Test.Relay.find_binary() ->
+    :ok
 
-  mix test --exclude integration
+  System.get_env("CI") == "true" ->
+    raise "moq-relay not found — integration tests must not be skipped in CI"
 
-""")
+  true ->
+    IO.puts("moq-relay not found — excluding :integration tests")
+    ExUnit.configure(exclude: [:integration])
+end

@@ -176,8 +176,7 @@ defmodule Membrane.MoQ.Source do
       Native.create_broadcast_consumer(
         state.session,
         state.broadcast,
-        self(),
-        Membrane.Time.as_nanoseconds(state.latency, :round)
+        self()
       )
 
     Membrane.ResourceGuard.register(ctx.resource_guard, fn ->

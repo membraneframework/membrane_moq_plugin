@@ -1,5 +1,6 @@
 # Membrane MoQ Plugin
 
+[![Star Membrane on GitHub ★](https://img.shields.io/github/stars/membraneframework/membrane_core?style=flat&logo=github&label=Star%20Membrane%20on%20GitHub%20%E2%98%85&color=blue)](https://github.com/membraneframework/membrane_core)
 [![Hex.pm](https://img.shields.io/hexpm/v/membrane_moq_plugin.svg)](https://hex.pm/packages/membrane_moq_plugin)
 [![API Docs](https://img.shields.io/badge/api-docs-yellow.svg?style=flat)](https://hexdocs.pm/membrane_moq_plugin)
 
